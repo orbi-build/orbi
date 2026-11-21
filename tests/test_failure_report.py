@@ -138,7 +138,7 @@ GOLDEN = {
 <!-- orbi:comment=failure -->
 <!-- orbi:failure:v1 {"schema":1,"outcome":"blocked","reason_code":"unclassified","action_code":"fix_ticket","retry_safe":false} -->
 
-Orbi: blocked — waiting on a human decision
+Orbi: blocked — the cause of the failure could not be determined
 
 **#42 Fix the thing**
 
@@ -209,6 +209,10 @@ Issue: `orbi-build/orbi#42` · run_id=abcdef12
 - correlation: `run=abcdef12 branch=orbi/orbi-build-orbi-issue-42 session=- phase=bash last_activity=2026-09-28T10:00:00Z`
 - failure detail: `provider failed`
 Failure evidence (captured before cleanup):
+The session's final explanation:
+```
+working
+```
 exit_code=2
 
 stderr_tail:
@@ -268,6 +272,10 @@ Issue: `orbi-build/orbi#42` · run_id=abcdef12
 - correlation: `run=abcdef12 branch=orbi/orbi-build-orbi-issue-42 session=- phase=bash last_activity=2026-09-28T10:00:00Z`
 - failure detail: `provider failed`
 Failure evidence (captured before cleanup):
+The session's final explanation:
+```
+working
+```
 exit_code=2
 
 stderr_tail:
@@ -492,6 +500,267 @@ def test_failure_report_never_imports_runner():
     ]
     assert offenders == []
     assert not hasattr(failure_report, "runner")
+
+
+# --------------------------------------------------------------------------
+# Issue #2351: the stop quotes the session's own final explanation
+# --------------------------------------------------------------------------
+
+EXPLANATION = (
+    "I cannot verify the requested behaviour: the Issue names no acceptance "
+    "criteria, so there is no result I can check the delivery against."
+)
+
+WORKING_TURN = json.dumps({
+    "type": "message", "timestamp": "2026-11-21T17:50:00Z",
+    "message": {"role": "assistant", "content": [
+        {"type": "toolCall", "name": "bash"},
+    ]},
+})
+
+NO_COMMIT_DETAIL = (
+    "the agent delivered no commit on the task branch (HEAD abc123 is still "
+    "the frozen base abc123)"
+)
+
+
+def assistant_message(text: str, *, timestamp: str = "2026-11-21T17:51:00Z"):
+    """One assistant message record carrying `text`."""
+    return json.dumps({
+        "type": "message", "timestamp": timestamp,
+        "message": {"role": "assistant", "content": [
+            {"type": "text", "text": text},
+        ]},
+    })
+
+
+def explanation_session(*records: str, explanation: str = EXPLANATION) -> str:
+    """A session log whose LAST assistant message is the final explanation."""
+    return "\n".join([
+        json.dumps({"type": "session", "id": "sess-2351"}),
+        *records,
+        assistant_message(explanation),
+    ])
+
+
+def write_session(tmp_path: Path, session_content: str) -> Path:
+    """Write one session log into a worktree-shaped `.pi-session` dir."""
+    session_dir = tmp_path / ".pi-session"
+    session_dir.mkdir(parents=True, exist_ok=True)
+    path = session_dir / "session.jsonl"
+    path.write_text(f"{session_content}\n", encoding="utf-8")
+    return path
+
+
+def no_commit() -> BaseException:
+    """The real record-carrying stop of the commit boundary (Issue #2222)."""
+    from orbi import terminal_stops
+
+    return terminal_stops.NoCommitDelivered(NO_COMMIT_DETAIL)
+
+
+def report_no_commit(monkeypatch, tmp_path, language_code: str, *,
+                     session_content: str, publisher: FakePublisher):
+    """One no-commit stop through the reporter, with a real session log."""
+    error = no_commit()
+    action = failure.terminal_action(error.failure_record, language_code)
+    outcome, posted, _pr_comments = _report(
+        monkeypatch, tmp_path, session=True, publisher=publisher,
+        session_content=session_content, exc=error,
+        classify=False, evidence=True, finish=True,
+        action=action, language_code=language_code,
+    )
+    return outcome, posted[0], action
+
+
+@pytest.mark.parametrize("language_code", ["en", "zh"])
+def test_no_commit_stop_quotes_the_session_explanation_and_never_a_decision(
+        monkeypatch, tmp_path, language_code):
+    """Issue #2351 acceptance 1 (en + zh): the comment says the run produced
+    no commit, quotes the session's own explanation in its own segment and
+    names the concrete next step — never the decision headline."""
+    publisher = FakePublisher()
+    outcome, body, action = report_no_commit(
+        monkeypatch, tmp_path, language_code,
+        session_content=explanation_session(WORKING_TURN),
+        publisher=publisher,
+    )
+    assert outcome == "blocked"
+    assert language.text(language_code, "failure.disposition_decide") not in body
+    assert language.text(language_code, "failure.disposition_no_commit") in body
+    assert EXPLANATION in body
+    assert f"```\n{EXPLANATION}\n```" in body
+    action_line = next(
+        line for line in body.splitlines()
+        if line.startswith(language.text(language_code, "failure.action_label"))
+    )
+    assert action_line == (
+        f"{language.text(language_code, 'failure.action_label')} {action}"
+    )
+    assert action == language.text(
+        language_code, "failure.terminal_ticket_change")
+    assert "`ai-blocked`" in action_line and "`ai-ready`" in action_line
+    if language_code == "en":
+        assert "the Issue body" in action_line
+    # The comment's section order is unchanged.
+    headline = language.text(
+        language_code, "failure.headline_blocked",
+        disposition=language.text(language_code, "failure.disposition_no_commit"),
+    )
+    assert body.index(headline) < body.index(action_line)
+    reason_label = language.text(language_code, "failure.reason_label")
+    assert body.index(action_line) < body.index(reason_label)
+    assert body.index(reason_label) < body.index("<details>")
+    # The stop carries no structured question: the #2220 self-answer path is
+    # never reached from a delivery stop.
+    assert "orbi:question:v1" not in body
+    assert getattr(no_commit(), "question", None) is None
+
+
+@pytest.mark.parametrize("language_code", ["en", "zh"])
+def test_a_no_commit_stop_without_an_explanation_says_so(
+        monkeypatch, tmp_path, language_code):
+    """Issue #2351 acceptance 2 (en + zh): a session that wrote no
+    explanation says so plainly and keeps the same action line."""
+    publisher = FakePublisher()
+    _outcome, body, action = report_no_commit(
+        monkeypatch, tmp_path, language_code,
+        session_content=json.dumps({"type": "session", "id": "sess-2351"}),
+        publisher=publisher,
+    )
+    assert language.text(
+        language_code, "failure.evidence.no_session_explanation") in body
+    assert language.text(
+        language_code, "failure.evidence.session_explanation") not in body
+    assert action in body
+
+
+def test_the_terminal_progress_comment_uses_the_same_headline(
+        monkeypatch, tmp_path):
+    """Issue #2351 acceptance 3: the failure comment and the terminal
+    progress comment of one stop show the same headline."""
+    publisher = FakePublisher()
+    _outcome, body, _action = report_no_commit(
+        monkeypatch, tmp_path, "en",
+        session_content=explanation_session(WORKING_TURN),
+        publisher=publisher,
+    )
+    headline = language.text(
+        "en", "failure.headline_blocked",
+        disposition=language.text("en", "failure.disposition_no_commit"),
+    )
+    assert headline in body
+    assert publisher.finish_bodies, "the terminal progress scene was not published"
+    assert f"**{headline}**" in publisher.finish_bodies[0]
+    assert language.text("en", "failure.disposition_decide") not in (
+        publisher.finish_bodies[0]
+    )
+
+
+def test_the_explanation_is_redacted_like_every_comment_sentence(
+        monkeypatch, tmp_path):
+    """Issue #2351: "verbatim" means verbatim except for redaction — the
+    comment choke point redacts a secret-shaped string (Issue #1233)."""
+    publisher = FakePublisher()
+    secret = "ghp_" + "A1b2C3d4E5f6G7h8I9j0"
+    _outcome, body, _action = report_no_commit(
+        monkeypatch, tmp_path, "en",
+        session_content=explanation_session(
+            WORKING_TURN, explanation=f"the token {secret} was rejected",
+        ),
+        publisher=publisher,
+    )
+    assert "the token" in body
+    # Every posted comment passes the one choke point (Issue #1233).
+    posted = progress.format_status_comment(body)
+    assert secret not in posted
+    assert "ghp_<redacted>" in posted
+
+
+def test_a_10000_char_explanation_is_cut_at_4000_and_the_comment_fits(
+        monkeypatch, tmp_path):
+    """Issue #2351: the segment cap is 4000 characters with the existing
+    truncation marker, and the whole comment stays inside 20000."""
+    publisher = FakePublisher()
+    long_explanation = "x" * 10000
+    _outcome, body, _action = report_no_commit(
+        monkeypatch, tmp_path, "en",
+        session_content=explanation_session(
+            WORKING_TURN, explanation=long_explanation,
+        ),
+        publisher=publisher,
+    )
+    assert "_[truncated, 6000 chars omitted]_" in body
+    commented = _body_before_markers(body)
+    assert len(commented) <= failure_report.FAILURE_COMMENT_MAX_CHARS
+    assert long_explanation[:4000] in body
+    assert long_explanation[:4001] not in body
+
+
+def test_session_explanation_is_the_text_of_the_last_assistant_message(
+        tmp_path):
+    assert failure_evidence.session_explanation(
+        write_session(tmp_path, explanation_session(WORKING_TURN))
+    ) == EXPLANATION
+
+
+def test_session_explanation_skips_a_partial_trailing_line(tmp_path):
+    """A kill can leave half a JSON line behind: it is skipped, never
+    parsed and never the explanation."""
+    session = write_session(tmp_path, explanation_session(WORKING_TURN))
+    with session.open("a", encoding="utf-8") as handle:
+        handle.write('{"type": "message", "message": {"role": "assist')
+    assert failure_evidence.session_explanation(session) == EXPLANATION
+
+
+def test_session_explanation_reads_the_duplicated_final_record_once(tmp_path):
+    """pi logs the closing assistant text twice (inside the full message and
+    standalone): the quote shows it once."""
+    session = write_session(tmp_path, "\n".join([
+        WORKING_TURN,
+        assistant_message(EXPLANATION, timestamp="2026-11-21T17:50:59Z"),
+        assistant_message(EXPLANATION),
+    ]))
+    explanation = failure_evidence.session_explanation(session)
+    assert explanation == EXPLANATION
+    assert explanation.count(EXPLANATION) == 1
+
+
+@pytest.mark.parametrize(
+    "session_content",
+    [
+        # No text at all: a session record only.
+        json.dumps({"type": "session", "id": "s"}),
+        # A non-object line and a non-message line.
+        "[1, 2]\n" + json.dumps({"type": "model_change"}),
+        # A tool result is not the session's own words.
+        json.dumps({
+            "type": "message",
+            "message": {"role": "toolResult", "toolName": "bash"},
+        }),
+        # The assistant message carries no text block (a tool call only).
+        WORKING_TURN,
+        # A non-list content carries no text block either.
+        json.dumps({
+            "type": "message",
+            "message": {"role": "assistant", "content": "plain"},
+        }),
+        # An empty text block is no explanation.
+        assistant_message("   "),
+    ],
+)
+def test_session_explanation_is_none_without_assistant_text(
+        tmp_path, session_content):
+    assert failure_evidence.session_explanation(
+        write_session(tmp_path, session_content)
+    ) is None
+
+
+def test_session_explanation_is_none_without_a_session_file(tmp_path):
+    assert failure_evidence.session_explanation(None) is None
+    assert failure_evidence.session_explanation(
+        tmp_path / "missing.jsonl"
+    ) is None
 
 
 def test_latest_session_file_is_the_shared_newest_rule(tmp_path):
@@ -1226,8 +1495,9 @@ def test_oversized_comment_without_evidence_is_posted_unchanged(
 def test_oversized_comment_with_text_only_posts_cap_zero_evidence(
         monkeypatch, tmp_path):
     """Acceptance 4: when the text outside the evidence alone passes the
-    limit, the evidence is posted at cap 0 — every segment an empty closed
-    fence with its own omission note — and the comment is still never cut."""
+    limit, the evidence is posted at cap 0 — every segment (the session's
+    own explanation included, Issue #2351) an empty closed fence with its
+    own omission note — and the comment is still never cut."""
     publisher = FakePublisher()
     outcome, posted, _ = _report(
         monkeypatch, tmp_path, session=True, publisher=publisher,
@@ -1238,12 +1508,15 @@ def test_oversized_comment_with_text_only_posts_cap_zero_evidence(
     body = _body_before_markers(posted[0])
     assert outcome == "blocked"
     assert "a" * 25000 in body
-    assert body.count("```\n\n```") == 4
+    assert body.count("```\n\n```") == 5
     # Cap 0: every segment is dropped whole and noted after its closed fence.
     notes = _omission_notes(body)
-    assert len(notes) == 4
-    assert int(re.search(r"\d+", notes[0]).group()) == 4800
+    assert len(notes) == 5
+    # The session's own explanation leads the evidence (Issue #2351); the
+    # SESSION_RECORD text is "working".
+    assert int(re.search(r"\d+", notes[0]).group()) == len("working")
     assert int(re.search(r"\d+", notes[1]).group()) == 4800
+    assert int(re.search(r"\d+", notes[2]).group()) == 4800
     _assert_comment_structure_intact(body)
     assert body.endswith(language.text("en", "help.community"))
 

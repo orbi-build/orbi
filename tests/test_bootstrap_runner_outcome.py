@@ -26,7 +26,7 @@ import orbi.terminal_stops as terminal_stops
 import orbi.runner as runner
 import orbi.pi_session as pi_session
 import orbi.github as github
-from orbi import failure
+from orbi import failure, language
 from tests.fakes.github import FakeGh
 from tests.fakes.gitops import remote_head_answer
 from tests.test_progress_wiring import make_fake_gh
@@ -375,6 +375,24 @@ def test_process_issue_delivery_no_commit_marks_blocked_without_crashing(
         "the agent delivered no commit on the task branch (HEAD "
         "abc123def456 is still the frozen base abc123def456)"
     )
+    # Issue #2351: the session wrote its explanation before it stopped, and
+    # the worktree still carries the log when the stop is reported.
+    explanation = (
+        "The Issue names no acceptance criteria, so I cannot tell which "
+        "behaviour to deliver. Kept the worktree unchanged."
+    )
+    session_dir = worktree / ".pi-session"
+    session_dir.mkdir(parents=True, exist_ok=True)
+    (session_dir / "sess-239.jsonl").write_text(
+        json.dumps({"type": "session", "id": "sess-239"}) + "\n"
+        + json.dumps({
+            "type": "message", "timestamp": "2026-11-21T17:51:00Z",
+            "message": {"role": "assistant", "content": [
+                {"type": "text", "text": explanation},
+            ]},
+        }) + "\n",
+        encoding="utf-8",
+    )
 
     def dead_deliver_pr(*args, **kwargs):
         raise no_commit
@@ -422,6 +440,20 @@ def test_process_issue_delivery_no_commit_marks_blocked_without_crashing(
     assert failure.parse(
         blocked_comment[0],
     ).reason_code == "no_commit_delivered"
+    # Issue #2351: the stop quotes the session's own explanation, says the
+    # run produced no commit, and never claims a human decision.
+    assert explanation in blocked_comment[0]
+    assert f"```\n{explanation}\n```" in blocked_comment[0]
+    assert "produced no commit" in blocked_comment[0]
+    assert language.text("en", "failure.disposition_decide") not in (
+        blocked_comment[0]
+    )
+    action_line = next(
+        line for line in blocked_comment[0].splitlines()
+        if line.startswith(language.text("en", "failure.action_label"))
+    )
+    assert "`ai-blocked`" in action_line and "`ai-ready`" in action_line
+    assert "the Issue body" in action_line
     # The blocked milestone notification carries the same scene.
     blocked = [body for body in posted if "Orbi: blocked" in body]
     assert blocked

@@ -786,17 +786,28 @@ at all — readers ignore it (`parse` returns `None`).
 | `unclassified` | any other runner exception | `fix_ticket` | false |
 
 Actions: `requeue` relabels the Issue `ai-ready` (or presses retry) —
-nothing to fix; `fix_ticket` fixes the failure and re-runs the Issue;
-`decide` is a human decision; `check_credentials` verifies and repairs
-the credential, then retries; `top_up_balance` tops up the model provider
-account (or switches to a key with balance), then retries; `wait_quota`
-retries after the quota window resets. The readable headline,
-`**Reason:**` and `**Action:**` lines stay beside the block for a human
-reader, and the milestone's visible summary is the same bounded, host-path
-free reader explanation — the reason, or the reader-facing action when the
-failure carries a specific repair path (the Actions-workflow permission
-refusal, Issue #1651) — a full command stderr is never cut to its first
-word.
+nothing to fix; `fix_ticket` writes the answer or the missing detail into
+the Issue body and re-queues it, so the next run starts from that body;
+`decide` answers the one question the comment asks the same way;
+`check_credentials` verifies and repairs the credential, then relabels;
+`top_up_balance` tops up the model provider account (or switches to a key
+with balance), then relabels; `wait_quota` retries after the quota window
+resets. The readable headline, `**Reason:**` and `**Action:**` lines stay
+beside the block for a human reader: ONE function of the record
+(`orbi.failure_stop.stop_wording`) decides the headline and the action
+together, so only a `decide` stop says "waiting on a human decision" — a
+no-commit stop says the run produced no commit and the ticket needs a
+change, an undetermined cause says so instead of blaming the Issue text
+(Issue #1651), and a configured base branch that does not exist says that
+(Issue #1749) — and the terminal progress comment repeats that same
+sentence. The
+session's own final explanation is quoted in its own bounded segment of
+the failure evidence (up to 4000 characters, redacted like every comment
+sentence), so a person reads what the session wrote before it stopped. The
+milestone's visible summary is the same bounded, host-path free reader
+explanation — the reason, or the reader-facing action when the failure
+carries a specific repair path (the Actions-workflow permission refusal,
+Issue #1651) — a full command stderr is never cut to its first word.
 
 ### One automatic re-queue after a transient GitHub failure
 

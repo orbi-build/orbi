@@ -18,9 +18,47 @@ FAILURE_MESSAGES: dict[str, tuple[str, str]] = {
         "Orbi: fix needed — the engine will retry",
         "Orbi：需要修复 —— 引擎会自动重试",
     ),
+    # Issue #2351: ONE function of the failure record decides the headline
+    # AND the action text (`orbi.failure_stop.stop_wording`), reading the
+    # recorded action code and retry_safe — so the headline can no longer
+    # contradict the action. `{disposition}` is that function's verdict;
+    # only a `decide` stop says "waiting on a human decision".
     "failure.headline_blocked": (
-        "Orbi: blocked — waiting on a human decision",
-        "Orbi：已阻塞 —— 等待人工决定",
+        "Orbi: blocked — {disposition}",
+        "Orbi：已阻塞 —— {disposition}",
+    ),
+    # The dispositions, one per action family: what the stop really waits
+    # for. A no-commit stop names what happened (the run produced no commit)
+    # and that the ticket is what has to change.
+    "failure.disposition_decide": (
+        "waiting on a human decision", "等待人工决定",
+    ),
+    "failure.disposition_no_commit": (
+        "the run produced no commit and this Issue needs a change",
+        "本次运行没有产生提交，这个 Issue 需要修改",
+    ),
+    "failure.disposition_ticket_change": (
+        "this Issue needs a change before Orbi can deliver it",
+        "这个 Issue 需要修改，Orbi 才能继续交付",
+    ),
+    "failure.disposition_repair": (
+        "a credential or provider account needs a repair only you can make",
+        "凭据或模型服务商账户需要您修复，Orbi 无法代办",
+    ),
+    "failure.disposition_retry": (
+        "the failure was temporary, so this Issue can be run again",
+        "这是临时失败，重新运行这个 Issue 即可",
+    ),
+    # The two dispositions whose reason owns its own action sentence
+    # (Issue #2351 with #1651/#1749): the headline names what is actually
+    # wrong, so it never asks for a ticket edit the action does not ask for.
+    "failure.disposition_unknown_cause": (
+        "the cause of the failure could not be determined",
+        "无法确定这次失败的原因",
+    ),
+    "failure.disposition_base_branch": (
+        "the configured base branch does not exist in this repository",
+        "这个仓库里没有配置的基础分支",
     ),
     "failure.pr_line": ("PR: [{pr_url}]({pr_url})", "PR：[{pr_url}]({pr_url})"),
     "failure.issue_line": (
@@ -60,6 +98,30 @@ FAILURE_MESSAGES: dict[str, tuple[str, str]] = {
     "failure.terminal_generic": (
         "Fix the failure described below and re-run this Issue.",
         "请修复下面描述的失败，然后重新运行这个 Issue。",
+    ),
+    # Issue #2351: the generic sentence above is for a `retry_safe` stop
+    # only (nothing needs a repair; re-running can work). Every stop whose
+    # recorded action a re-queue cannot satisfy names its own concrete step
+    # here, so the action text can never contradict the action code.
+    # `fix_ticket` and `decide` share the one step of the Issue: the reader
+    # writes the answer/the missing detail into the body and re-queues, and
+    # the next run starts from that body.
+    "failure.terminal_ticket_change": (
+        "Write the answer or the missing detail into the Issue body, then "
+        "replace `ai-blocked` with `ai-ready` (your repository's queue "
+        "label) — Orbi delivers this Issue again from the updated body.",
+        "请把答案或缺少的信息写进 Issue 正文，然后去掉 `ai-blocked`、"
+        "重新加上 `ai-ready`（你们仓库的排队标签）——Orbi 会按更新后的"
+        "正文重新交付这个 Issue。",
+    ),
+    "failure.terminal_check_credentials": (
+        "Verify the GitHub/provider credential this run needed — it must be "
+        "valid, unexpired and carry the permission the reason names — then "
+        "repair it, remove `ai-blocked` and add `ai-ready` to run this "
+        "Issue again.",
+        "请核对这次运行需要的 GitHub/模型服务商凭据（有效、未过期，并具备"
+        "原因里提到的权限），修复后去掉 `ai-blocked`、重新加上 "
+        "`ai-ready`，以便重新运行这个 Issue。",
     ),
     # Issue #1749, #1753: the configured base branch does not exist in
     # the repository. The reason names the CONFIGURED branch (Git's own
@@ -238,6 +300,16 @@ FAILURE_MESSAGES: dict[str, tuple[str, str]] = {
     "failure.evidence.heading": (
         "Failure evidence (captured before cleanup):",
         "失败证据（清理前采集）：",
+    ),
+    # Issue #2351: the session's own closing words, quoted in their own
+    # bounded segment — the only place the stop's cause was written down by
+    # the session itself. A session that wrote none says so plainly.
+    "failure.evidence.session_explanation": (
+        "The session's final explanation:", "会话最后给出的说明：",
+    ),
+    "failure.evidence.no_session_explanation": (
+        "The session left no explanation before it stopped.",
+        "会话在停止前没有留下说明。",
     ),
     "failure.evidence.session_last_events": (
         "session_last_events (last {limit} records; full log: {label}):",

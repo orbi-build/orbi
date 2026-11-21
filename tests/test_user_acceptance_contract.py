@@ -42,6 +42,29 @@ def test_prompts_make_implementer_and_reviewer_follow_the_user_journey():
     assert "review the same" in text(REVIEW)
 
 
+def test_the_delivery_prompt_states_the_stop_rule():
+    """Issue #2351 acceptance 5: the delivery prompt says when a session may
+    stop and what its final response must state then.
+
+    A safe default is taken (recorded as an assumption, delivery continues);
+    an unavoidable stop names the blocker and, for a decision, one question
+    with options, consequences and a recommendation when there is a basis.
+    """
+    content = text(PROMPT)
+    for item in (
+        "safe default",
+        "assumption",
+        "blocker",
+        "one question",
+        "consequence",
+        "recommendation",
+        "missing prerequisite",
+    ):
+        assert item in content, f"prompt.md misses {item!r}"
+    # The one-line rule it replaces is gone.
+    assert "stop and explain the blocker" not in content
+
+
 def test_issue_template_has_the_unified_user_facing_shape():
     content = text(TEMPLATE)
     for heading in ("user outcome", "preconditions", "acceptance", "evidence"):

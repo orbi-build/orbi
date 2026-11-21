@@ -180,5 +180,8 @@ Rules:
 - Do not push `main` or `master` (you do not push at all — the Runner pushes the task branch).
 - Do not force push or auto-resolve conflicts.
 - Do not claim success without a real commit and successful verification (the PR is opened by the Runner).
-- If the request is unclear or the environment cannot be verified, stop and explain the blocker.
+- Stopping is the last resort. When one option is a safe default, take it, record it as an assumption in your final response, and keep delivering (Issue #2198). Stop only when no option is a safe default. Your final response then states, in plain words:
+  - the blocker;
+  - when a person must decide: one question, the options with each one's consequence, and a recommendation when you have a basis for one;
+  - when no decision is needed: the missing prerequisite, evidence or detail.
 - The final response must summarize changed files, tests, UI screenshots when applicable, and the commit (the PR is opened by the Runner).

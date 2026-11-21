@@ -196,7 +196,10 @@ def test_delivery_failure_diagnostic_ends_with_the_help_line(
     assert outcome == "blocked"
     body = posted_body(calls)
     assert calls[0][2]["current_labels"] == set()
-    assert language.text(language_code, "failure.headline_blocked") in body
+    assert language.text(
+        language_code, "failure.headline_blocked",
+        disposition=language.text(language_code, "failure.disposition_decide"),
+    ) in body
     assert_one_help_line(body, language_code)
 
 

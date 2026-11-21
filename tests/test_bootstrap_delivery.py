@@ -51,6 +51,7 @@ from orbi import failure, progress, provider_balance, scene
 from tests.fakes.github import FakeGh
 from tests.fakes.gitops import remote_head_answer
 from tests.fakes.progress import patched_comment_bodies
+from tests.test_progress_wiring import is_blocked_scene
 from tests.fakes.waiting_checks import PENDING_HEAD, bind_pending_delivery
 import orbi.journal as journal
 from seam import resume_deps, seam
@@ -3768,7 +3769,7 @@ def test_finish_progress_blocked_creates_the_comment_when_missing(
     ]
     assert len(posts) == 1
     body = posts[0][posts[0].index("--field") + 1][len("body="):]
-    assert "Orbi blocked" in body
+    assert is_blocked_scene(body)
     assert "the failure" in body
     assert "the next step" in body
     assert "<!-- orbi:run=a1b2c3d4 -->" in body
@@ -4264,7 +4265,7 @@ def test_delivery_step_marks_blocked_when_review_fails(
         for command in api_calls
         if "--method" in command and "POST" in command
     ]
-    assert any("Orbi: blocked" in body for body in posted_bodies)
+    assert any(is_blocked_scene(body) for body in posted_bodies)
     assert any(
         ("the independent review of" in body for body in posted_bodies),
     )
@@ -4281,7 +4282,7 @@ def test_delivery_step_marks_blocked_when_review_fails(
     ]
     assert patches, "the tracked progress comment was not updated"
     blocked = patches[-1][patches[-1].index("--field") + 1][len("body="):]
-    assert "Orbi blocked" in blocked
+    assert is_blocked_scene(blocked)
     assert "the independent review of" in blocked
     assert "What Orbi will do next:" in blocked
     assert "<!-- orbi:run=a1b2c3d4 -->" in blocked
@@ -4379,7 +4380,7 @@ def test_delivery_step_marks_blocked_when_review_fails_while_fix_needed(
         for command in api_calls
         if "--method" in command and "POST" in command
     ]
-    assert any("Orbi: blocked" in body for body in posted_bodies)
+    assert any(is_blocked_scene(body) for body in posted_bodies)
     assert any(
         ("the independent review of" in body for body in posted_bodies),
     )
@@ -4391,7 +4392,7 @@ def test_delivery_step_marks_blocked_when_review_fails_while_fix_needed(
     ]
     assert patches, "the tracked progress comment was not updated"
     blocked = patches[-1][patches[-1].index("--field") + 1][len("body="):]
-    assert "Orbi blocked" in blocked
+    assert is_blocked_scene(blocked)
     assert "the independent review of" in blocked
     assert "- role: review" in blocked
 
@@ -4502,7 +4503,7 @@ def test_delivery_step_blocks_when_scene_base_differs_from_config(
         for command in api_calls
         if "--method" in command and "POST" in command
     ]
-    assert any("Orbi: blocked" in body for body in posted_bodies)
+    assert any(is_blocked_scene(body) for body in posted_bodies)
     assert any("- result:" in body for body in posted_bodies)
     # No second progress comment: the tracked one (id 77) is PATCHed
     # into the blocked scene in place.
@@ -4514,7 +4515,7 @@ def test_delivery_step_blocks_when_scene_base_differs_from_config(
     ]
     assert patches, "the tracked progress comment was not updated"
     blocked = patches[-1][patches[-1].index("--field") + 1][len("body="):]
-    assert "Orbi blocked" in blocked
+    assert is_blocked_scene(blocked)
     assert "base_branch=develop" in blocked
     assert "base_branch=main" in blocked
     assert "What Orbi will do next:" in blocked
@@ -4657,9 +4658,7 @@ def test_delivery_step_worktree_missing_stays_fix_needed(
         "<!-- orbi:failure:v1 " in body
         for body in posted_bodies
     )
-    assert not any(
-        "Orbi: blocked" in body for body in posted_bodies
-    )
+    assert not any(is_blocked_scene(body) for body in posted_bodies)
     # No second progress comment: the tracked one (id 77) is PATCHed
     # into the fix-needed scene in place.
     patches = [
@@ -4929,7 +4928,7 @@ def test_delivery_step_marks_blocked_when_pr_closed_unmerged(
         for command in api_calls
         if "--method" in command and "POST" in command
     ]
-    assert any("Orbi: blocked" in body for body in posted_bodies)
+    assert any(is_blocked_scene(body) for body in posted_bodies)
     assert any(
         ("closed without a merge" in body for body in posted_bodies),
     )
@@ -4946,7 +4945,7 @@ def test_delivery_step_marks_blocked_when_pr_closed_unmerged(
     ]
     assert patches, "the tracked progress comment was not updated"
     blocked = patches[-1][patches[-1].index("--field") + 1][len("body="):]
-    assert "Orbi blocked" in blocked
+    assert is_blocked_scene(blocked)
     assert "closed without a merge" in blocked
     assert "What Orbi will do next:" in blocked
     assert "<!-- orbi:run=a1b2c3d4 -->" in blocked
@@ -5843,7 +5842,12 @@ def test_run_review_round_base_mismatch_gets_the_generic_action(
     assert text["close"] in action
     assert "base_branch=develop" in reason
     assert "base_branch=main" in reason
-    assert language.text(code, "failure.headline_blocked") in body
+    # Issue #2351: the headline shows the disposition the record's action
+    # asks for — a base change is a human decision, never a ticket edit.
+    assert language.text(
+        code, "failure.headline_blocked",
+        disposition=language.text(code, "failure.disposition_decide"),
+    ) in body
 
 
 @pytest.mark.parametrize("code", ["en", "zh"])

@@ -833,10 +833,15 @@ def finish_progress_body(*, number: int, title: str, run_id: str,
                          source_repo: str, action: str | None = None,
                          reason: str | None = None,
                          diagnosis: str | None = None,
-                         language_code: str,
-                         status_url: str | None = None,
+                         language_code: str, status_url: str | None = None,
+                         headline: str | None = None,
                          ) -> str:
-    """Render the terminal progress scene shared by every finish path."""
+    """Render the terminal progress scene shared by every finish path.
+
+    `headline` is the stop headline the failure comment rendered (Issue
+    #2351): the progress comment then shows the same sentence instead of its
+    own disposition guess.
+    """
     return progress_body_with_outcome(progress_state(
         RunContext(
             run_id=run_id, issue=number, branch=branch or "-",
@@ -850,7 +855,7 @@ def finish_progress_body(*, number: int, title: str, run_id: str,
         number=number, source_repo=source_repo, action=action,
         reason=reason and redact_local_paths(reason),
         diagnosis=diagnosis and redact_local_paths(diagnosis),
-        language_code=language_code,
+        language_code=language_code, headline=headline,
     ))
 
 

@@ -39,6 +39,7 @@ from orbi.comment_rest_id import rest_comment_id
 from orbi.comment_trust import latest_run_marker, trusted_comments
 from orbi.delivery_labels import EVENT_FIX_NEEDED
 from orbi import delivery_labels
+from orbi import failure_stop
 from orbi.failure import (
     failure_comment_body, failure_detail, failure_summary,
     redact_local_paths, terminal_action,
@@ -582,6 +583,21 @@ def _typed_failure_wording(
     return False, False, None
 
 
+def _stop_headline(record: failure.Failure, language_code: str,
+                   outcome: str, red: object) -> str | None:
+    """The stop headline the failure comment carries, or None.
+
+    Issue #2351: the terminal progress comment shows the SAME sentence as the
+    failure comment, through the ONE wording function of the record. A
+    recoverable (`fix_needed`) outcome keeps the progress comment's own
+    retry headline, and the base-branch-red scene renders its own body (a
+    ready line and its paused scene), so both keep their own text.
+    """
+    if outcome != "blocked" or red is not None:
+        return None
+    return failure_stop.stop_wording(record, language_code)[0]
+
+
 def report_delivery_failure(
     exc: BaseException, *, issue: dict, source_repo: str,
     run_id: str | None, pr_url: str | None, worktree: Path | None,
@@ -945,8 +961,8 @@ def report_delivery_failure(
                 ),
                 priority=priority, detail=finish_failure,
                 next_step=next_step, outcome=finish_outcome,
-                source_repo=source_repo, action=action,
-                reason=reason, diagnosis=diagnosis,
-                language_code=language_code, status_url=status_url,
+                source_repo=source_repo, action=action, reason=reason,
+                diagnosis=diagnosis, language_code=language_code,
+                status_url=status_url, headline=_stop_headline(failure_record, language_code, outcome, red),
             )))
     return outcome

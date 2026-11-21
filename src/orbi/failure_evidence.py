@@ -1,12 +1,12 @@
 """The bounded evidence of one failure comment (Issue #2202).
 
 The failure report copies what survives a terminal worktree cleanup into
-ONE comment: the tail of the failing command's streams, a structural
-summary of the Pi session log and the tail of `.orbi/test.log`. This module
-owns that rendering — the segment caps, the de-colouring, the session
-summary and the shrink-to-fit loop that keeps an oversized comment inside
-`FAILURE_COMMENT_MAX_CHARS` by shrinking ONLY the evidence, never its
-structure (Issue #1711).
+ONE comment: the tail of the failing command's streams, the session's own
+final explanation, a structural summary of the Pi session log and the tail
+of `.orbi/test.log`. This module owns that rendering — the segment caps, the
+de-colouring, the session summary and the shrink-to-fit loop that keeps an
+oversized comment inside `FAILURE_COMMENT_MAX_CHARS` by shrinking ONLY the
+evidence, never its structure (Issue #1711).
 
 A verbatim extraction out of `orbi.failure_report` (Article 3.5, Issue
 #2202): that module sits at the 1,000-line cap the size ratchet freezes, so
@@ -71,8 +71,10 @@ def _session_summary(session_file: Path,
     """Structured summary of the last session records.
 
     One line per parsed record — timestamp, type, role, tool name and
-    content-block kinds; the record text itself never enters the comment
-    (the full log path is named next to the segment). A record whose
+    content-block kinds; THIS summary never carries the record text (the
+    session's own final explanation is quoted in its own segment,
+    `session_explanation`, Issue #2351, and the full log path is named next
+    to the segment). A record whose
     text blocks repeat the previous record's is skipped: pi logs the
     final assistant text twice (once inside the full message, once
     standalone), which used to duplicate whole paragraphs in the
@@ -136,6 +138,54 @@ def _session_summary(session_file: Path,
 EVIDENCE_SEGMENT_CAP = 4000
 _EVIDENCE_CAP_STEP = 500
 
+# The session-log tail a read inspects (the same window the summary reads):
+# the closing assistant text sits at the end of the file.
+_SESSION_WINDOW_BYTES = 65536
+
+
+def session_explanation(session_file: Path | None) -> str | None:
+    """The text of the session's last assistant message, or None.
+
+    Issue #2351: the sentence that explains why a run stopped is written
+    nowhere but the session's own final response, so the failure comment
+    quotes it (bounded, fenced and redacted like every other comment text)
+    instead of keeping every session record metadata-only. A partial
+    trailing line — a killed session mid-write — is skipped, and the final
+    record pi logs twice is read ONCE because only the newest assistant text
+    is read at all.
+    """
+    if session_file is None:
+        return None
+    try:
+        with session_file.open("rb") as handle:
+            handle.seek(0, os.SEEK_END)
+            size = handle.tell()
+            window = min(size, _SESSION_WINDOW_BYTES)
+            handle.seek(size - window)
+            content = handle.read(window).decode("utf-8", errors="replace")
+    except (OSError, UnicodeError):
+        return None
+    for line in reversed(content.splitlines()):
+        try:
+            record = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(record, dict):
+            continue
+        message = record.get("message")
+        if not isinstance(message, dict) or message.get("role") != "assistant":
+            continue
+        blocks = message.get("content")
+        if not isinstance(blocks, list):
+            continue
+        text = "".join(
+            block.get("text", "") for block in blocks
+            if isinstance(block, dict) and block.get("type") == "text"
+        ).strip()
+        if text:
+            return text
+    return None
+
 
 def _failure_evidence(worktree: Path | None, exc: BaseException, *,
                       language_code: str,
@@ -146,7 +196,9 @@ def _failure_evidence(worktree: Path | None, exc: BaseException, *,
     test log are read before cleanup and only bounded, fenced segments are
     copied into the failure comment: raw output stays literal on GitHub,
     the session tail is a structural summary whose duplicates are removed,
-    and the full session log is named for the deep-dive. The
+    and the full session log is named for the deep-dive. The session's
+    final explanation is the ONE session text the comment quotes (Issue
+    #2351) — a stop's cause is written nowhere else. The
     failure reason itself stays the readable head of the comment.
 
     `cap` bounds each segment, so every fence closes (Issue #1711).
@@ -173,8 +225,19 @@ def _failure_evidence(worktree: Path | None, exc: BaseException, *,
         test_path = worktree / ".orbi" / "test.log"
         if test_path.is_file():
             test_log = _tail_text(test_path)
+    # Issue #2351: the session's own closing words lead the evidence, in
+    # their own bounded segment; a session that left none says so plainly.
+    explanation = session_explanation(session_file)
+    explanation_segment = (
+        f"{language.text(language_code, 'failure.evidence.session_explanation')}\n"
+        f"{fenced(redact_local_paths(explanation), cap=cap)}"
+        if explanation is not None
+        else language.text(
+            language_code, "failure.evidence.no_session_explanation")
+    )
     return (
         f"\n\n{language.text(language_code, 'failure.evidence.heading')}\n"
+        f"{explanation_segment}\n"
         f"exit_code={return_code if return_code is not None else '<unknown>'}\n"
         f"\nstderr_tail:\n{fenced(redact_local_paths(stderr), cap=cap)}\n"
         f"\nstdout_tail:\n{fenced(redact_local_paths(stdout), cap=cap)}\n"

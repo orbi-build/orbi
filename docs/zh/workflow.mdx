@@ -624,13 +624,21 @@ review 与 ops session），因此自定义 prompt 模板同样会收到：会�
 | `unclassified` | 其它任何 Runner 异常 | `fix_ticket` | false |
 
 动作：`requeue` 给 Issue 重新加 `ai-ready`（或点击重试）——无需修复；
-`fix_ticket` 修复失败并重跑该 Issue；`decide` 需要人工决策；
-`check_credentials` 检查并修复凭据后重试；`top_up_balance` 为模型
-provider 账户充值（或改用有余额的 key）后重试；`wait_quota` 等配额窗口重置后
-重试。人类可读的标题、`**Reason:**` 与 `**Action:**` 行与 block 并列；
-milestone 的可见摘要就是同一条有长度上限、不含本机路径的读者说明——理由，
-或在失败带有明确修复路径时使用 Action（Actions workflow 权限拒绝，Issue
-#1651）——完整的命令 stderr 绝不会被截成第一个词。
+`fix_ticket` 把答案或缺少的信息写进 Issue 正文后重新排队，下一轮从更新后的
+正文开始；`decide` 用同样的方式回答评论里提出的那一个问题；
+`check_credentials` 检查并修复凭据后重新加标签；`top_up_balance` 为模型
+provider 账户充值（或改用有余额的 key）后重新加标签；`wait_quota` 等配额窗口
+重置后重试。人类可读的标题、`**Reason:**` 与 `**Action:**` 行与 block 并列：
+标题和 Action 由同一个函数（`orbi.failure_stop.stop_wording`）根据记录一起
+决定，所以只有 `decide` 的停止才说"等待人工决定"——没有提交的停止会说明本次
+运行没有产生提交、Issue 需要修改；无法确定原因的停止会直接说明原因未知，而不会
+把问题归到 Issue 正文（Issue #1651），配置的基础分支不存在时也会直接说明
+（Issue #1749）；终态进度评论也会重复同一句标题。会话自己
+最后的说明会作为独立的一段（最多 4000 字符，并像所有评论文字一样脱敏）出现在
+失败证据里，让人读到会话在停止前写下的内容。milestone 的可见摘要就是同一条有
+长度上限、不含本机路径的读者说明——理由，或在失败带有明确修复路径时使用
+Action（Actions workflow 权限拒绝，Issue #1651）——完整的命令 stderr 绝不会
+被截成第一个词。
 
 ### 遇到临时 GitHub 错误后自动重新入队一次
 
