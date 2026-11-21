@@ -45,6 +45,9 @@ flowchart LR
   progress -->|"fail fast (no PR yet)"| blocked
   ready -->|"thin-ticket gate, before any work (clarify_thin_tickets)"| needsdetail["ai-needs-detail"]
   needsdetail -.->|a person adds the detail and re-adds the queue label| ready
+  needsdetail -->|"/orbi amend, or orbi draft into this ticket: the details are appended and it is re-queued"| ready
+  needsdetail -->|"/orbi split: the child tickets are queued, this one becomes the Epic"| epic
+  release -->|"an idle tick adds the queue label to the current milestone's release ticket"| ready
   progress -->|"first transient GitHub failure before a PR: re-queued once (Issue #2202)"| ready
   progress -->|"release task waits for open deliveries: queue label back, slot released"| ready
   progress -.->|"a person closes the Issue, or removes ai-in-progress after a Runner kill"| stopped["stopped by a person<br/>(see Stopping a delivery)"]
