@@ -85,8 +85,9 @@ engine_source_track = "release"
 # environment, missing-evidence items). While column 2 is non-empty the
 # review round short-circuits BEFORE any Pi session: `ai-in-progress` and
 # the queue label are cleared, NOTHING is added (a waiting ticket is not
-# queued, Issue #2309), the slot is released and each later tick costs one
-# label read — the wait never burns the review-round budget. A person confirms
+# queued, Issue #2309), the slot is released and each later tick ends with
+# the same labels (the PR resume briefly adds `ai-in-progress` and the
+# PR-opened repair removes it) — the wait never burns the review-round budget. A person confirms
 # the checklist with the human-only `ai-human-review` label and the next
 # tick reviews/merges exactly as before. An empty column 2 is the target
 # state: the checklist says no human intervention is needed and the
