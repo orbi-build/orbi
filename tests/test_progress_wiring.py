@@ -33,6 +33,18 @@ from orbi.pi_process import PiWatchOptions
 from tests.fakes.progress import freeze_report_time, patched_comment_bodies
 
 
+# The blocked scene headline has two spellings: the classic
+# `**Orbi blocked — ...**` of the scenes that carry no failure record (a PR
+# closed without a merge) and the shared stop headline `**Orbi: blocked —
+# ...**` of every reported failure (Issue #2351). One predicate keeps an
+# assertion reading "a blocked scene" / "no blocked scene" for both.
+BLOCKED_SCENE_MARKERS = ("Orbi blocked", "Orbi: blocked")
+
+
+def is_blocked_scene(body: str) -> bool:
+    return any(marker in body for marker in BLOCKED_SCENE_MARKERS)
+
+
 @pytest.fixture(autouse=True)
 def _repository_permissions(monkeypatch):
     """Issue #1806: the trusted comments in these scenarios are written
@@ -426,7 +438,7 @@ def test_process_issue_p0_failure_enters_ai_blocked_terminal_state(
     last_body = final_patches[-1][
         final_patches[-1].index("--field") + 1
     ][len("body="):] if final_patches else ""
-    assert "Orbi blocked" in last_body
+    assert is_blocked_scene(last_body)
     assert "- priority: p0" in last_body
     assert "pi exploded" in last_body
     # Issue #100: the P0 blocked scene shows the number AND the title.
@@ -1163,7 +1175,7 @@ def test_process_issue_failure_updates_progress_comment_with_blocked_scene(
         if any(line.startswith(progress.MILESTONE_PREFIX)
                for line in body.splitlines())
     ]
-    assert any("Orbi: blocked" in body for body in milestones)
+    assert any(is_blocked_scene(body) for body in milestones)
     final_patches = [
         command for command in calls
         if command[:2] == ["gh", "api"]
@@ -1174,7 +1186,7 @@ def test_process_issue_failure_updates_progress_comment_with_blocked_scene(
     last_body = final_patches[-1][
         final_patches[-1].index("--field") + 1
     ][len("body="):]
-    assert "Orbi blocked" in last_body
+    assert is_blocked_scene(last_body)
     assert "pi exploded" in last_body
     assert "<!-- orbi:run=a1b2c3d4 -->" in last_body
 
@@ -1550,7 +1562,7 @@ def test_process_issue_publishing_failure_is_never_blocked_scene(
 
     assert result.url == "https://github.com/xqliu/orbi/pull/40"
     # No blocked milestone...
-    assert not any("Orbi: blocked" in body for body in posted)
+    assert not any(is_blocked_scene(body) for body in posted)
     # ...no `Orbi failed` comment...
     comment_bodies = [
         command[-1] for command in calls
@@ -1560,7 +1572,7 @@ def test_process_issue_publishing_failure_is_never_blocked_scene(
                    for body in comment_bodies)
     # ...and no blocked progress scene.
     assert not any(
-        "Orbi blocked" in body
+        is_blocked_scene(body)
         for command in calls if _progress_patch_of(command)
         for body in [command[command.index("--field") + 1][len("body="):]]
     )
@@ -1610,7 +1622,7 @@ def test_process_issue_ensure_failure_does_not_fail_delivery(
         for line in caplog.text.splitlines()
     ), caplog.text
     # No blocked scene was published.
-    assert not any("Orbi: blocked" in body for body in posted)
+    assert not any(is_blocked_scene(body) for body in posted)
 
 
 def test_process_issue_started_scene_has_no_duplicate_milestone(
@@ -1711,7 +1723,7 @@ def test_process_issue_failure_path_progress_failure_keeps_blocked_transition(
             and (
                 # The blocked milestone POST...
                 ("POST" in command
-                 and "Orbi: blocked" in command[-1])
+                 and is_blocked_scene(command[-1]))
                 # ...and the blocked-scene finish PATCH.
                 or "PATCH" in command
             )
@@ -1765,7 +1777,7 @@ def test_process_issue_failure_path_progress_failure_keeps_blocked_transition(
     # ...both bypass steps failed (two logged failures)...
     assert caplog.text.count("progress_publish_failed") >= 2, caplog.text
     # ...and the blocked milestone was never posted.
-    assert not any("Orbi: blocked" in body for body in posted)
+    assert not any(is_blocked_scene(body) for body in posted)
 
 
 # --- review_and_merge_if_clean wiring (the reviewer stays observable) ---------
@@ -2137,7 +2149,7 @@ def test_delivery_step_closed_unmerged_posts_blocked_milestone(
         if "--method" in command and "POST" in command
     ]
     # The blocked milestone carries the mobile notification...
-    assert any("Orbi: blocked" in body for body in posted_bodies)
+    assert any(is_blocked_scene(body) for body in posted_bodies)
     assert any(
         ("closed without a merge" in body for body in posted_bodies),
     )
@@ -2154,7 +2166,7 @@ def test_delivery_step_closed_unmerged_posts_blocked_milestone(
     ]
     assert patches, "the tracked progress comment was not updated"
     blocked = patches[-1][patches[-1].index("--field") + 1][len("body="):]
-    assert "Orbi blocked" in blocked
+    assert is_blocked_scene(blocked)
     assert "closed without a merge" in blocked
     assert "What Orbi will do next:" in blocked
     assert "<!-- orbi:run=a1b2c3d4 -->" in blocked
@@ -2202,7 +2214,7 @@ def test_delivery_step_review_failure_finishes_progress_comment_with_blocked_sce
         for command in api_calls
         if "--method" in command and "POST" in command
     ]
-    assert any("Orbi: blocked" in body for body in posted_bodies)
+    assert any(is_blocked_scene(body) for body in posted_bodies)
     assert any(
         "independent review" in body and "failed" in body
         for body in posted_bodies
@@ -2215,7 +2227,7 @@ def test_delivery_step_review_failure_finishes_progress_comment_with_blocked_sce
     ]
     assert patches, "the tracked progress comment was not updated"
     last_body = patches[-1][patches[-1].index("--field") + 1][len("body="):]
-    assert "Orbi blocked" in last_body
+    assert is_blocked_scene(last_body)
     assert "independent review" in last_body
     assert "What Orbi will do next:" in last_body
     assert "<!-- orbi:run=a1b2c3d4 -->" in last_body
@@ -2428,7 +2440,7 @@ def _blocked_progress_failures(command) -> bool:
         and "--method" in command
         and (
             ("POST" in command
-             and "Orbi: blocked" in command[-1])
+             and is_blocked_scene(command[-1]))
             or "PATCH" in command
         )
     )
@@ -2492,14 +2504,14 @@ def test_delivery_step_closed_unmerged_progress_failure_still_releases(
         if "progress_publish_failed" in line
     ), caplog.text
     # Nothing was posted (the fake 404s the blocked milestone POST)...
-    assert not any("Orbi: blocked" in body for body in posted)
+    assert not any(is_blocked_scene(body) for body in posted)
     # ...but the blocked milestone was attempted...
     attempted_milestones = [
         command for command in api_calls
         if command[:2] == ["gh", "api"]
         and "--method" in command
         and "POST" in command
-        and "Orbi: blocked" in command[-1]
+        and is_blocked_scene(command[-1])
     ]
     assert attempted_milestones, "the blocked milestone was not attempted"
     # ...and the blocked-scene finish was still attempted (independent

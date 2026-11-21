@@ -33,6 +33,7 @@ import orbi.runner_health as runner_health
 from orbi import failure, language, progress, provider_balance, scene
 from orbi.delivery_labels import EVENT_BLOCKED
 from seam import seam
+from tests.test_progress_wiring import is_blocked_scene
 
 PR_URL = "https://github.com/owner/repo/pull/46"
 RUN_ID = "a1b2c3d4"
@@ -590,7 +591,7 @@ def test_delivery_step_unrecoverable_failure_marks_blocked_with_reason(
         for command in api_calls
         if "--method" in command and "POST" in command
     ]
-    assert any("Orbi: blocked" in body for body in posted)
+    assert any(is_blocked_scene(body) for body in posted)
     assert not any("Orbi: fix needed" in body for body in posted)
     patches = [
         command for command in api_calls
@@ -599,7 +600,7 @@ def test_delivery_step_unrecoverable_failure_marks_blocked_with_reason(
         and "PATCH" in command
     ]
     finished = patches[-1][patches[-1].index("--field") + 1][len("body="):]
-    assert "Orbi blocked" in finished
+    assert is_blocked_scene(finished)
     assert reason in finished
     # A bounded stop is an expected terminal state, not a Runner crash.
     assert "review_rounds_exhausted" in caplog.text
@@ -755,7 +756,7 @@ def test_verify_resumed_pr_diverged_pr_head_stays_fix_needed(
         if "--method" in command and "POST" in command
     ]
     assert any("Orbi: fix needed" in body for body in posted)
-    assert not any("Orbi: blocked" in body for body in posted)
+    assert not any(is_blocked_scene(body) for body in posted)
     assert "resume_pr_verification_failed" in caplog.text
 
 
@@ -886,7 +887,7 @@ def test_verify_resumed_pr_unrecoverable_failure_marks_blocked_with_reason(
         for command in captured["api"]
         if "--method" in command and "POST" in command
     ]
-    assert any("Orbi: blocked" in body for body in posted)
+    assert any(is_blocked_scene(body) for body in posted)
     assert not any("Orbi: fix needed" in body for body in posted)
 
 

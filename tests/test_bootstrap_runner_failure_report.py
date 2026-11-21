@@ -311,9 +311,11 @@ def test_failure_evidence_keeps_coverage_table_literal_inside_fence(tmp_path):
     # fence (label -> fence -> table row).
     assert "test_log_tail:\n```\n src      | stmts |\n----------|-------\n" \
         in evidence
-    # The session record text never enters the comment: the summary
-    # carries the shape, the fence carries the log path.
-    assert "bold" not in evidence
+    # The structured summary carries the shape (never the text); since
+    # Issue #2351 the session's final explanation is quoted ONCE, in its
+    # own bounded segment, and the raw record still never enters the
+    # comment.
+    assert evidence.count("**bold** | not | a | table") == 1
     assert raw_record not in evidence
 
 
@@ -343,7 +345,8 @@ def test_failure_evidence_dedupes_repeated_session_text_block(tmp_path):
     )
 
     assert evidence.count("role=assistant") == 1
-    assert final_text not in evidence
+    # Issue #2351: the quote reads the duplicated final record once.
+    assert evidence.count(final_text) == 1
 
 
 def test_session_summary_skips_malformed_records_and_respects_limit(tmp_path):
@@ -426,7 +429,10 @@ def test_report_delivery_failure_caps_comment_and_names_session_log(
     # hierarchy (the run marker is prepended by `report_delivery_failure`
     # when a run_id is bound; this call has none).
     assert body.startswith("<!-- orbi:failure:v1 ")
-    assert "\n\nOrbi: blocked — waiting on a human decision" in body
+    # Issue #2351: an unclassified stop is a `fix_ticket` stop — it says the
+    # ticket needs a change, never that it waits on a human decision.
+    assert "\n\nOrbi: blocked — this Issue needs a change before Orbi can " \
+        "deliver it" in body
     assert "**Reason:** " + "x" * 500 in body
     assert len(body) < failure_report.FAILURE_COMMENT_MAX_CHARS
     assert "full log: local session log" in body
@@ -503,7 +509,9 @@ def test_process_issue_failure_comment_includes_session_scene(monkeypatch, tmp_p
     # line inside a fence, not as raw session text.
     assert "2026-08-25T02:30:00Z message role=assistant content=text" \
         in failure_body
-    assert "assistant event" not in failure_body
+    # Issue #2351: the session's closing words are quoted once, in their
+    # own segment (the structural summary still never carries them).
+    assert failure_body.count("assistant event") == 1
     assert "1 failed" in failure_body
     # The reader-facing scene uses stable labels for local paths.
     assert "worktree: `local runner worktree`" in failure_body

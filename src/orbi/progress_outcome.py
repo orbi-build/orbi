@@ -21,38 +21,37 @@ def finish_outcome_body(*, outcome: str, detail: str,
                         reason: str | None = None,
                         diagnosis: str | None = None,
                         language_code: str,
+                        headline: str | None = None,
                         ) -> str:
-    """Render a terminal outcome with action, reason, and diagnosis."""
+    """Render a terminal outcome with action, reason, and diagnosis.
+
+    `headline` is the stop headline the failure comment rendered (Issue
+    #2351), so one stop shows one sentence in both places.
+    """
     def message(key: str, **fields: object) -> str:
         return language.text(language_code, key, **fields)
 
     if not next_step:
-        event(
-            "progress_finish_missing_next_step", level=logging.WARNING,
-            call_point="_finish_progress_body", issue=number,
-            repo=source_repo, outcome=outcome,
-        )
+        event("progress_finish_missing_next_step", level=logging.WARNING,
+              call_point="_finish_progress_body", issue=number,
+              repo=source_repo, outcome=outcome)
     legacy_action = action is None
     blocked = outcome == "blocked"
-    outcome_word = message(
-        "progress.outcome_blocked" if blocked
-        else "progress.outcome_fix_needed",
-    )
-    disposition = message(
-        "progress.disposition_blocked" if blocked
-        else "progress.disposition_retry",
-    )
+    outcome_word = message("progress.outcome_blocked" if blocked
+                           else "progress.outcome_fix_needed")
+    disposition = message("progress.disposition_blocked" if blocked
+                          else "progress.disposition_retry")
     if reason is None:
-        reason = message(
-            "progress.default_reason_blocked" if blocked
-            else "progress.default_reason_retry",
-        )
+        reason = message("progress.default_reason_blocked" if blocked
+                         else "progress.default_reason_retry")
     if diagnosis is None:
         diagnosis = detail
-    paragraphs = [message(
-        "progress.outcome_headline", outcome=outcome_word,
-        disposition=disposition,
-    )]
+    paragraphs = [
+        f"**{headline}**" if headline else message(
+            "progress.outcome_headline", outcome=outcome_word,
+            disposition=disposition,
+        )
+    ]
     if legacy_action:
         user_action = next_step if blocked and next_step else message(
             "progress.nothing",

@@ -22,7 +22,7 @@ import pytest
 
 import orbi.failure_report as failure_report
 import orbi.runner as runner
-from orbi import failure, progress, provider_balance
+from orbi import failure, language, progress, provider_balance
 from orbi.comment_kind import (
     COMMENT_KIND_REQUEUED, comment_kind, comment_kind_marker,
 )
@@ -486,6 +486,103 @@ def test_terminal_action_recognized_failure_keeps_the_generic_action():
     assert action == "Fix the failure described below and re-run this Issue."
 
 
+# --------------------------------------------------------------------------
+# Issue #2351: ONE function of the record decides the headline and the action
+# --------------------------------------------------------------------------
+
+# Every stop whose recorded action a plain re-queue cannot satisfy: the set
+# the Issue calls the twelve `retry_safe=False` codes.
+RETRY_UNSAFE = tuple(
+    code for code, (_action, retry_safe) in failure.DISPOSITIONS.items()
+    if not retry_safe
+)
+
+
+def record_of(reason_code: str) -> failure.Failure:
+    return failure.Failure(reason_code, *failure.DISPOSITIONS[reason_code])
+
+
+@pytest.mark.parametrize("reason_code", RETRY_UNSAFE)
+def test_every_retry_unsafe_stop_words_its_own_action(reason_code):
+    """Issue #2351 acceptance 4: none of the twelve `retry_safe=False`
+    stops shows the generic "fix the failure and re-run" line any more, and
+    only the action `decide` says "waiting on a human decision"."""
+    record = record_of(reason_code)
+    headline, action = failure.stop_wording(record, "en")
+    assert action != language.text("en", "failure.terminal_generic")
+    assert action.strip() != ""
+    decision = language.text("en", "failure.disposition_decide")
+    if record.action_code == "decide":
+        assert decision in headline
+    else:
+        assert decision not in headline
+    body = failure.failure_comment_body(
+        outcome="blocked", action=action, reason="boom", diagnosis="boom",
+        scene="- run: `-`", evidence="", pr_url=None,
+        issue="orbi-build/orbi#2351", run_id="a1b2c3d4",
+        failure_record=record, language_code="en",
+    )
+    assert language.text("en", "failure.terminal_generic") not in body
+    assert headline in body
+    assert failure.parse(body) == record
+
+
+def test_the_twelve_retry_unsafe_codes_are_covered():
+    """The Issue names twelve codes: the table above must not silently
+    shrink to a subset of them."""
+    assert len(RETRY_UNSAFE) == 12
+
+
+def test_two_reasons_with_the_same_action_get_the_same_wording():
+    """The wording reads the recorded action and retry_safe, not the reason
+    code alone: two `fix_ticket` stops say the same thing."""
+    ticket_change = failure.stop_wording(record_of("no_file_change"), "en")
+    assert failure.stop_wording(record_of("tests_failed"), "en") == ticket_change
+    assert failure.stop_wording(record_of("release_failed"), "en") == ticket_change
+    for code in ("review_budget_exhausted", "human_decision_required"):
+        assert failure.stop_wording(record_of(code), "en")[0] == (
+            failure.stop_wording(record_of("review_budget_exhausted"), "en")[0]
+        )
+
+
+def test_a_no_commit_stop_says_the_run_produced_no_commit():
+    """Issue #2351 headline: the no-commit stop names what happened and that
+    the ticket needs a change — it never claims a human decision."""
+    headline, action = failure.stop_wording(record_of("no_commit_delivered"), "en")
+    assert "produced no commit" in headline
+    assert "issue needs a change" in headline.lower()
+    assert language.text("en", "failure.disposition_decide") not in headline
+    assert "the Issue body" in action
+    assert "`ai-blocked`" in action and "`ai-ready`" in action
+
+
+def test_a_credential_stop_asks_for_the_credential_repair():
+    headline, action = failure.stop_wording(record_of("credential_missing"), "en")
+    assert "credential" in headline
+    assert "credential" in action
+    assert "`ai-blocked`" in action and "`ai-ready`" in action
+
+
+def test_a_balance_stop_names_the_existing_top_up_repair():
+    """`provider_balance` already owns its reader repair (Issue #2278);
+    the one wording function keeps it instead of a generic sentence."""
+    from orbi import provider_balance
+
+    _headline, action = failure.stop_wording(record_of("provider_balance"), "en")
+    assert action == provider_balance.action("en")
+
+
+@pytest.mark.parametrize("language_code", ["en", "zh"])
+def test_the_wording_function_gives_every_stop_a_headline_and_an_action(
+    language_code,
+):
+    for reason_code in failure.REASON_CODES:
+        headline, action = failure.stop_wording(
+            record_of(reason_code), language_code,
+        )
+        assert headline.strip() and action.strip(), reason_code
+
+
 def test_classify_uses_the_carried_record_and_applies_the_outcome():
     """Issue #1756: a failure that decided its reason at the source is
     used as it is — the classifier never re-reads an error message."""
@@ -708,7 +805,12 @@ def test_failure_comment_body_renders_the_block_before_the_headline():
     assert body.startswith(block_for())
     parsed = failure.parse(body)
     assert parsed == record_for()
-    assert "Orbi: blocked — waiting on a human decision" in body
+    # Issue #2351: a `retry_safe` stop says the failure was temporary — it
+    # never claims a human decision the record does not ask for.
+    assert language.text(
+        "en", "failure.headline_blocked",
+        disposition=language.text("en", "failure.disposition_retry"),
+    ) in body
     assert "**Action:** relabel ai-ready" in body
     assert "**Reason:** boom" in body
 

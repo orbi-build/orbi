@@ -27,7 +27,10 @@ import re
 import subprocess
 
 from orbi import gh_response, language, provider_balance, user_summary
+# Issue #2351: the stop wording moved to its own module (this one is at its
+# size-ratchet ceiling); it is re-exported here for its existing callers.
 from orbi.comment_kind import parse_versioned_block
+from orbi.failure_stop import stop_wording, terminal_action  # noqa: F401
 
 SCHEMA_VERSION = 1
 
@@ -480,28 +483,6 @@ def workflow_permission_action(
     )
 
 
-def terminal_action(record: Failure,
-                    language_code: str, *,
-                    base_branch: str | None = None) -> str:
-    """The reader action for the implement-phase terminal handler.
-
-    An unrecognized failure says the cause could not be determined
-    instead of implying the Issue text is the problem (Issue #1651); a
-    missing base branch names the branch and both repairs — create it, or
-    pick an existing one where the repository was set up — plus how to
-    restart the Issue (Issue #1749, #1753); every other recognized
-    terminal failure keeps the existing generic action.
-    """
-    if record.reason_code == "unclassified":
-        return language.text(language_code, "failure.terminal_unclassified")
-    if record.reason_code == "base_branch_missing":
-        return language.text(
-            language_code, "failure.terminal_base_branch_missing",
-            base_branch=base_branch or "-",
-        )
-    return language.text(language_code, "failure.terminal_generic")
-
-
 def terminal_reason(detail: str, record: Failure, *,
                     base_branch: str | None, language_code: str) -> str:
     """The reader-facing reason of the implement-phase terminal handler.
@@ -632,9 +613,12 @@ def failure_comment_body(*, outcome: str, action: str, reason: str,
     def message(key: str, **fields: object) -> str:
         return language.text(language_code, key, **fields)
 
-    headline = message(
-        "failure.headline_fix_needed" if retrying
-        else "failure.headline_blocked",
+    # The blocked headline is the ONE wording function's verdict for this
+    # record (Issue #2351): the action the record carries decides it, so the
+    # headline never promises a decision the action does not ask for.
+    headline = (
+        message("failure.headline_fix_needed") if retrying
+        else stop_wording(failure_record, language_code)[0]
     )
     parts = [render(failure_record), headline]
     # The task identity and the optional fixed project status link sit
