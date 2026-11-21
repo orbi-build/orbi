@@ -519,7 +519,9 @@ While column 2 is non-empty, it is a GATE: the review round
 short-circuits before any Pi session — `ai-in-progress` and the queue label
 are cleared, NOTHING is added (a waiting ticket is not queued, Issue #2309),
 the opened-PR label stays as the resume anchor, the slot is released, and
-every later tick costs one label read while it writes no label at all. The wait does
+every later tick leaves the final label set unchanged and starts no review session
+(the PR resume still adds `ai-in-progress` and the PR-opened repair removes it
+again in the same tick). The wait does
 NOT consume the review-round budget and never touches
 `ai-fix-needed`. A person who confirms the checklist applies
 `ai-human-review`, and the next tick reviews and merges the delivery

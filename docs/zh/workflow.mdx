@@ -420,7 +420,8 @@ host 配置打开门禁（`orbi.toml` 里 `human_review_gate = true`——这是
 栏二非空时它就是门禁：评审轮次在任何 Pi session 之前短路——清除
 `ai-in-progress` 与队列标签，**什么都不加**（等待中的票不在队列里，
 Issue #2309），opened-PR 标签保留作 resume 锚，槽位释放，此后每个 tick
-只花一次 label 读且一个标签都不写。等待**不消耗**评审轮次预算，也**不碰**
+结束时标签不变、也不启动评审 session（同一 tick 里 PR 接续仍会先加
+`ai-in-progress`，PR-opened 修复再把它摘掉）。等待**不消耗**评审轮次预算，也**不碰**
 `ai-fix-needed`。
 人确认清单后打 `ai-human-review`，下一 tick 照常评审与合并（verdict 绑定
 与 `--match-head-commit` 零改动）。
