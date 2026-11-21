@@ -28,9 +28,9 @@ same PR — only its head may advance):
 ```mermaid
 flowchart LR
   epic["Epic (ai-epic) — coordination only, never claimed"]
-  epic -.splits into.-> ready
+  epic -.->|"splits into"| ready
   release["Release task (ai-ready + ai-release)<br/>— Runner release state machine, never run_pi"]
-  release -.claims like.-> ready
+  release -.->|"claims like"| ready
   ready["ai-ready<br/>(pickup order: P0-labeled first, then bug-labeled, then plain)"]
   ready -->|claim: queue label removed, worktree + Pi| progress["ai-in-progress"]
   progress -->|PR verified: base fresh, run marker, Fixes #N| opened["ai-pr-opened"]
