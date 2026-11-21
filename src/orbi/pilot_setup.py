@@ -67,8 +67,8 @@ from orbi.setup_checks import (
     check_repo,
     run_machine_checks,
 )
+from orbi import labels as label_data
 from orbi.setup_config import (
-    LABELS_FILE,
     PROVIDER_ENV_NAME,
     PROVIDER_GUIDE,
     SetupError,
@@ -465,11 +465,11 @@ def run_setup(config: RunnerConfig, installed_dir: Path | None, *,
                 )
         targets = list(repos)
     repo_dir = config.repo_dir
-    # Labels.toml, the CLI editable install and the unit
-    # templates live in the deployment home; the delivery checkout
-    # (repo_dir) may be a foreign repo without any of them.
+    # The label definitions ship with the engine (Issue #2347); the CLI
+    # editable install and the unit templates live in the deployment
+    # home, and the delivery checkout (repo_dir) may be a foreign repo.
     deploy_home = config.deploy_home
-    defs = load_label_defs(deploy_home / LABELS_FILE)
+    defs = load_label_defs(label_data.default_path())
     check_commands(run_command, config.unit_name)
     # The CLI source step precedes every mutating step — the
     # running CLI must import from the deployment checkout, otherwise

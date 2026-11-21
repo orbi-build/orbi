@@ -23,10 +23,8 @@ import re
 from pathlib import Path
 
 from orbi import run_state
-from orbi.delivery_labels import (
-    BLOCKED_LABEL, EPIC_LABEL, FIX_NEEDED_LABEL, IN_PROGRESS_LABEL,
-    MERGED_LABEL, PR_OPENED_LABEL, label_name_set,
-)
+from orbi.delivery_labels import label_name_set
+from orbi import delivery_labels
 from orbi.delivery_scene import DeliveryScene, body_markers, classify
 from orbi.github import list_issues
 from orbi.journal import event
@@ -188,10 +186,10 @@ def pick_in_progress_issue(
     issues = list_issues(
         repo, state="open",
         search=(
-            f"label:{IN_PROGRESS_LABEL} "
-            f"-label:{PR_OPENED_LABEL} -label:{FIX_NEEDED_LABEL} "
-            f"-label:{MERGED_LABEL} -label:{BLOCKED_LABEL} "
-            f"-label:{EPIC_LABEL}"
+            f"label:{delivery_labels.IN_PROGRESS_LABEL} "
+            f"-label:{delivery_labels.PR_OPENED_LABEL} -label:{delivery_labels.FIX_NEEDED_LABEL} "
+            f"-label:{delivery_labels.MERGED_LABEL} -label:{delivery_labels.BLOCKED_LABEL} "
+            f"-label:{delivery_labels.EPIC_LABEL}"
         ),
         json_fields="number,title,body,labels,milestone",
         limit=IN_FLIGHT_SCAN_LIMIT,

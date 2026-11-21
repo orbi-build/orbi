@@ -21,7 +21,7 @@ description: "使用者可以依赖什么，status 与进度文档又如何报�
 | CLI | `orbi`（一次 Runner tick）、`orbi add`、`orbi suggest`、`orbi draft`、`orbi status`、`orbi session`、`orbi install-units`、`orbi sync-engine-source`、`orbi doctor`、`orbi check`、`orbi setup`、`orbi fix-base`、`orbi split`、`orbi amend`（每条 arity 为 0 的已登记票内命令各一个子命令）、`orbi milestone`（`milestone set <title>`）、`orbi notify`（`notify test`） |
 | 配置 | [配置](/zh/configuration) 中记录的 `orbi.toml` 字段——包括 Telegram 通知键 [`telegram_chat_id`](/zh/configuration)；作为 systemd `EnvironmentFile` 加载的 `.orbi/env`（其中携带 `ORBI_TELEGRAM_BOT_TOKEN`）；`pi_providers` JSON 文件 |
 | 部署 | `systemd/orbi@.service` 与 `systemd/orbi@.timer` 模板；作为 run 产物与锁目录的 `.orbi/` |
-| Label 状态机 | `labels.toml`（名称、颜色、描述）与 `src/orbi/delivery_labels.py`（状态迁移）。dispatch 标签（`ai-ready`，或仓库的 `dispatch_label`）表示**已排队、尚未开始**：领取在同一次写入里移除它并加上 `ai-in-progress`，此后每个非终态阶段事件也会移除它；只有被放回队列的票才会重新加上它（requeue、`ai-needs-detail` 恢复、amend/draft/split 重派发、空闲时的 release 武装、因有未完成交付而等待的 release）。人工验收等待会清掉它，不加回。排队中、正在跑、被中断的交付各怎么停，见[交付流程](/zh/workflow)「停下交付」一节 |
+| Label 状态机 | `labels.toml`（角色 → 名称表、颜色、描述；见[标签定义](#标签定义)）与 `src/orbi/delivery_labels.py`（状态迁移）。dispatch 标签（`ai-ready`，或仓库的 `dispatch_label`）表示**已排队、尚未开始**：领取在同一次写入里移除它并加上 `ai-in-progress`，此后每个非终态阶段事件也会移除它；只有被放回队列的票才会重新加上它（requeue、`ai-needs-detail` 恢复、amend/draft/split 重派发、空闲时的 release 武装、因有未完成交付而等待的 release）。人工验收等待会清掉它，不加回。排队中、正在跑、被中断的交付各怎么停，见[交付流程](/zh/workflow)「停下交付」一节 |
 | Journal | run 的每一行都以 `[run_id]` 开头；事件名与 `key=value` 字段见 [Operations](/zh/operations) |
 | Session 文件 | `<worktree>/.pi-session/*.jsonl` |
 | 命名 | 分支 `orbi/<owner>-<repo>-issue-<N>`；worktree `.worktrees/orbi-<owner>-<repo>-issue-<N>-<run_id>` |
@@ -35,6 +35,21 @@ description: "使用者可以依赖什么，status 与进度文档又如何报�
 | 停止问题 | 需要决定的停止中隐藏的 `<!-- orbi:question:v1 {json} -->` 块、其形状（起草问题的超集）、封闭的 `action` 集合与 `decision_class` 取值，以及回答记录 `<!-- orbi:answer:v1 {json} -->`（包括引擎自行做出的自动回答）；见[停止问题](#停止问题) |
 
 表中没有的一切都属于内部实现，可能随时变化。
+
+## 标签定义
+
+引擎的平台标签名是配置数据，不是代码（Issue #2347）。唯一定义来源是随引擎包发布的 `src/orbi/labels.toml`：
+
+- 每个平台标签是一个 `[[label]]` 条目，四个键：`role`（引擎查询用的键）、`name`、`color`、`description`；
+- `[reserved]` 表给出引擎保留但不拥有的名称（`bug`）：引擎读取它，`orbi setup` 永不创建或更新这些标签；
+- 角色词表为 `queue`、`in_progress`、`pr_opened`、`fix_needed`、`merged`、`blocked`、`awaiting_merge`、`priority`、`epic`、`release`、`content_only`、`ops_only`、`human_review`、`needs_detail`。
+
+两条不变量，违反任一条都会让启动失败并点名问题（文件缺失、TOML 损坏、未知角色、角色重复、缺少 `queue` 角色、颜色非法、描述为空）：
+
+1. **每个平台角色恰好出现一次，且恰好一个 `queue` 角色。** 任何角色都不再由代码里的默认值隐含。
+2. **只有 queue 角色可覆盖。** 每个仓库的优先级是仓库 `.github/orbi.toml` 的 `dispatch_label` > 宿主 `orbi.toml` 的 `dispatch_label` > `labels.toml` 的 `queue` 条目。其余角色都是引擎数据，只随引擎发版变化。
+
+引擎在启动时读取该文件，所有标签问题（本仓库的队列标签是什么、这张票是否在队列中、把它放进或拿出队列，以及其他角色同理）都由这一张表回答；`orbi setup` 也从同一文件创建和更新标签。发布时在 `labels.toml` 里改名即可改变引擎行为，无需改代码。
 
 ## 状态观察契约
 

@@ -29,9 +29,7 @@ from orbi.base_ci_red import (
     edit_state, failing_checks, open_triage_issue, paused_scene, remind,
     scene_receipt, triage_title,
 )
-from orbi.delivery_labels import (
-    BLOCKED_LABEL, FIX_NEEDED_LABEL, P0_LABEL, READY_LABEL,
-)
+from orbi import delivery_labels
 from orbi.github import (
     branch_head_sha, comment_issue, commit_check_runs, edit_issue,
     issue_comments, pr_view,
@@ -107,7 +105,7 @@ def _create_triage_issue(repo: str, checks: list[FailingCheck],
         "--title", triage_title(record.base_branch),
         "--body", _triage_body(checks, record, language_code),
         "--label", dispatch_label,
-        "--label", P0_LABEL,
+        "--label", delivery_labels.P0_LABEL,
     ]
     if milestone:
         command += ["--milestone", milestone]
@@ -122,7 +120,7 @@ def _create_triage_issue(repo: str, checks: list[FailingCheck],
 
 def open_fix_issues(
     repo: str, issue_number: int, record: BaseCIRed, *,
-    milestone: str | None = None, dispatch_label: str = READY_LABEL,
+    milestone: str | None = None, dispatch_label: str | None = None,
     language_code: str = language.DEFAULT_LANGUAGE,
 ) -> list[str]:
     """Open (or reuse) the ONE open fix Issue of this base branch.
@@ -143,6 +141,7 @@ def open_fix_issues(
     empty evidence read returns the one "no evidence" sentence — no Issue
     is invented for a check GitHub no longer reports.
     """
+    dispatch_label = delivery_labels.queue_label(dispatch_label)
     checks = _base_red_checks(repo, record)
     if not checks:
         return [language.text(
@@ -177,7 +176,7 @@ def open_fix_issues(
 
 def ensure_fix_issues(
     repo: str, issue_number: int, record: BaseCIRed, *,
-    milestone: str | None = None, dispatch_label: str = READY_LABEL,
+    milestone: str | None = None, dispatch_label: str | None = None,
     language_code: str = language.DEFAULT_LANGUAGE,
 ) -> list[str] | None:
     """The engine-initiated run: the fix Issue, ONCE per scene.
@@ -194,6 +193,7 @@ def ensure_fix_issues(
     comment renders the pre-#2203 repair text (`/orbi fix-base`) instead
     of turning a recorded scene into an unreported one.
     """
+    dispatch_label = delivery_labels.queue_label(dispatch_label)
     try:
         receipt = scene_receipt(record)
         if runner_receipt(issue_comments(issue_number, repo=repo), receipt):
@@ -275,7 +275,7 @@ def _aged_out(comment: dict, now: datetime) -> bool:
 
 def recover(repo: str, *, language_code: str,
             milestone: str | None = None,
-            dispatch_label: str = READY_LABEL,
+            dispatch_label: str | None = None,
             now: datetime | None = None) -> list[int]:
     """Advance every paused base-branch-red delivery once.
 
@@ -301,6 +301,7 @@ def recover(repo: str, *, language_code: str,
 
     Returns the Issue numbers that were resumed.
     """
+    dispatch_label = delivery_labels.queue_label(dispatch_label)
     stamp = now or datetime.now(timezone.utc)
     reads = blocked_scan.blocked_reads(repo)
     resumed: list[int] = []
@@ -336,8 +337,8 @@ def recover(repo: str, *, language_code: str,
             )
             continue
         if _base_is_green(repo, record, base_head):
-            edit_issue(number, repo=repo, add=FIX_NEEDED_LABEL,
-                       remove=BLOCKED_LABEL)
+            edit_issue(number, repo=repo, add=delivery_labels.FIX_NEEDED_LABEL,
+                       remove=delivery_labels.BLOCKED_LABEL)
             edit_state(repo, number, comment, STATE_RESUMING,
                         language_code=language_code)
             event(
@@ -361,7 +362,7 @@ def scene_comment(
     repo: str, issue: dict, record: BaseCIRed, checks: list[FailingCheck],
     *, failure_record: failure.Failure, language_code: str,
     status_url: str | None = None, milestone: str | None = None,
-    dispatch_label: str = READY_LABEL,
+    dispatch_label: str | None = None,
 ) -> str:
     """The base-branch-red comment, with the fix Issue Orbi opened itself.
 
@@ -372,6 +373,7 @@ def scene_comment(
     `ensure_fix_issues`), so the pause the delivery already decided still
     reaches the reader, with the command's own repair offered instead.
     """
+    dispatch_label = delivery_labels.queue_label(dispatch_label)
     number = int(issue["number"])
     return comment_body(
         record, checks, failure_record=failure_record,
@@ -427,7 +429,7 @@ def _fix_base_validate(
 def _fix_base_apply(
     argument: str, *, repo: str, issue_number: int, command_comment: dict,
     comments: list[dict], record: BaseCIRed | None = None,
-    milestone: str | None = None, dispatch_label: str = READY_LABEL,
+    milestone: str | None = None, dispatch_label: str | None = None,
     language_code: str = language.DEFAULT_LANGUAGE,
     **_context: object,
 ) -> None:
@@ -445,6 +447,7 @@ def _fix_base_apply(
     record runs by itself (Issue #2203): a fix Issue the engine opened is
     therefore reused here, and the reply says so.
     """
+    dispatch_label = delivery_labels.queue_label(dispatch_label)
     if not isinstance(record, BaseCIRed):
         # The layer's contract: a handler that cannot run raises its own
         # step error (never a bare TypeError) so the dispatcher posts the

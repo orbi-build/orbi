@@ -12,19 +12,14 @@ from collections.abc import Callable
 from pathlib import Path
 
 from orbi import language
-from orbi.delivery_labels import (
-    AWAITING_MERGE_LABEL, BLOCKED_LABEL, FIX_NEEDED_LABEL,
-    IN_PROGRESS_LABEL, MERGED_LABEL, PR_OPENED_LABEL, READY_LABEL,
-    RELEASE_LABEL,
-)
+from orbi import delivery_labels
 
-# Every stage label an ARMED (already claimed) release carries. The claim
-# removes the queue label (Issue #2309), so arming must recognize a
-# started release by its stage, never by the queue entry alone.
-RELEASE_STAGE_LABELS = (
-    IN_PROGRESS_LABEL, PR_OPENED_LABEL, FIX_NEEDED_LABEL,
-    MERGED_LABEL, BLOCKED_LABEL, AWAITING_MERGE_LABEL,
-)
+# Every stage label an ARMED (already claimed) release carries (Issue #2309).
+def release_stage_labels() -> tuple[str, ...]:
+    """Every stage label an armed release carries."""
+    return (delivery_labels.IN_PROGRESS_LABEL, delivery_labels.PR_OPENED_LABEL,
+            delivery_labels.FIX_NEEDED_LABEL, delivery_labels.MERGED_LABEL,
+            delivery_labels.BLOCKED_LABEL, delivery_labels.AWAITING_MERGE_LABEL)
 from orbi.gitops import acquire_base_sync_lock
 from orbi.github import (
     close_milestone, list_issues, list_milestones, milestone_open_issues,
@@ -101,7 +96,7 @@ def _release_ticket_exists(repo: str, version: str) -> bool:
     (`gh issue list` over one Milestone's release label)."""
     issues = list_issues(
         repo, state="all",
-        search=f'label:{RELEASE_LABEL} milestone:"{version}"',
+        search=f'label:{delivery_labels.RELEASE_LABEL} milestone:"{version}"',
         json_fields="number", limit=1, timeout=30,
     )
     return bool(issues)
@@ -109,7 +104,7 @@ def _release_ticket_exists(repo: str, version: str) -> bool:
 
 def arm_release_ticket(
     repo: str, active_milestone: str,
-    dispatch_label: str = READY_LABEL,
+    dispatch_label: str | None = None,
 ) -> None:
     """Arm one open release ticket for the current milestone on idle.
 
@@ -125,9 +120,10 @@ def arm_release_ticket(
     An idle-path bypass: callers catch failures, so a label write can
     never change the outcome of the main tick.
     """
-    stage = " ".join(f"-label:{label}" for label in RELEASE_STAGE_LABELS)
+    dispatch_label = delivery_labels.queue_label(dispatch_label)
+    stage = " ".join(f"-label:{label}" for label in release_stage_labels())
     search = (
-        f"label:{RELEASE_LABEL} -label:{dispatch_label} {stage} "
+        f"label:{delivery_labels.RELEASE_LABEL} -label:{dispatch_label} {stage} "
         f'milestone:"{active_milestone}"'
     )
     issues = list_issues(
@@ -157,7 +153,7 @@ def reconcile_milestone_on_idle(
     policy: RepoPolicy | None = None,
     policy_path: str = REPO_CONFIG_PATH,
     base_branch: str = "main",
-    dispatch_label: str = READY_LABEL,
+    dispatch_label: str | None = None,
     version_file: str | None = None,
     language_code: str = language.DEFAULT_LANGUAGE,
 ) -> tuple[str, str | None]:
@@ -168,6 +164,7 @@ def reconcile_milestone_on_idle(
     The Runner makes ONE call inside ONE bypass `try/except`, so a new
     bookkeeping step never becomes a second, separately-failing call.
     """
+    dispatch_label = delivery_labels.queue_label(dispatch_label)
     try:
         arm_release_ticket(
             repo, active_milestone, dispatch_label=dispatch_label,
@@ -281,7 +278,7 @@ def clear_milestone_reconcile_failure(state_dir: Path, repo: str) -> None:
 
 def validate_active_milestone(
     repo: str, active_milestone: str | None,
-    dispatch_label: str = READY_LABEL,
+    dispatch_label: str | None = None,
 ) -> None:
     """Validate the configured Milestone before a tick can claim work.
 
@@ -290,6 +287,7 @@ def validate_active_milestone(
     leave it configured during release wind-down or while preparing another
     line of work (Issue #1185 correction).
     """
+    dispatch_label = delivery_labels.queue_label(dispatch_label)
     if active_milestone is None:
         return
 
@@ -432,7 +430,7 @@ def _pending_milestone_issue(
             "",
             language.text(
                 language_code, "milestone.confirm_release_command",
-                old=old, release_label=RELEASE_LABEL,
+                old=old, release_label=delivery_labels.RELEASE_LABEL,
             ),
             language.text(language_code, "milestone.confirm_write_permission"),
         ]
@@ -688,11 +686,12 @@ def advance_active_milestone_on_idle(
     policy: RepoPolicy | None = None,
     policy_path: str = REPO_CONFIG_PATH,
     base_branch: str = "main",
-    dispatch_label: str = READY_LABEL,
+    dispatch_label: str | None = None,
     version_file: str | None = None,
     language_code: str = language.DEFAULT_LANGUAGE,
 ) -> tuple[str, str | None]:
     """Check and advance a configured milestone after no_ready_issue."""
+    dispatch_label = delivery_labels.queue_label(dispatch_label)
     milestones = list_milestones(repo, timeout=30)
     try:
         active = find_exact_milestone(milestones, active_milestone)

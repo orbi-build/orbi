@@ -250,7 +250,7 @@ Issue #330（PR #334）把 orbi 的部署 home 与交付 checkout 解耦：orbi
   - `deploy_home`（orbi checkout）——CLI 自更新来源（editable `uv tool`
     安装、`ExecStartPre` fast-forward 与 CLI 自愈）、`systemd/` unit
     模板（`{{ORBI_REPO_DIR}}` 占位符渲染的是**这个**路径）、
-    `labels.toml`、prompt 默认；
+    prompt 默认（标签定义随引擎包发布：`src/orbi/labels.toml`）；
   - `repo_dir`（用户仓库 X）——交付 checkout：Issue 从 X 领取，任务
     worktree 从 X 冻结的 `origin/<base_branch>` 创建，PR 对 X 打开，
     slot 锁在 `<repo_dir>/.orbi/slots/`。
@@ -514,7 +514,7 @@ setup 入口用一条命令完成全部初始化：校验你安装好的前提�
 python3、uv、systemd user session——缺失会 fail fast 并给出可执行的
 安装指引）、校验或重装 editable CLI 安装（Issue #152——运行中的 CLI
 必须从部署 checkout 导入）、验证 `gh auth status` 和仓库权限、从仓库
-管理的 `labels.toml`（标签名/颜色/描述的唯一事实源——commit 从不创建
+自带的 `labels.toml`（标签名/颜色/描述的唯一事实源——commit 从不创建
 标签，缺标签会让扫描静默漏掉对应状态）声明式对齐平台标签、安装
 systemd user units 并 enable timer、检查 checkout、报告可选模型 proxy：
 

@@ -3,8 +3,17 @@
 # state and stay unchanged, only the visible descriptions carry the
 # Orbi brand).
 #
-# `orbi setup --config orbi.toml` aligns every configured source repo with this
-# file declaratively: a missing label is created and a drifted label is
+# This file SHIPS WITH THE ENGINE (package data, Issue #2347): it is the
+# only place a platform label name is written down. Each entry carries a
+# `role` — the key the engine asks for — and every role appears exactly
+# once, with exactly one `queue` role. Changing a name here changes the
+# engine's behavior with no code change; the file therefore changes only
+# with an engine release. The one overridable role is the queue: a
+# repository's `.github/orbi.toml` `dispatch_label` or the host
+# `orbi.toml` `dispatch_label` wins over the `queue` entry below.
+#
+# `orbi setup --config orbi.toml` aligns every configured source repo with
+# this file declaratively: a missing label is created and a drifted label is
 # updated (name, color, description); nothing is ever deleted and no
 # business label (bug, enhancement, ...) is touched. The values below
 # match the live orbi-build/orbi labels (verified against the GitHub
@@ -14,71 +23,91 @@
 # short line per label.
 
 [[label]]
+role = "queue"
 name = "ai-ready"
 color = "1d76db"
 description = "Ready for unattended delivery · aiready.sh"
 
 [[label]]
+role = "in_progress"
 name = "ai-in-progress"
 color = "fbca04"
 description = "Issue currently being handled by Orbi"
 
 [[label]]
+role = "pr_opened"
 name = "ai-pr-opened"
 color = "0e8a16"
 description = "A PR (internal or external) is open and awaiting review"
 
 [[label]]
+role = "fix_needed"
 name = "ai-fix-needed"
 color = "fbca04"
 description = "Existing PR needs automatic review/fix continuation"
 
 [[label]]
+role = "merged"
 name = "ai-merged"
 color = "0e8a16"
 description = "Orbi automatically reviewed and merged the task PR"
 
 [[label]]
+role = "blocked"
 name = "ai-blocked"
 color = "d73a4a"
 description = "Orbi stopped and needs human attention"
 
 [[label]]
+role = "awaiting_merge"
 name = "ai-awaiting-merge"
 color = "5319e7"
 description = "Reviewed PR delivered; Orbi merges once the maintainer clears the named blocker"
 
 [[label]]
+role = "priority"
 name = "p0"
 color = "fbca04"
 description = "Orbi urgent priority: picked up before bugs and features"
 
 [[label]]
+role = "epic"
 name = "ai-epic"
 color = "bfdadc"
 description = "Epic coordination issue; not directly executable by Runner"
 
 [[label]]
+role = "release"
 name = "ai-release"
 color = "5319e7"
 description = "Release task: Runner runs the deterministic release state machine (tag + GitHub Release)"
 
 [[label]]
+role = "content_only"
 name = "ai-content-only"
 color = "d4c5f9"
 description = "Content-only task: the content agent delivers text to the Issue — no execution, no git"
 
 [[label]]
+role = "ops_only"
 name = "ai-ops-only"
 color = "0e8a16"
 description = "Ops/research task: full execution session (ops playbook) — evidence on the Issue, code via PR"
 
 [[label]]
+role = "human_review"
 name = "ai-human-review"
 color = "d93f0b"
 description = "Human acceptance gate: a person confirmed the delivery checklist; Orbi never adds or removes it"
 
 [[label]]
+role = "needs_detail"
 name = "ai-needs-detail"
 color = "fbca04"
 description = "Thin ticket: Orbi asked for the missing pieces and waits for a human to re-add ai-ready"
+
+[reserved]
+# Labels the engine reserves or routes on that are NOT platform labels:
+# the engine reads the name, but `orbi setup` never creates or updates
+# them (a repository keeps its own color and description).
+bug = "bug"

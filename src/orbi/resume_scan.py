@@ -17,10 +17,8 @@ from typing import NamedTuple
 from orbi import claim_race, language, run_state, scene, user_summary, waiting_checks
 from orbi import review_wait
 from orbi.blocked_comment import post_blocked_comment
-from orbi.delivery_labels import (
-    AWAITING_MERGE_LABEL, BLOCKED_LABEL, FIX_NEEDED_LABEL, MERGED_LABEL,
-    PR_OPENED_LABEL, READY_LABEL, label_name_set,
-)
+from orbi.delivery_labels import label_name_set
+from orbi import delivery_labels
 from orbi.delivery_scene import (
     DeliveryScene, body_markers, classify,
 )
@@ -65,7 +63,7 @@ class ResumeHooks(NamedTuple):
 def pick_resumable_delivery(
     repo: str, slot_dir: Path, max_concurrency: int,
     repo_dir: Path | None = None, *, hooks: ResumeHooks,
-    language_code: str, ready_label: str = READY_LABEL,
+    language_code: str, ready_label: str | None = None,
     status_url: str | None = None,
     review_waiting: list[dict] | None = None,
 ) -> tuple[dict, dict] | None:
@@ -108,9 +106,10 @@ def pick_resumable_delivery(
     `_pick_opened_pr_delivery`; `review_waiting` is the Issue #2305
     out-list for the skipped candidates that only wait for their checks.
     """
+    ready_label = delivery_labels.queue_label(ready_label)
     return _pick_opened_pr_delivery(
         repo, slot_dir, max_concurrency, repo_dir,
-        search_labels=(FIX_NEEDED_LABEL, PR_OPENED_LABEL),
+        search_labels=(delivery_labels.FIX_NEEDED_LABEL, delivery_labels.PR_OPENED_LABEL),
         hooks=hooks, language_code=language_code, ready_label=ready_label,
         status_url=status_url, review_waiting=review_waiting,
     )
@@ -119,7 +118,7 @@ def pick_resumable_delivery(
 def pick_awaiting_merge_delivery(
     repo: str, slot_dir: Path, max_concurrency: int,
     repo_dir: Path | None = None, *, hooks: ResumeHooks,
-    language_code: str, ready_label: str = READY_LABEL,
+    language_code: str, ready_label: str | None = None,
     status_url: str | None = None,
 ) -> tuple[dict, dict] | None:
     """Return the oldest FREE `ai-awaiting-merge` delivery and its scene.
@@ -145,9 +144,10 @@ def pick_awaiting_merge_delivery(
     Issue #1734) until the oldest FREE one is found or the page of
     `OPENED_PR_SCAN_LIMIT` candidates runs out (Issue #1792).
     """
+    ready_label = delivery_labels.queue_label(ready_label)
     return _pick_opened_pr_delivery(
         repo, slot_dir, max_concurrency, repo_dir,
-        search_labels=(AWAITING_MERGE_LABEL,),
+        search_labels=(delivery_labels.AWAITING_MERGE_LABEL,),
         hooks=hooks, language_code=language_code, ready_label=ready_label,
         status_url=status_url,
     )
@@ -157,7 +157,7 @@ def _pick_opened_pr_delivery(
     repo: str, slot_dir: Path, max_concurrency: int,
     repo_dir: Path | None, *, search_labels: Sequence[str],
     hooks: ResumeHooks, language_code: str,
-    ready_label: str = READY_LABEL, status_url: str | None = None,
+    ready_label: str | None = None, status_url: str | None = None,
     review_waiting: list[dict] | None = None,
 ) -> tuple[dict, dict] | None:
     """Scan ONE opened-PR label set for the oldest FREE resumable delivery.
@@ -198,6 +198,7 @@ def _pick_opened_pr_delivery(
     delivery is never touched. `review_waiting` (Issue #2305) receives the
     candidates that passed review and only wait for their checks.
     """
+    ready_label = delivery_labels.queue_label(ready_label)
     held = slot_held_deliveries(slot_dir, max_concurrency)
     # `label:a,b` is GitHub's OR within one label qualifier (verified live:
     # repeating the qualifier matches only the first label).
@@ -213,7 +214,7 @@ def _pick_opened_pr_delivery(
         repo, state="open",
         search=(
             f"label:{','.join(search_labels)} "
-            f"-label:{BLOCKED_LABEL} -label:{MERGED_LABEL} sort:created-asc"
+            f"-label:{delivery_labels.BLOCKED_LABEL} -label:{delivery_labels.MERGED_LABEL} sort:created-asc"
         ),
         json_fields="number,title,state,url,labels,body",
         limit=OPENED_PR_SCAN_LIMIT,
@@ -265,7 +266,7 @@ def _pick_opened_pr_delivery(
             # scene failure below.
             current_labels = label_name_set(issue)
             if (repo_dir is not None
-                    and FIX_NEEDED_LABEL in current_labels
+                    and delivery_labels.FIX_NEEDED_LABEL in current_labels
                     and open_pr_for_branch(
                         repo_dir,
                         task_branch(repo, int(issue["number"])),
@@ -315,7 +316,7 @@ def _pick_opened_pr_delivery(
                         # The claimed ticket carries the resolved
                         # queue label, so the blocked terminal clears it
                         # too (Issue #1775).
-                        current_labels={FIX_NEEDED_LABEL, ready_label},
+                        current_labels={delivery_labels.FIX_NEEDED_LABEL, ready_label},
                         language_code=language_code, ready_label=ready_label,
                     )
                 except Exception:

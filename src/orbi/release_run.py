@@ -26,13 +26,8 @@ from typing import TYPE_CHECKING
 from orbi import language, user_summary
 from orbi.cli_source import refresh_cli_install
 from orbi.comment_trust import trusted_comments
-from orbi.delivery_labels import (
-    EVENT_CLAIM,
-    EVENT_RELEASE_WAITING,
-    IN_PROGRESS_LABEL,
-    READY_LABEL,
-    label_name_set,
-)
+from orbi.delivery_labels import EVENT_CLAIM, EVENT_RELEASE_WAITING, label_name_set
+from orbi import delivery_labels
 from orbi.delivery_scene import RunContext
 from orbi.github import (
     apply_label_patch,
@@ -202,7 +197,7 @@ def process_release(issue: dict, config: RunnerConfig,
     step = "declaration"
     declaration: dict | None = None
     open_milestone_evidence: list[str] = []
-    ready_label = config.dispatch_label or READY_LABEL
+    ready_label = delivery_labels.queue_label(config.dispatch_label)
     try:
         declaration = parse_release_declaration(issue["body"])
         # Fused value: entry fallback + policy override (see
@@ -513,7 +508,7 @@ def process_release(issue: dict, config: RunnerConfig,
         )
         apply_label_patch(
             number, repo=source_repo, event=EVENT_RELEASE_WAITING,
-            current_labels={IN_PROGRESS_LABEL}, ready_label=ready_label,
+            current_labels={delivery_labels.IN_PROGRESS_LABEL}, ready_label=ready_label,
         )
         comment_issue(
             number, repo=source_repo,
@@ -534,7 +529,7 @@ def process_release(issue: dict, config: RunnerConfig,
         # ticket to the ready queue before releasing the caller's slot.
         apply_label_patch(
             number, repo=source_repo, event=EVENT_RELEASE_WAITING,
-            current_labels={IN_PROGRESS_LABEL}, ready_label=ready_label,
+            current_labels={delivery_labels.IN_PROGRESS_LABEL}, ready_label=ready_label,
         )
         detail = ", ".join(f"#{item}" for item in waiting.issue_numbers)
         comment_issue(

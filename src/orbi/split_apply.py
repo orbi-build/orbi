@@ -35,13 +35,8 @@ import re
 from dataclasses import dataclass
 
 from orbi import clarify_proposal, language
-from orbi.delivery_labels import (
-    BUG_LABEL,
-    EPIC_LABEL,
-    LIFECYCLE_STATES,
-    P0_LABEL,
-    label_names,
-)
+from orbi.delivery_labels import label_names
+from orbi import delivery_labels
 from orbi.github import (
     edit_issue,
     issue_view,
@@ -428,7 +423,7 @@ def create_child(
             parent_body=parent_body,
         ),
         labels=[
-            label for label in (P0_LABEL, BUG_LABEL)
+            label for label in (delivery_labels.P0_LABEL, delivery_labels.BUG_LABEL)
             if label in parent_labels
         ],
         milestone=milestone,
@@ -457,7 +452,7 @@ def process_child(
         attach_sub_issue(number, parent=parent, repo=repo)
     if blocker is not None and blocker not in blocked_numbers(state):
         add_blocked_by(number, blocker, repo=repo)
-    if not LIFECYCLE_STATES & set(label_names(state)):
+    if not delivery_labels.LIFECYCLE_STATES & set(label_names(state)):
         run_step(
             "add the dispatch label",
             lambda: edit_issue(number, repo=repo, add=dispatch_label),
@@ -512,7 +507,7 @@ def apply_proposal(
             dispatch_label=dispatch_label,
         )
         children.append((int(state["number"]), item.text))
-    add = None if EPIC_LABEL in parent_labels else EPIC_LABEL
+    add = None if delivery_labels.EPIC_LABEL in parent_labels else delivery_labels.EPIC_LABEL
     remove = dispatch_label if dispatch_label in parent_labels else None
     if add is not None or remove is not None:
         run_step(

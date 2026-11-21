@@ -24,22 +24,11 @@ from concurrent.futures import ThreadPoolExecutor
 import importlib.resources
 import json
 import re
-import tomllib
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 from orbi import language
-from orbi.delivery_labels import (
-    BLOCKED_LABEL,
-    AWAITING_MERGE_LABEL,
-    FIX_NEEDED_LABEL,
-    HUMAN_REVIEW_LABEL,
-    IN_PROGRESS_LABEL,
-    MERGED_LABEL,
-    NEEDS_DETAIL_LABEL,
-    PR_OPENED_LABEL,
-    READY_LABEL,
-)
+from orbi import labels as label_data
 
 if TYPE_CHECKING:  # annotation-only: the callers import it at runtime
     from orbi.config import RunnerConfig
@@ -73,38 +62,12 @@ PROVIDER_GUIDE = (
 )
 
 
-# The repo-managed single source of truth for the platform labels.
-LABELS_FILE = "labels.toml"
-REQUIRED_LABELS = (
-    READY_LABEL,
-    IN_PROGRESS_LABEL,
-    PR_OPENED_LABEL,
-    FIX_NEEDED_LABEL,
-    MERGED_LABEL,
-    BLOCKED_LABEL,
-    AWAITING_MERGE_LABEL,
-    "p0",
-    # Epic marker: the claim scan skips `ai-epic` Issues (`epic_not_claimed`),
-    # so the label is platform state the setup entry must guarantee.
-    "ai-epic",
-    # Release task marker: the ready scan picks up `ai-ready`+`ai-release`
-    # Issues and routes them to the deterministic release state machine.
-    "ai-release",
-    # Content-only marker: the pure content agent delivers text directly in
-    # the Issue (no execution, no git).
-    "ai-content-only",
-    # Ops marker: a full-execution session (shell/gh/network, the ops
-    # playbook) whose deliverable is evidence posted to the Issue.
-    "ai-ops-only",
-    # Human acceptance gate: the label only a human applies
-    # to confirm a delivery's acceptance checklist — the Runner never
-    # adds or removes it, but setup provisions it so the gate is ready
-    # before the operator turns `human_review_gate` on.
-    HUMAN_REVIEW_LABEL,
-    # Thin-ticket gate (Issue #1088): a stopped ticket waits here.
-    NEEDS_DETAIL_LABEL,
-)
-COLOR_PATTERN = re.compile(r"^[0-9a-fA-F]{6}$")
+# The engine's single source of truth for the platform labels: the file
+# shipped in this package (Issue #2347). A deployment copy is never read —
+# there is one definition file, and setup aligns the configured repos with
+# it exactly like it aligns them with the unit templates.
+LABELS_FILE = label_data.LABELS_FILE
+COLOR_PATTERN = label_data.COLOR_PATTERN
 
 
 def packaged_example_bytes() -> bytes:
@@ -152,76 +115,17 @@ def ensure_config(path: Path) -> Path:
 
 
 def load_label_defs(path: Path) -> list[dict]:
-    """Parse and validate the repo-managed label definitions.
+    """Parse and validate the label definitions `orbi setup` aligns.
 
-    The file must define EXACTLY the platform labels (no more, no
-    less, no duplicates), each with a non-empty name, a 6-hex color and
-    a non-empty description. Any deviation is a fail-fast SetupError:
-    a typo'd or missing label would silently skip a delivery state.
+    Delegates to `orbi.labels`: the one validator of the platform label
+    data (every role exactly once, exactly one queue role, non-empty
+    name/color/description). Any deviation is a fail-fast SetupError: a
+    typo'd or missing role would silently skip a delivery state.
     """
-    path = Path(path)
-    if not path.is_file():
-        raise SetupError(
-            f"label definitions missing: {path} (the repo-managed "
-            "single source of truth for the platform labels)"
-        )
     try:
-        data = tomllib.loads(path.read_text(encoding="utf-8"))
-    except tomllib.TOMLDecodeError as exc:
-        raise SetupError(f"malformed {LABELS_FILE}: {path}: {exc}") from exc
-    entries = data.get("label")
-    if not isinstance(entries, list):
-        raise SetupError(
-            f"malformed {LABELS_FILE}: {path}: expected a [[label]] "
-            "array of name/color/description entries"
-        )
-    defs: list[dict] = []
-    seen: set[str] = set()
-    for entry in entries:
-        if not isinstance(entry, dict):
-            raise SetupError(
-                f"malformed {LABELS_FILE}: {path}: each label entry "
-                "must be a table with name/color/description"
-            )
-        name = entry.get("name")
-        color = entry.get("color")
-        description = entry.get("description")
-        if not isinstance(name, str) or not name:
-            raise SetupError(
-                f"malformed {LABELS_FILE}: {path}: a label entry has "
-                "no non-empty name"
-            )
-        if name in seen:
-            raise SetupError(
-                f"malformed {LABELS_FILE}: {path}: duplicate label "
-                f"name: {name}"
-            )
-        seen.add(name)
-        if not isinstance(color, str) or not COLOR_PATTERN.fullmatch(color):
-            raise SetupError(
-                f"malformed {LABELS_FILE}: {path}: label {name} has an "
-                "invalid color (6-character hex required): "
-                f"{color!r}"
-            )
-        if not isinstance(description, str) or not description:
-            raise SetupError(
-                f"malformed {LABELS_FILE}: {path}: label {name} has no "
-                "non-empty description"
-            )
-        defs.append({
-            "name": name,
-            "color": color,
-            "description": description,
-        })
-    missing = [name for name in REQUIRED_LABELS if name not in seen]
-    unknown = [name for name in seen if name not in REQUIRED_LABELS]
-    if missing or unknown:
-        raise SetupError(
-            f"malformed {LABELS_FILE}: {path}: must define exactly the "
-            f"platform labels {list(REQUIRED_LABELS)}; "
-            f"missing={missing} unknown={unknown}"
-        )
-    return defs
+        return label_data.load(Path(path)).label_defs()
+    except label_data.LabelsError as exc:
+        raise SetupError(f"label definitions invalid: {exc}") from exc
 
 
 def align_labels(repo: str, defs: list[dict], run_command) -> dict:

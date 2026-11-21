@@ -36,7 +36,8 @@ from orbi.comment_kind import (
     COMMENT_KIND_REQUEUED, comment_kind, comment_kind_marker,
 )
 from orbi.comment_trust import trusted_comments
-from orbi.delivery_labels import EVENT_REQUEUE, READY_LABEL
+from orbi.delivery_labels import EVENT_REQUEUE
+from orbi import delivery_labels
 from orbi.github import (
     apply_label_patch, comment_issue, issue_comments, issue_labels,
 )
@@ -82,7 +83,7 @@ def comment_body(*, run_id: str, reason: str, language_code: str,
 def report_once(record: failure.Failure, *, issue: dict, source_repo: str,
                 run_id: str, reason: str, current_labels,
                 language_code: str, status_url: str | None,
-                ready_label: str = READY_LABEL) -> str | None:
+                ready_label: str | None = None) -> str | None:
     """Re-queue the Issue once, or return None to keep the terminal report.
 
     Only a `github_transient` record can be re-queued, and only while no
@@ -101,6 +102,7 @@ def report_once(record: failure.Failure, *, issue: dict, source_repo: str,
     claim scan would claim again and the same transient failure would
     re-queue again, without end.
     """
+    ready_label = delivery_labels.queue_label(ready_label)
     if record.reason_code != "github_transient":
         return None
     number = int(issue["number"])

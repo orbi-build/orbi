@@ -20,13 +20,14 @@ from __future__ import annotations
 
 from orbi import language, notify
 from orbi.blocked_record import with_stop_record
-from orbi.delivery_labels import BLOCKED_LABEL, EVENT_BLOCKED, READY_LABEL
+from orbi.delivery_labels import EVENT_BLOCKED
+from orbi import delivery_labels
 from orbi.github import apply_label_patch, comment_issue, issue_title
 
 
 def post_blocked_comment(number: int, *, repo: str, body: str,
                          current_labels, language_code: str,
-                         ready_label: str = READY_LABEL) -> None:
+                         ready_label: str | None = None) -> None:
     """Block `number`: apply the `ai-blocked` label patch, then comment.
 
     The order is part of the contract: the label transition lands first, the
@@ -39,6 +40,7 @@ def post_blocked_comment(number: int, *, repo: str, body: str,
     (`notify_text` applies the same redaction). A failed comment write
     therefore sends nothing: there is no stop comment to name.
     """
+    ready_label = delivery_labels.queue_label(ready_label)
     apply_label_patch(
         number, repo=repo, event=EVENT_BLOCKED,
         current_labels=current_labels, ready_label=ready_label,
@@ -49,7 +51,7 @@ def post_blocked_comment(number: int, *, repo: str, body: str,
     )
     url = comment_issue(number, repo=repo, body=posted)
     notify.stop_alert(
-        number, repo=repo, label=BLOCKED_LABEL, body=posted,
+        number, repo=repo, label=delivery_labels.BLOCKED_LABEL, body=posted,
         comment_url=url, comment_language=language_code,
         read_title=lambda: issue_title(number, repo=repo),
     )

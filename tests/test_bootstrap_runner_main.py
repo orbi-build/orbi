@@ -21,6 +21,7 @@ import pytest
 
 import orbi.claim as claim
 import orbi.run_state as run_state
+from orbi import delivery_labels
 from orbi import scene as scene_mod
 
 import orbi.runner as runner
@@ -228,7 +229,7 @@ def test_main_advances_milestone_only_after_no_ready_issue(
              "policy": None,
              "policy_path": ".github/orbi.toml",
              "base_branch": "main",
-             "dispatch_label": runner.READY_LABEL,
+             "dispatch_label": delivery_labels.READY_LABEL,
              "version_file": None,
              "language_code": "en",
          }),
@@ -262,7 +263,7 @@ def test_main_passes_disabled_auto_next_milestone_to_idle_advance(
         "policy": None,
         "policy_path": ".github/orbi.toml",
         "base_branch": "main",
-        "dispatch_label": runner.READY_LABEL,
+        "dispatch_label": delivery_labels.READY_LABEL,
         "version_file": None,
         "language_code": "en",
     }

@@ -28,9 +28,11 @@ from pathlib import Path
 import pytest
 
 from orbi import delivery_labels
+from orbi import labels as label_data
 from orbi import git_transport
 from orbi import setup_checks, setup_config
 from orbi import scheduler, systemd_deploy
+from orbi import cli_status
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 PYPROJECT = REPO_ROOT / "pyproject.toml"
@@ -104,51 +106,54 @@ def parse_unit(path: Path) -> dict[str, dict[str, list[str]]]:
 # --- the packaging file -------------------------------------------------------
 
 
-def test_delivery_label_consumers_follow_the_authoritative_source(monkeypatch):
-    """Delivery consumers must read labels from delivery_labels, not literals."""
-    monkeypatch.setattr(delivery_labels, "READY_LABEL", "changed-ready")
-    monkeypatch.setattr(delivery_labels, "IN_PROGRESS_LABEL", "changed-progress")
-    monkeypatch.setattr(delivery_labels, "PR_OPENED_LABEL", "changed-pr")
-    monkeypatch.setattr(delivery_labels, "FIX_NEEDED_LABEL", "changed-fix")
-    monkeypatch.setattr(delivery_labels, "MERGED_LABEL", "changed-merged")
-    monkeypatch.setattr(delivery_labels, "BLOCKED_LABEL", "changed-blocked")
-
-    # Issue #1862: the CLI's label consumers each live in the module that
-    # owns the command (cli_commands dispatches, cli_status reads), so the
-    # reload covers every module that binds the labels. Issue #1861: the
-    # setup's platform label set lives in setup_config, and the modules
-    # that bind its error classes reload after it — a reload rebinds the
-    # names, so the order is dependency first.
-    modules = [
-        importlib.import_module(name)
-        for name in (
-            "orbi.setup_config",
-            "orbi.setup_checks",
-            "orbi.pilot_setup",
-            "orbi.cli",
-            "orbi.cli_commands",
-            "orbi.cli_status",
+def test_delivery_label_consumers_follow_the_authoritative_source(tmp_path):
+    """Issue #2347: every consumer asks the label table, so changing a
+    role's name in labels.toml changes what the engine reads — with no
+    code change and no module reload."""
+    data = tomllib.loads(
+        label_data.default_path().read_text(encoding="utf-8"),
+    )
+    renamed = {
+        "queue": "ship",
+        "in_progress": "working",
+        "pr_opened": "in-review",
+        "fix_needed": "needs-fix",
+        "merged": "landed",
+        "blocked": "stuck",
+    }
+    for entry in data["label"]:
+        entry["name"] = renamed.get(entry["role"], entry["name"])
+    path = tmp_path / "labels.toml"
+    path.write_text(
+        "\n".join(
+            "[[label]]\n" + "\n".join(
+                f'{key} = "{entry[key]}"'
+                for key in ("role", "name", "color", "description")
+            )
+            for entry in data["label"]
         )
-    ]
-    for module in modules:
-        importlib.reload(module)
-    setup_config, cli_commands, cli_status = modules[0], modules[4], modules[5]
-
-    assert cli_commands.READY_LABEL == "changed-ready"
-    assert cli_status.IN_PROGRESS_LABEL == "changed-progress"
-    assert cli_status.RESULT_LABELS == (
-        "changed-pr", "changed-fix", "changed-merged", "changed-blocked",
+        + "\n[reserved]\n"
+        + "\n".join(f'{role} = "{name}"'
+                     for role, name in data["reserved"].items())
+        + "\n",
+        encoding="utf-8",
     )
-    assert setup_config.REQUIRED_LABELS[:6] == (
-        "changed-ready", "changed-progress", "changed-pr",
-        "changed-fix", "changed-merged", "changed-blocked",
-    )
-
-    # Keep the imported modules usable by the remaining tests after the
-    # monkeypatch is reverted (same dependency order).
-    monkeypatch.undo()
-    for module in modules:
-        importlib.reload(module)
+    label_data.install(label_data.load(path))
+    try:
+        assert delivery_labels.READY_LABEL == "ship"
+        assert delivery_labels.IN_PROGRESS_LABEL == "working"
+        assert cli_status.result_labels() == (
+            "in-review", "needs-fix", "landed", "stuck",
+        )
+        assert "ship" in delivery_labels.label_patch(
+            delivery_labels.EVENT_REQUEUE, [],
+        )[0]
+        assert delivery_labels.is_pickup_eligible(["ship"])
+        assert not delivery_labels.is_pickup_eligible(["ai-ready"])
+        # `orbi setup` reads the same definition file (Issue #2347).
+        assert setup_config.load_label_defs(path)[0]["name"] == "ship"
+    finally:
+        label_data.install(None)
 
 
 def test_pyproject_declares_the_orbi_console_script():
@@ -226,7 +231,7 @@ def test_example_config_ships_inside_the_package():
     package_data = data["tool"]["setuptools"].get("package-data")
     assert package_data is not None, "no package-data declared"
     assert package_data.get("orbi") == [
-        "example_config.toml", "extensions/*.ts",
+        "example_config.toml", "labels.toml", "extensions/*.ts",
     ]
     packaged = REPO_ROOT / "src" / "orbi" / "example_config.toml"
     assert packaged.is_file(), f"missing packaged example: {packaged}"

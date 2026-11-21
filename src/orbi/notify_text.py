@@ -22,27 +22,25 @@ from __future__ import annotations
 import dataclasses
 
 from orbi import failure, language
-from orbi.delivery_labels import (
-    AWAITING_MERGE_LABEL,
-    BLOCKED_LABEL,
-    NEEDS_DETAIL_LABEL,
-    READY_LABEL,
-)
+from orbi import delivery_labels
 from orbi.journal import redact_secrets
 
 # The fixed message texts. The `Orbi · ` prefix is part of the contract.
 HEADLINE_EN = "Orbi · Needs your attention: "
 HEADLINE_ZH = "Orbi · 需要您处理："
-STATUS_EN = {
-    BLOCKED_LABEL: "Orbi is stuck and needs you",
-    NEEDS_DETAIL_LABEL: "Orbi needs more detail",
-    AWAITING_MERGE_LABEL: "Waiting for you to approve the merge",
-}
-STATUS_ZH = {
-    BLOCKED_LABEL: "Orbi 卡住了，需要您处理",
-    NEEDS_DETAIL_LABEL: "需要您补充信息",
-    AWAITING_MERGE_LABEL: "等您批准合并",
-}
+def status_texts(language_code: str) -> dict[str, str]:
+    """The one-line status per stop label, in the message language."""
+    if language_code == "zh":
+        return {
+            delivery_labels.BLOCKED_LABEL: "Orbi 卡住了，需要您处理",
+            delivery_labels.NEEDS_DETAIL_LABEL: "需要您补充信息",
+            delivery_labels.AWAITING_MERGE_LABEL: "等您批准合并",
+        }
+    return {
+        delivery_labels.BLOCKED_LABEL: "Orbi is stuck and needs you",
+        delivery_labels.NEEDS_DETAIL_LABEL: "Orbi needs more detail",
+        delivery_labels.AWAITING_MERGE_LABEL: "Waiting for you to approve the merge",
+    }
 # The human-review wait status (Issue #1684): the gate holds the
 # delivery until a person confirms the acceptance checklist.
 HUMAN_REVIEW_STATUS_EN = "Waiting for your review"
@@ -181,7 +179,7 @@ def attention_message(label: str, repo: str, number: int,
     """
     zh = language_code == "zh"
     return _needs_you_message(
-        (STATUS_ZH if zh else STATUS_EN)[label], repo, number, title,
+        status_texts("zh" if zh else "en")[label], repo, number, title,
         help_line=False, language_code=language_code,
     )
 
@@ -189,7 +187,7 @@ def attention_message(label: str, repo: str, number: int,
 def stop_message(label: str, repo: str, number: int, title: str | None, *,
                  detail: StopDetail, comment_url: str | None,
                  language_code: str,
-                 ready_label: str = READY_LABEL) -> str:
+                 ready_label: str | None = None) -> str:
     """The ONE problem alert of a stop that needs a person (Issue #2287).
 
     The existing headline, status, issue line, Issue link and help line,
@@ -198,6 +196,7 @@ def stop_message(label: str, repo: str, number: int, title: str | None, *,
     the claim label a thin ticket's handoff names (the blocked stop composes
     the catalog's own unblock step and ignores it).
     """
+    ready_label = delivery_labels.queue_label(ready_label)
     zh = language_code == "zh"
     # A Chinese label ends with its full-width colon, which takes no space
     # after it; the English one keeps the space its colon needs.
@@ -218,7 +217,7 @@ def stop_message(label: str, repo: str, number: int, title: str | None, *,
         )
     extra.append(_resume_line(label, detail, ready_label, language_code))
     return _needs_you_message(
-        (STATUS_ZH if zh else STATUS_EN)[label], repo, number, title,
+        status_texts("zh" if zh else "en")[label], repo, number, title,
         help_line=True, language_code=language_code, extra=extra,
     )
 
@@ -310,7 +309,7 @@ def _resume_line(label: str, detail: StopDetail,
     zh = language_code == "zh"
     if detail.resumes:
         return RESUME_ZH if zh else RESUME_EN
-    if label == NEEDS_DETAIL_LABEL:
+    if label == delivery_labels.NEEDS_DETAIL_LABEL:
         template = (
             HANDOFF_NEEDS_DETAIL_ZH if zh else HANDOFF_NEEDS_DETAIL_EN
         )

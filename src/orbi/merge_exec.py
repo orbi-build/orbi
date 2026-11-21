@@ -34,7 +34,7 @@ from orbi import (
 )
 from orbi.branch_reclaim import delete_merged_delivery_branch
 from orbi.checks import classify_checks, render_check
-from orbi.delivery_labels import BLOCKED_LABEL
+from orbi import delivery_labels
 from orbi.failure_report import GateCIFailure
 from orbi.github import issue_labels, pr_view
 from orbi.gitops import acquire_base_sync_lock, fetch_base_ref, is_ancestor
@@ -341,7 +341,7 @@ def merge_gate(worktree: Path, pr: dict, base_branch: str,
         # a maintainer label added while the run was in review used to be
         # merged over. It is a human decision: the PR stays open and the
         # labels stay as the human set them.
-        if BLOCKED_LABEL in issue_labels(issue_number, merge_repo):
+        if delivery_labels.BLOCKED_LABEL in issue_labels(issue_number, merge_repo):
             refuse_blocked_issue(
                 issue_number, repo=merge_repo, pr_number=pr["number"],
                 head=pr["head_oid"], run_id=run_id,

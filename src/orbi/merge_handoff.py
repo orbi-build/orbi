@@ -17,9 +17,8 @@ from __future__ import annotations
 import re
 
 from orbi import comment_trust, github, journal, language, user_summary
-from orbi.delivery_labels import (
-    AWAITING_MERGE_LABEL, EVENT_AWAITING_MERGE, READY_LABEL,
-)
+from orbi.delivery_labels import EVENT_AWAITING_MERGE
+from orbi import delivery_labels
 
 
 class MergeHandoffRequired(RuntimeError):
@@ -145,7 +144,7 @@ def awaiting_merge_handoff_announced(
 def handle_merge_handoff(
     *, number: int, repo: str, pr_number: int, head: str,
     preflight: list[str], marker: str,
-    language_code: str, ready_label: str = READY_LABEL,
+    language_code: str, ready_label: str | None = None,
     status_url: str | None = None, title: str | None = None,
 ) -> bool:
     """Announce one maintainer-action handoff, idempotently.
@@ -159,9 +158,10 @@ def handle_merge_handoff(
     never reposts the comment (Issue #1422). Always returns False: a
     handoff is a resumable, non-merged tick.
     """
+    ready_label = delivery_labels.queue_label(ready_label)
     current_labels = github.issue_labels(number, repo)
     if (
-        AWAITING_MERGE_LABEL in current_labels
+        delivery_labels.AWAITING_MERGE_LABEL in current_labels
         and awaiting_merge_handoff_announced(
             github.issue_comments(number, repo=repo),
             repo=repo, head=head, preflight=preflight,

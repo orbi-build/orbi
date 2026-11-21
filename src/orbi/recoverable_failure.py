@@ -26,7 +26,7 @@ from collections.abc import Callable
 from typing import Any
 
 from orbi import failure_report, language, user_summary
-from orbi.delivery_labels import IN_PROGRESS_LABEL
+from orbi import delivery_labels
 from orbi.failure import Failure, failure_detail, redact_local_paths
 from orbi.failure_report import _classify_failure
 from orbi.github import issue_comments
@@ -169,7 +169,7 @@ def _stop_repeated_failure(
             # The claim label and the queue label are the delivery state
             # this run holds; the blocked patch clears them.
             current_labels=(
-                {IN_PROGRESS_LABEL, attempt.facts.dispatch_label}
+                {delivery_labels.IN_PROGRESS_LABEL, attempt.facts.dispatch_label}
             ),
             review_round=0,
             finish=True,

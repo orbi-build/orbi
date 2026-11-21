@@ -402,14 +402,16 @@ def test_is_pickup_eligible_false_without_ai_ready():
 def test_is_pickup_eligible_reuses_the_one_delivery_state_decision():
     """Issue #1795: "carries a delivery state other than the queue entry"
     is computed once. The pickup guard calls `has_delivery_state` instead
-    of repeating `LIFECYCLE_STATES - {READY_LABEL}`, so a future change to
+    of recomputing the table difference, so a future change to
     that decision cannot silently miss one of its two callers."""
     pickup_source = inspect.getsource(dl.is_pickup_eligible)
     assert "has_delivery_state(" in pickup_source
     assert "LIFECYCLE_STATES" not in pickup_source
     module_source = MODULE.read_text(encoding="utf-8")
-    assert module_source.count("LIFECYCLE_STATES -") == 1
-    assert "LIFECYCLE_STATES -" in inspect.getsource(dl.has_delivery_state)
+    # Issue #2347: the set difference now runs on the table's role names,
+    # still in exactly one place.
+    assert module_source.count(".lifecycle_states() - ") == 1
+    assert ".lifecycle_states() -" in inspect.getsource(dl.has_delivery_state)
 
 
 def test_is_resumable_true_for_opened_pr_states():

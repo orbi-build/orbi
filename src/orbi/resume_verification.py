@@ -35,14 +35,8 @@ from orbi import failure_report
 from orbi import language
 from orbi import pr_verification
 from orbi import run_state
-from orbi.delivery_labels import (
-    EVENT_CLAIM,
-    EVENT_MERGED,
-    EVENT_REQUEUE,
-    PR_OPENED_LABEL,
-    READY_LABEL,
-    label_name_set,
-)
+from orbi.delivery_labels import EVENT_CLAIM, EVENT_MERGED, EVENT_REQUEUE, label_name_set
+from orbi import delivery_labels
 from orbi.delivery_scene import RunContext
 from orbi.failure import failure_detail
 from orbi.failure_report import UnrecoverableDeliveryError
@@ -205,8 +199,8 @@ def verify_resumed_pr(resume: run_state.ResumeScene, issue: dict,
         # issue object represents the normal ai-pr-opened state.
         apply_label_patch(
             number, repo=source_repo, event=EVENT_CLAIM,
-            current_labels=label_name_set(issue) or {PR_OPENED_LABEL},
-            ready_label=config.dispatch_label or READY_LABEL,
+            current_labels=label_name_set(issue) or {delivery_labels.PR_OPENED_LABEL},
+            ready_label=delivery_labels.queue_label(config.dispatch_label),
         )
         return verified_url
     except Exception as exc:
@@ -236,7 +230,7 @@ def verify_resumed_pr(resume: run_state.ResumeScene, issue: dict,
                 _requeue_closed_external_takeover(
                     number, source_repo, resume.parsed.pr_url,
                     run_marker(run_id), run_id,
-                    language_code=language.of(config), ready_label=config.dispatch_label or READY_LABEL)
+                    language_code=language.of(config), ready_label=delivery_labels.queue_label(config.dispatch_label))
                 raise
             if exc.scene_pr_state == "MERGED":
                 # A human merged the delivery PR (or a crash landed
@@ -257,7 +251,7 @@ def verify_resumed_pr(resume: run_state.ResumeScene, issue: dict,
                 # path GitHub's own keyword still owns that close.
                 _record_merged_issue(
                     number, source_repo, merge_commit=exc.merge_commit,
-                    ready_label=config.dispatch_label or READY_LABEL,
+                    ready_label=delivery_labels.queue_label(config.dispatch_label),
                 )
                 raise
         LOGGER.exception(
@@ -279,7 +273,7 @@ def verify_resumed_pr(resume: run_state.ResumeScene, issue: dict,
                 run_id=current_run_id(), pr_url=resume.parsed.pr_url,
                 worktree=worktree, branch=branch, role=ROLE_REVIEW,
                 language_code=lang, status_url=config.status_url, milestone=config.active_milestone,
-                ready_label=config.dispatch_label or READY_LABEL, action=(
+                ready_label=delivery_labels.queue_label(config.dispatch_label), action=(
                     language.text(lang, "delivery.resume_missing_fixes_action",
                                   pr_url=resume.parsed.pr_url, number=number)
                     if isinstance(exc, MissingFixesError)
@@ -334,7 +328,7 @@ def _record_merged_issue(number: int, source_repo: str, *,
 
 def _requeue_closed_external_takeover(
     number: int, source_repo: str, pr_url: str, marker: str, run_id: str,
-    *, language_code: str, ready_label: str = READY_LABEL,
+    *, language_code: str, ready_label: str | None = None,
     status_url: str | None = None,
 ) -> None:
     """The #608 放弃/不可修 fallback: the external PR was closed without
@@ -347,6 +341,7 @@ def _requeue_closed_external_takeover(
     delivery step and the resume seam, where the same scene arrives
     through `ResumePrClosedError`.
     """
+    ready_label = delivery_labels.queue_label(ready_label)
     apply_label_patch(
         number, repo=source_repo, event=EVENT_REQUEUE,
         current_labels=issue_labels(number, repo=source_repo),

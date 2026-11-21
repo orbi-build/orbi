@@ -46,7 +46,7 @@ from orbi.comment_kind import (
     comment_kind,
     comment_kind_marker,
 )
-from orbi.delivery_labels import BLOCKED_LABEL, FIX_NEEDED_LABEL
+from orbi import delivery_labels
 from orbi.comment_trust import comment_is_trusted, trusted_comments
 from orbi.github import (
     pr_number,
@@ -293,13 +293,13 @@ def human_review_recovery_at(number: int, repo: str) -> str | None:
         label = event_entry.get("label")
         label_name = label.get("name") if isinstance(label, dict) else None
         if (event_entry.get("event") == "labeled"
-                and label_name == BLOCKED_LABEL):
+                and label_name == delivery_labels.BLOCKED_LABEL):
             blocked_removed = False
         elif (event_entry.get("event") == "unlabeled"
-              and label_name == BLOCKED_LABEL):
+              and label_name == delivery_labels.BLOCKED_LABEL):
             blocked_removed = True
         elif (blocked_removed and event_entry.get("event") == "labeled"
-              and label_name == FIX_NEEDED_LABEL):
+              and label_name == delivery_labels.FIX_NEEDED_LABEL):
             recovery_at = event_entry.get("created_at")
             blocked_removed = False
     return recovery_at if isinstance(recovery_at, str) else None

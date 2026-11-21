@@ -37,9 +37,8 @@ from orbi.comment_kind import (
 )
 from orbi.comment_rest_id import rest_comment_id
 from orbi.comment_trust import latest_run_marker, trusted_comments
-from orbi.delivery_labels import (
-    EVENT_FIX_NEEDED, FIX_NEEDED_LABEL, IN_PROGRESS_LABEL, READY_LABEL,
-)
+from orbi.delivery_labels import EVENT_FIX_NEEDED
+from orbi import delivery_labels
 from orbi.failure import (
     failure_comment_body, failure_detail, failure_summary,
     redact_local_paths, terminal_action,
@@ -354,7 +353,7 @@ def _summary_scene(key: str, *, language_code: str, status_url: str | None,
 
 def block_scene_failure(issue: dict, error: ValueError, repo: str,
                         comments: list[dict], *,
-                        language_code: str, ready_label: str = READY_LABEL,
+                        language_code: str, ready_label: str | None = None,
                         status_url: str | None = None) -> None:
     """Mark an opened-PR Issue `ai-blocked` when its scene is malformed.
 
@@ -367,6 +366,7 @@ def block_scene_failure(issue: dict, error: ValueError, repo: str,
     then stays in its opened-PR state and the next tick retries the
     block.
     """
+    ready_label = delivery_labels.queue_label(ready_label)
     number = int(issue["number"])
     LOGGER.error("issue=%s resume scene is malformed: %s", number, error)
     marker = latest_run_marker(comments, repo=repo)
@@ -389,7 +389,7 @@ def block_scene_failure(issue: dict, error: ValueError, repo: str,
                 status_url=status_url, number=number, error=error,
                 title=issue.get("title"),
             ),
-            current_labels={FIX_NEEDED_LABEL, ready_label},
+            current_labels={delivery_labels.FIX_NEEDED_LABEL, ready_label},
             language_code=language_code, ready_label=ready_label,
         )
     except Exception:
@@ -399,7 +399,7 @@ def block_scene_failure(issue: dict, error: ValueError, repo: str,
 def block_repo_config_failure(number: int, source_repo: str,
                               error: ValueError, run_id: str,
                               current_labels=(), *,
-                              language_code: str, ready_label: str = READY_LABEL,
+                              language_code: str, ready_label: str | None = None,
                               status_url: str | None = None,
                               ) -> None:
     """Mark an Issue `ai-blocked` when its repo config is invalid (#527).
@@ -412,6 +412,7 @@ def block_repo_config_failure(number: int, source_repo: str,
     reporting itself is logged, never raised, so the tick still ends
     cleanly (`main` releases the slot in its `finally`).
     """
+    ready_label = delivery_labels.queue_label(ready_label)
     try:
         post_blocked_comment(
             number, repo=source_repo,
@@ -454,7 +455,7 @@ def _raise_if_preexisting_ci_failure(
 
 def _report_resume_failure(*, number: int, source_repo: str, run_id: str,
                            error: Exception,
-                           language_code: str, ready_label: str = READY_LABEL,
+                           language_code: str, ready_label: str | None = None,
                            status_url: str | None = None) -> None:
     """Report a failed resume decision through the terminal path.
 
@@ -465,6 +466,7 @@ def _report_resume_failure(*, number: int, source_repo: str, run_id: str,
     claim label removed) with the exact reason — a human decides (restore
     or remove the worktree, relabel).
     """
+    ready_label = delivery_labels.queue_label(ready_label)
     post_blocked_comment(
         number, repo=source_repo,
         body=(
@@ -480,7 +482,7 @@ def _report_resume_failure(*, number: int, source_repo: str, run_id: str,
                 language_code=language_code,
             )
         ),
-        current_labels={IN_PROGRESS_LABEL, ready_label},
+        current_labels={delivery_labels.IN_PROGRESS_LABEL, ready_label},
         language_code=language_code, ready_label=ready_label,
     )
 
@@ -590,7 +592,7 @@ def report_delivery_failure(
     blocked_suffix: str = "", review_round: int | None = None,
     review_scene_block: str | None = None,
     finish: bool = True, publisher: ProgressPublisher | None = None,
-    language_code: str, ready_label: str = READY_LABEL,
+    language_code: str, ready_label: str | None = None,
     status_url: str | None = None,  # Issue #1826: the fixed project link
     milestone: str | None = None,  # the active Milestone title (#2203)
 ) -> str:
@@ -601,13 +603,12 @@ def report_delivery_failure(
     classify the exception, transition the label (`ai-blocked` ALONE
     for an explicit `UnrecoverableDeliveryError`, `ai-fix-needed` for
     every recoverable failure), assemble the failure body (fixed
-    phrase + `cause` + run scene + evidence), prefix the run marker,
-    comment the Issue (the PR too on the recoverable branch — the
-    terminal blocked state is Issue-only), then publish the milestone
-    and the terminal progress scene as a pure bypass. The carried
-    failure is named `action`, `reason`, and `diagnosis`; the milestone
-    uses the reason, or the action for its own #1651 repair path. Returns
-    the outcome, `"blocked"` or `"fix_needed"`.
+    phrase + `cause` + run scene + evidence), prefix the run marker, comment
+    the Issue (the PR too on the recoverable branch — the terminal blocked
+    state is Issue-only), then publish the milestone and the terminal
+    progress scene as a pure bypass. The carried failure is named `action`,
+    `reason`, and `diagnosis`; the milestone uses the reason, or the action
+    for its own #1651 repair path. Returns `"blocked"` or `"fix_needed"`.
 
     `classify=False` forces the terminal branch (the implement-phase
     handler: every failure reaching it is terminal by design — the
@@ -650,6 +651,7 @@ def report_delivery_failure(
     the occurrence count) instead of posting a second one; the history
     read fails open, never as a second failure of the reporting path.
     """
+    ready_label = delivery_labels.queue_label(ready_label)
     number = int(issue["number"])
     title = issue["title"]
     priority = issue_priority(issue)

@@ -21,6 +21,7 @@ reconciliation, failure reporting, the GitHub adapter and the tracker
 comments) stay in the runner scene suites
 (`tests/test_bootstrap_runner_*.py`).
 """
+from orbi import delivery_labels
 from orbi import config as config_domain
 from orbi import language
 
@@ -3077,11 +3078,11 @@ def test_task_branch_includes_source_repo_to_avoid_same_number_collision():
 
 
 def test_claim_route_decision_table():
-    assert runner.claim_route({runner.READY_LABEL}, branch_exists=False, open_pr=False) == "implement"
-    assert runner.claim_route({runner.READY_LABEL}, branch_exists=True, open_pr=False) == "implement"
-    assert runner.claim_route({runner.READY_LABEL}, branch_exists=True, open_pr=True) == "review"
-    assert runner.claim_route({runner.PR_OPENED_LABEL}, branch_exists=True, open_pr=True) == "review"
-    assert runner.claim_route({runner.FIX_NEEDED_LABEL}, branch_exists=True, open_pr=True) == "review"
+    assert runner.claim_route({delivery_labels.READY_LABEL}, branch_exists=False, open_pr=False) == "implement"
+    assert runner.claim_route({delivery_labels.READY_LABEL}, branch_exists=True, open_pr=False) == "implement"
+    assert runner.claim_route({delivery_labels.READY_LABEL}, branch_exists=True, open_pr=True) == "review"
+    assert runner.claim_route({delivery_labels.PR_OPENED_LABEL}, branch_exists=True, open_pr=True) == "review"
+    assert runner.claim_route({delivery_labels.FIX_NEEDED_LABEL}, branch_exists=True, open_pr=True) == "review"
 
 
 def test_verify_pr_rejects_wrong_branch(monkeypatch, tmp_path):

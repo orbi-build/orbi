@@ -52,9 +52,7 @@ from orbi.comment_kind import (
     parse_versioned_block,
 )
 from orbi.comment_rest_id import rest_comment_id
-from orbi.delivery_labels import (
-    BLOCKED_LABEL, FIX_NEEDED_LABEL, READY_LABEL,
-)
+from orbi import delivery_labels
 from orbi.github import (
     edit_issue, issue_labels, pr_number, run_gh_read_command,
     update_issue_comment,
@@ -252,7 +250,7 @@ def block(issue_number: int, repo: str, pr_url: str, *, run_id: str,
           installation_id: int | None, language_code: str,
           issue_title: str | None = None,
           status_url: str | None = None,
-          ready_label: str = READY_LABEL) -> CheckPermission:
+          ready_label: str | None = None) -> CheckPermission:
     """Stop the delivery: ONE comment, then `ai-blocked`.
 
     The comment lands through the shared blocked exit (label patch first,
@@ -260,6 +258,7 @@ def block(issue_number: int, repo: str, pr_url: str, *, run_id: str,
     `ai-blocked` ALONE. Called only while the Issue is still resumable, so
     exactly one comment is posted per stop.
     """
+    ready_label = delivery_labels.queue_label(ready_label)
     record = CheckPermission(pr=pr_number(pr_url))
     body = comment_body(
         record, url=approval_url(repo, installation_id=installation_id),
@@ -297,7 +296,7 @@ def read_rollup(pr_url: str, repo: str, issue: dict, config,
             installation_id=config.installation_id,
             language_code=language.of(config),
             issue_title=issue.get("title"), status_url=config.status_url,
-            ready_label=config.dispatch_label or READY_LABEL,
+            ready_label=delivery_labels.queue_label(config.dispatch_label),
         )
         return None, []
 
@@ -420,8 +419,8 @@ def recover(repo: str) -> list[int]:
                 number, record.pr, repo,
             )
             continue
-        edit_issue(number, repo=repo, add=FIX_NEEDED_LABEL,
-                   remove=BLOCKED_LABEL)
+        edit_issue(number, repo=repo, add=delivery_labels.FIX_NEEDED_LABEL,
+                   remove=delivery_labels.BLOCKED_LABEL)
         _edit_state(repo, number, comment, record)
         event(
             "checks_permission_recovered", issue=number, pr=record.pr,

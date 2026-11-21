@@ -17,31 +17,31 @@ from __future__ import annotations
 
 from orbi import blocked_scan, ticket_command, ticket_command_registry
 from orbi.answer import ANSWER_COMMAND
-from orbi.delivery_labels import (
-    BLOCKED_LABEL,
-    FIX_NEEDED_LABEL,
-    NEEDS_DETAIL_LABEL,
-    PR_OPENED_LABEL,
-    READY_LABEL,
-)
+from orbi import delivery_labels
 
 # The delivery stops whose comments carry an answer (Issue #2221).
-ANSWER_LABELS = (BLOCKED_LABEL, PR_OPENED_LABEL, FIX_NEEDED_LABEL)
+def answer_labels() -> tuple[str, ...]:
+    """The stop labels whose comments carry an answer (Issue #2221)."""
+    return (
+        delivery_labels.BLOCKED_LABEL, delivery_labels.PR_OPENED_LABEL,
+        delivery_labels.FIX_NEEDED_LABEL,
+    )
 
 
 def run(
-    repo: str, *, language_code: str, dispatch_label: str = READY_LABEL,
+    repo: str, *, language_code: str, dispatch_label: str | None = None,
     limit: int = 200,
 ) -> None:
     """Run every stopped-ticket scan for one repository."""
+    dispatch_label = delivery_labels.queue_label(dispatch_label)
     ticket_command.process_labeled_commands(
-        repo, NEEDS_DETAIL_LABEL,
+        repo, delivery_labels.NEEDS_DETAIL_LABEL,
         commands=ticket_command_registry.ticket_commands(),
         dispatch_label=dispatch_label, language_code=language_code,
         limit=limit,
     )
-    for label in ANSWER_LABELS:
-        if label != BLOCKED_LABEL:
+    for label in answer_labels():
+        if label != delivery_labels.BLOCKED_LABEL:
             ticket_command.process_labeled_commands(
                 repo, label, commands=(ANSWER_COMMAND,),
                 answer_stage=label, dispatch_label=dispatch_label,

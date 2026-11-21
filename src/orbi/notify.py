@@ -52,11 +52,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from orbi import language, notify_text
-from orbi.delivery_labels import (
-    AWAITING_MERGE_LABEL,
-    BLOCKED_LABEL,
-    NEEDS_DETAIL_LABEL,
-)
+from orbi import delivery_labels
 from orbi.gitops import is_delivery_branch
 from orbi.journal import event
 
@@ -75,7 +71,11 @@ TOKEN_ENV = "ORBI_TELEGRAM_BOT_TOKEN"
 # so it ends with the community help line (Issue #1684) and names the stop
 # comment (Issue #2287). `ai-awaiting-merge` is an ordinary handoff and
 # sends the plain message instead.
-HELP_LABELS = frozenset({BLOCKED_LABEL, NEEDS_DETAIL_LABEL})
+def help_labels() -> frozenset[str]:
+    """The stop labels that wake a human (a stop, not a delivery state)."""
+    return frozenset({
+        delivery_labels.BLOCKED_LABEL, delivery_labels.NEEDS_DETAIL_LABEL,
+    })
 
 # The one watermark the merged-PR check keeps (one source repo, Issue
 # #1674): the last handled GitHub `mergedAt`, stored beside the
@@ -215,7 +215,7 @@ def stop_alert(number: int, *, repo: str, label: str, body: str,
     NEVER raises (pure bypass).
     """
     try:
-        if label not in HELP_LABELS or not _enabled():
+        if label not in help_labels() or not _enabled():
             return
         send(notify_text.stop_message(
             label, repo, number, read_title(),
@@ -246,7 +246,7 @@ def needs_detail_stop(repo: str, number: int, title: str | None, *,
         if not _enabled():
             return
         send(notify_text.stop_message(
-            NEEDS_DETAIL_LABEL, repo, number, title,
+            delivery_labels.NEEDS_DETAIL_LABEL, repo, number, title,
             detail=notify_text.needs_detail_detail(
                 ready_label=ready_label, language_code=language_code),
             comment_url=comment_url, ready_label=ready_label,
@@ -304,7 +304,7 @@ def patch_applied(event: str, added_labels, current_labels, *,
         # The caller only reaches this point with an applied patch, and
         # every event's patch carries exactly one added label.
         label = added_labels[0]
-        if label == AWAITING_MERGE_LABEL and label not in current:
+        if label == delivery_labels.AWAITING_MERGE_LABEL and label not in current:
             send(notify_text.attention_message(
                 label, repo, number, read_title(), language_code=_language()))
     except Exception:

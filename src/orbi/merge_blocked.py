@@ -19,7 +19,7 @@ from __future__ import annotations
 import logging
 
 from orbi import language
-from orbi.delivery_labels import BLOCKED_LABEL
+from orbi import delivery_labels
 from orbi.github import comment_issue
 from orbi.journal import LOGGER, event
 from orbi.progress import run_marker
@@ -50,7 +50,7 @@ def refuse_blocked_issue(
             issue_number, repo=repo,
             body=f"{marker}\n" + language.text(
                 language_code, "review.merge_skipped_blocked",
-                pr_number=pr_number, label=BLOCKED_LABEL,
+                pr_number=pr_number, label=delivery_labels.BLOCKED_LABEL,
                 head=head, run_id=run_id,
             ),
         )
@@ -63,6 +63,6 @@ def refuse_blocked_issue(
             issue_number, pr_number, run_id,
         )
     raise MergeBlockedByIssueLabel(
-        f"Issue #{issue_number} is labelled {BLOCKED_LABEL}; the reviewed "
+        f"Issue #{issue_number} is labelled {delivery_labels.BLOCKED_LABEL}; the reviewed "
         f"head {head} of PR #{pr_number} was not merged"
     )

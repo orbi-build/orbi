@@ -296,8 +296,8 @@ against X.
   - `deploy_home` (orbi checkout) — the CLI self-update source (the
     editable `uv tool` install, the `ExecStartPre` fast-forward and the
     CLI self-heal), the `systemd/` unit templates (the `{{ORBI_REPO_DIR}}`
-    placeholder renders THIS path), `labels.toml`, and the prompt
-    defaults;
+    placeholder renders THIS path), and the prompt defaults (the label
+    definitions ship inside the engine package, `src/orbi/labels.toml`);
   - `repo_dir` (user repo X) — the delivery checkout: Issues are claimed
     from X, task worktrees are created from X's frozen
     `origin/<base_branch>`, PRs open against X, and the slot locks live
@@ -590,7 +590,7 @@ systemd user session — a missing one fails fast with the actionable
 install guidance), verifies or reinstalls the editable CLI install
 (Issue #152 — the running CLI must import from the deployment
 checkout), verifies `gh auth status` and the repo permissions, aligns
-the platform labels from the repo-managed `labels.toml` (the single
+the platform labels from the engine's `labels.toml` (the single
 source of truth for label name, color and description — a commit never
 creates labels, and a missing label makes the scan silently skip that
 state), installs the systemd user units and enables the timer, checks

@@ -7,8 +7,8 @@ source_repos = [
 
 repo_dir = "."
 # Deployment home: the orbi SOURCE checkout — where the
-# editable CLI install comes from, where the systemd/ unit templates and
-# labels.toml live, and where the prompt defaults (prompts/prompt.md,
+# editable CLI install comes from, where the systemd/ unit templates
+# live, and where the prompt defaults (prompts/prompt.md,
 # prompts/prompt_review.md) resolve when unset. Default: repo_dir — the
 # orbi-bootstrap deployment (repo_dir IS the orbi checkout) keeps its
 # exact behavior. Set it to the orbi checkout path when repo_dir points
@@ -226,7 +226,7 @@ max_concurrency = 1
 # interrupted run by ai-in-progress PLUS this label, so query the open Issues
 # carrying ai-in-progress and no queue label before downgrading, and decide
 # each hit by hand.
-# dispatch_label = "ai-ready"
+# dispatch_label = "<your queue label>"  # default: the queue role in labels.toml
 # Task-worktree reclamation: at every tick start the Runner
 # removes the registered task worktrees whose Issue is CLOSED and has
 # been closed for at least this many hours (oldest first, at most 25 per

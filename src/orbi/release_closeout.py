@@ -23,7 +23,8 @@ from pathlib import Path
 
 from orbi import language
 from orbi.blocked_comment import post_blocked_comment
-from orbi.delivery_labels import EPIC_LABEL, EVENT_MERGED, IN_PROGRESS_LABEL
+from orbi.delivery_labels import EVENT_MERGED
+from orbi import delivery_labels
 from orbi.github import (
     apply_label_patch,
     close_issue,
@@ -357,7 +358,7 @@ def release_success_closeout(
         # reads as "still queued" (Issue #1526).
         apply_label_patch(
             number, repo=repo, event=EVENT_MERGED,
-            current_labels={ready_label, IN_PROGRESS_LABEL},
+            current_labels={ready_label, delivery_labels.IN_PROGRESS_LABEL},
             ready_label=ready_label,
         )
         close_issue(int(number), repo=repo)
@@ -430,7 +431,7 @@ def release_failure_closeout(
         # A failed release is a blocked terminal: the claimed
         # ticket still carries the resolved queue label, so it is
         # cleared with the in-flight label (Issue #1775).
-        current_labels={IN_PROGRESS_LABEL, ready_label},
+        current_labels={delivery_labels.IN_PROGRESS_LABEL, ready_label},
         language_code=language_code, ready_label=ready_label,
     )
 
@@ -443,7 +444,7 @@ def reconcile_release_epics(repo: str, milestone_number: int, version: str,
     for listed_epic in issues:
         labels = listed_epic.get("labels", [])
         names = {label.get("name") for label in labels if isinstance(label, dict)}
-        if EPIC_LABEL not in names:
+        if delivery_labels.EPIC_LABEL not in names:
             continue
         number = listed_epic.get("number")
         try:

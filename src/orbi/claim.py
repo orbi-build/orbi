@@ -17,11 +17,8 @@ from pathlib import Path
 from orbi import base_ci_fix, check_permission, gitops, stopped_scans
 from orbi import milestone as milestone_bookkeeping
 from orbi.config import RunnerConfig
-from orbi.delivery_labels import (
-    BLOCKED_LABEL, EPIC_LABEL,
-    FIX_NEEDED_LABEL, IN_PROGRESS_LABEL, MERGED_LABEL,
-    P0_LABEL, PR_OPENED_LABEL, READY_LABEL, RELEASE_LABEL, label_name_set,
-)
+from orbi.delivery_labels import label_name_set
+from orbi import delivery_labels
 from orbi.delivery_scene import (
     EXTERNAL_PR_MARKER, body_markers, classify,
 )
@@ -69,15 +66,19 @@ from orbi.repo_config import (
 # it returns the NEWEST-created Issue first, and `_pick_from_scan`
 # claims the first claimable one: newer tickets then overtook Issues
 # that had waited hours in a busy queue.
-READY_SCAN_QUALIFIERS = (
-    f"-label:{IN_PROGRESS_LABEL} -label:{PR_OPENED_LABEL} "
-    f"-label:{FIX_NEEDED_LABEL} -label:{MERGED_LABEL} "
-    f"-label:{BLOCKED_LABEL} sort:created-asc"
-)
+def ready_scan_qualifiers() -> str:
+    """The one shared qualifier string: the delivery-state exclusions."""
+    return (
+        f"-label:{delivery_labels.IN_PROGRESS_LABEL} "
+        f"-label:{delivery_labels.PR_OPENED_LABEL} "
+        f"-label:{delivery_labels.FIX_NEEDED_LABEL} "
+        f"-label:{delivery_labels.MERGED_LABEL} "
+        f"-label:{delivery_labels.BLOCKED_LABEL} sort:created-asc"
+    )
 
 
 def ready_searches(active_milestone: str | None = None,
-                   dispatch_label: str = READY_LABEL) -> tuple[str, str, str]:
+                   dispatch_label: str | None = None) -> tuple[str, str, str]:
     """Return the three ready scans (p0, bug, plain) in pickup order.
 
     With a configured `active_milestone` every scan
@@ -101,21 +102,23 @@ def ready_searches(active_milestone: str | None = None,
     order the maintainer queued it. The order BETWEEN the scans is
     unchanged (p0, then bug, then plain).
     """
+    dispatch_label = delivery_labels.queue_label(dispatch_label)
     scope = (
         f' milestone:"{active_milestone}"' if active_milestone else ""
     )
-    # The claim label is a delivery-policy key; the lifecycle
-    # labels (`ai-in-progress`/`ai-merged`/...) stay host constants.
-    label = dispatch_label or READY_LABEL
+    # The queue label is a delivery-policy key; every other role comes
+    # from labels.toml (Issue #2347).
+    label = delivery_labels.queue_label(dispatch_label)
     return (
-        f"label:{label} label:{P0_LABEL}{scope} {READY_SCAN_QUALIFIERS}",
-        f"label:{label} label:bug{scope} {READY_SCAN_QUALIFIERS}",
-        f"label:{label}{scope} {READY_SCAN_QUALIFIERS}",
+        f"label:{label} label:{delivery_labels.P0_LABEL}{scope} {ready_scan_qualifiers()}",
+        f"label:{label} label:{delivery_labels.BUG_LABEL}{scope} "
+        f"{ready_scan_qualifiers()}",
+        f"label:{label}{scope} {ready_scan_qualifiers()}",
     )
 
 
 def release_fallback_search(active_milestone: str | None = None,
-                            dispatch_label: str = READY_LABEL) -> str:
+                            dispatch_label: str | None = None) -> str:
     """Return the release fallback scan query.
 
     A Release task is a closing action and must never compete with an
@@ -130,17 +133,18 @@ def release_fallback_search(active_milestone: str | None = None,
     contract, same as `ready_searches`). `ai-epic` is excluded by the
     code-layer Epic guard in `_pick_from_scan`, not the query.
     """
+    dispatch_label = delivery_labels.queue_label(dispatch_label)
     scope = (
         f' milestone:"{active_milestone}"' if active_milestone else ""
     )
-    label = dispatch_label or READY_LABEL
+    label = delivery_labels.queue_label(dispatch_label)
     return (
-        f"label:{label} label:{RELEASE_LABEL}{scope} "
-        f"{READY_SCAN_QUALIFIERS}"
+        f"label:{label} label:{delivery_labels.RELEASE_LABEL}{scope} "
+        f"{ready_scan_qualifiers()}"
     )
 
 
-def external_takeover_search(dispatch_label: str = READY_LABEL) -> str:
+def external_takeover_search(dispatch_label: str | None = None) -> str:
     """Return the external-takeover scan query (Issue #842, decision D1).
 
     The FIFTH and last ready scan: it runs only after the three
@@ -161,10 +165,11 @@ def external_takeover_search(dispatch_label: str = READY_LABEL) -> str:
     other scan. The candidate order is the ready queue's own: oldest
     Issue first (`READY_SCAN_QUALIFIERS`, Issue #1914).
     """
-    label = dispatch_label or READY_LABEL
+    dispatch_label = delivery_labels.queue_label(dispatch_label)
+    label = delivery_labels.queue_label(dispatch_label)
     return (
         f'label:{label} "orbi:external-pr" in:body '
-        f"{READY_SCAN_QUALIFIERS}"
+        f"{ready_scan_qualifiers()}"
     )
 
 
@@ -177,7 +182,7 @@ def is_epic(issue: dict) -> bool:
     the scan always requests `labels`, so a shape change only loses
     the Epic guard for one run — it must never deadlock the queue.
     """
-    return EPIC_LABEL in label_name_set(issue)
+    return delivery_labels.EPIC_LABEL in label_name_set(issue)
 
 
 def is_release(issue: dict) -> bool:
@@ -190,13 +195,13 @@ def is_release(issue: dict) -> bool:
     shape change only loses the release routing for one run — it must
     never deadlock the queue.
     """
-    return RELEASE_LABEL in label_name_set(issue)
+    return delivery_labels.RELEASE_LABEL in label_name_set(issue)
 
 
 def reconcile_open_epics(repo: str, run_id: str, language_code: str) -> list[str]:
     """Sweep open Epics once per tick; ordinary pickup must not depend on it."""
     epics = list_issues(
-        repo, state="open", search=f"label:{EPIC_LABEL}",
+        repo, state="open", search=f"label:{delivery_labels.EPIC_LABEL}",
         json_fields="number,body,labels", limit=200,
     )
     evidence: list[str] = []
@@ -312,21 +317,20 @@ def reconcile_orphan_prs(
 def _pick_from_scan(
     issues: list[dict], repo: str, allow_release: bool = False,
     active_milestone: str | None = None,
-    ready_label: str = READY_LABEL,
+    ready_label: str | None = None,
     external_only: bool = False, held: frozenset = frozenset(),
     raise_on_read_failure: bool = False,
 ) -> dict | None:
     """Return the first claimable Issue of one scan result, else None.
 
     The per-Issue guards, shared by the three ordinary ready scans and
-    the release fallback scan. An `ai-epic` Issue is never
-    claimed — no label change, no worktree, no run, no slot — with the
-    structured `epic_not_claimed` line (the check precedes the blockedBy
-    check: "it is an Epic" is the more fundamental reason). An Issue
-    with open native blockers is skipped with the structured
-    `blocked_by` line. Otherwise the Issue is picked and the
-    pickup log carries the explicit priority field: `p0`
-    for urgent Issues, `normal` otherwise.
+    the release fallback scan. An Epic Issue is never claimed — no label
+    change, no worktree, no run, no slot — with the structured
+    `epic_not_claimed` line (the check precedes the blockedBy check: "it
+    is an Epic" is the more fundamental reason). An Issue with open native
+    blockers is skipped with the structured `blocked_by` line. Otherwise
+    the Issue is picked and the pickup log carries the explicit priority
+    field: `p0` for urgent Issues, `normal` otherwise.
 
     `allow_release` controls the release skip: the three
     ordinary scans skip an `ai-release` Issue (`release_not_claimed`) so
@@ -369,6 +373,7 @@ def _pick_from_scan(
     (`orbi status`) re-raises so the failed read is named instead of
     rendering as an empty queue (Issue #1782).
     """
+    ready_label = delivery_labels.queue_label(ready_label)
     for issue in issues:
         if (repo, int(issue["number"])) in held:
             event("claim_yield", issue=issue.get("number"), reason="held_by_live_runner")
@@ -450,13 +455,13 @@ def _read_failed(
 
 
 def pick_issue(repo: str, active_milestone: str | None = None,
-               dispatch_label: str = READY_LABEL,
+               dispatch_label: str | None = None,
                held: frozenset = frozenset(),
                timeout: int | None = None,
                raise_on_read_failure: bool = False) -> dict | None:
-    # A merged delivery keeps `ai-merged` on the (still open) Issue;
-    # `ai-merged` is the success terminal state, so it is excluded from
-    # the ready scan like every other delivery state.
+    dispatch_label = delivery_labels.queue_label(dispatch_label)
+    # A merged delivery keeps the merged label on the (still open) Issue,
+    # the success terminal state, so the ready scan excludes it.
     # The scan fetches the ready queue (not just the first Issue) and
     # reads the native GitHub dependency per Issue: an
     # Issue with open blockers is skipped — no claim, no label change,
@@ -806,7 +811,7 @@ def _repo_scan_context(
     returned from the same read instead of reading the file twice.
     """
     if config is None:
-        return active_milestone, READY_LABEL, None
+        return active_milestone, delivery_labels.queue_label(), None
     try:
         policy = load_repo_policy(config, repo)
     except RepoConfigError as exc:
@@ -816,12 +821,12 @@ def _repo_scan_context(
         )
         policy = None
     if policy is None:
-        return active_milestone, READY_LABEL, None
+        return active_milestone, delivery_labels.queue_label(), None
     return (
         policy.active_milestone
         if policy.active_milestone is not None
         else active_milestone,
-        policy.dispatch_label or READY_LABEL,
+        delivery_labels.queue_label(policy.dispatch_label or getattr(config, 'dispatch_label', None)),
         policy,
     )
 
@@ -880,7 +885,7 @@ def pick_ready_issue(
     milestone, dispatch_label = _repo_scan_keys(
         config, repo, active_milestone,
     )
-    if dispatch_label == READY_LABEL:
+    if dispatch_label == delivery_labels.queue_label():
         return pick_issue(
             repo, milestone, held=held, timeout=timeout,
             raise_on_read_failure=raise_on_read_failure,

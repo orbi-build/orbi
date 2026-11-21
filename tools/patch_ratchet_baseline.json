@@ -1,7 +1,7 @@
 {
   "boundary_total": 1152,
   "command_shape_asserts": 437,
-  "internal_total": 1629,
+  "internal_total": 1623,
   "monkeypatch_setattr_runner": 104,
   "monkeypatch_setattr_runner_string": 3,
   "per_target": {
@@ -13,7 +13,6 @@
     "cli_source": 8,
     "cli_status": 65,
     "config_domain": 4,
-    "delivery_labels": 6,
     "exporter": 1,
     "failure_report": 59,
     "fcntl": 1,

@@ -45,12 +45,8 @@ from orbi import (
 )
 from orbi.checks import test_status
 from orbi.delivery_comment import opened_pr_comment_body, started_pi_comment_body
-from orbi.delivery_labels import (
-    EVENT_CLAIM,
-    EVENT_PR_OPENED,
-    IN_PROGRESS_LABEL,
-    PR_OPENED_LABEL,
-)
+from orbi.delivery_labels import EVENT_CLAIM, EVENT_PR_OPENED
+from orbi import delivery_labels
 from orbi.delivery_scene import DeliveryFacts, RunContext
 from orbi.failure import failure_detail, terminal_reason
 from orbi.failure_report import _classify_failure
@@ -205,7 +201,7 @@ def _resume_in_flight_run(issue: dict, source_repo: str,
     """Resolve the resume of an in-flight run: yield, fail, or rebind its id."""
     number = int(issue["number"])
     config = facts.config
-    if (IN_PROGRESS_LABEL not in facts.claim_labels
+    if (delivery_labels.IN_PROGRESS_LABEL not in facts.claim_labels
             and config.slot_dir is not None
             and config.max_concurrency is not None
             and hooks.another_live_runner(
@@ -606,7 +602,7 @@ def _closeout_implementation(attempt: _Attempt) -> IssueResult:
     apply_label_patch(
         int(attempt.issue["number"]), repo=attempt.source_repo,
         event=EVENT_PR_OPENED,
-        current_labels=facts.claim_labels | {IN_PROGRESS_LABEL},
+        current_labels=facts.claim_labels | {delivery_labels.IN_PROGRESS_LABEL},
         ready_label=facts.dispatch_label,
     )
     # The label transition has landed and must remain the state
@@ -877,8 +873,8 @@ def _report_terminal_failure(attempt: _Attempt, exc: Exception) -> None:
         # the claim write landed (the publisher is created right
         # after it) the scanned labels are the honest source.
         current_labels=(
-            {PR_OPENED_LABEL, facts.dispatch_label} if attempt.pr_opened
-            else {IN_PROGRESS_LABEL, facts.dispatch_label}
+            {delivery_labels.PR_OPENED_LABEL, facts.dispatch_label} if attempt.pr_opened
+            else {delivery_labels.IN_PROGRESS_LABEL, facts.dispatch_label}
             if attempt.publisher is not None else set(facts.claim_labels)
         ),
         review_round=0,

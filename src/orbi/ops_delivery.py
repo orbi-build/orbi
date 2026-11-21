@@ -28,7 +28,7 @@ from dataclasses import replace
 
 from orbi import config as config_domain
 from orbi import language, runner_health
-from orbi.delivery_labels import IN_PROGRESS_LABEL
+from orbi import delivery_labels
 from orbi.delivery_scene import RunContext
 from orbi.github import edit_issue
 from orbi.journal import LOGGER, event, issue_context, run_command
@@ -87,7 +87,7 @@ def deliver_pure_ops(
         "--repo", ctx.source_repo,
     ])
     edit_issue(
-        ctx.issue, repo=ctx.source_repo, remove=IN_PROGRESS_LABEL,
+        ctx.issue, repo=ctx.source_repo, remove=delivery_labels.IN_PROGRESS_LABEL,
     )
     # Pure ops actions take no PR ceremony; the terminal transition mirrors
     # the content path — the claim label is removed, the Issue is closed, the
