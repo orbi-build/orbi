@@ -24,7 +24,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from orbi import checks, failure, gh_response
-from orbi.delivery_labels import FIX_NEEDED_LABEL, IN_PROGRESS_LABEL, PR_OPENED_LABEL
+from orbi import delivery_labels
 from orbi.github import (
     commit_check_runs,
     issue_view,
@@ -412,7 +412,7 @@ def check_release_gates(repo: str, release_commit: str,
     """
     evidence: list[str] = []
     open_deliveries: set[int] = set()
-    for label in (IN_PROGRESS_LABEL, PR_OPENED_LABEL, FIX_NEEDED_LABEL):
+    for label in (delivery_labels.IN_PROGRESS_LABEL, delivery_labels.PR_OPENED_LABEL, delivery_labels.FIX_NEEDED_LABEL):
         # The leftover-delivery check is scoped to the
         # release's Milestone, so an unrelated in-flight Issue can
         # no longer block the release indefinitely.
@@ -452,7 +452,7 @@ def check_release_gates(repo: str, release_commit: str,
     scope = f" in milestone {milestone!r}" if milestone else ""
     evidence.append(
         f"no open Issue{scope} carries "
-        f"{IN_PROGRESS_LABEL} / {PR_OPENED_LABEL} / {FIX_NEEDED_LABEL}"
+        f"{delivery_labels.IN_PROGRESS_LABEL} / {delivery_labels.PR_OPENED_LABEL} / {delivery_labels.FIX_NEEDED_LABEL}"
     )
     def fetch_check_runs() -> list[dict]:
         try:

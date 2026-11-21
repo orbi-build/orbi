@@ -25,7 +25,7 @@ from __future__ import annotations
 import dataclasses
 
 from orbi import comment_trust, tick_reads
-from orbi.delivery_labels import BLOCKED_LABEL
+from orbi import delivery_labels
 from orbi.github import issue_comments, list_issues
 
 # One bounded page per tick: `ai-blocked` Issues are few, and an unbounded
@@ -46,7 +46,7 @@ class BlockedReads:
         """Every open `ai-blocked` Issue, read once for the tick."""
         if self._issues is None:
             self._issues = list_issues(
-                self.repo, state="open", label=BLOCKED_LABEL,
+                self.repo, state="open", label=delivery_labels.BLOCKED_LABEL,
                 json_fields="number,title", limit=SCAN_LIMIT,
             )
         return self._issues

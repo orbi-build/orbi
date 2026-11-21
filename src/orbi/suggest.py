@@ -48,10 +48,8 @@ from pathlib import Path
 from orbi import journal
 from orbi.claim import _repo_scan_keys
 from orbi.config import RunnerConfig
-from orbi.delivery_labels import (
-    AWAITING_MERGE_LABEL, BLOCKED_LABEL, FIX_NEEDED_LABEL,
-    IN_PROGRESS_LABEL, MERGED_LABEL, PR_OPENED_LABEL, label_names,
-)
+from orbi.delivery_labels import label_names
+from orbi import delivery_labels
 from orbi.delivery_scene import RunContext
 from orbi.draft import draft_repo_view
 from orbi.github import list_issues, list_milestones
@@ -948,8 +946,8 @@ def _has_delivery_label(config: RunnerConfig, repo: str) -> bool:
         config, repo, config.active_milestone,
     )
     labels = list(dict.fromkeys([
-        dispatch_label, IN_PROGRESS_LABEL, PR_OPENED_LABEL, MERGED_LABEL,
-        FIX_NEEDED_LABEL, BLOCKED_LABEL, AWAITING_MERGE_LABEL,
+        dispatch_label, delivery_labels.IN_PROGRESS_LABEL, delivery_labels.PR_OPENED_LABEL, delivery_labels.MERGED_LABEL,
+        delivery_labels.FIX_NEEDED_LABEL, delivery_labels.BLOCKED_LABEL, delivery_labels.AWAITING_MERGE_LABEL,
     ]))
     rows = list_issues(
         repo, state="all", search=f"label:{','.join(labels)}",

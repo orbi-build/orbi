@@ -42,13 +42,8 @@ from orbi import (
 from orbi.acceptance_section import appended_body, write_body
 from orbi.claim import _repo_scan_keys
 from orbi.config import RunnerConfig
-from orbi.delivery_labels import (
-    EPIC_LABEL,
-    NEEDS_DETAIL_LABEL,
-    READY_LABEL,
-    has_delivery_state,
-    label_names,
-)
+from orbi.delivery_labels import has_delivery_state, label_names
+from orbi import delivery_labels
 from orbi.delivery_scene import RunContext
 from orbi.draft_document import (
     TAKEN_ROUNDS,
@@ -956,7 +951,7 @@ def policy_keys(config: RunnerConfig, repo: str) -> tuple[str, str | None]:
     milestone, label = _repo_scan_keys(
         config, repo, config.active_milestone,
     )
-    return (label or READY_LABEL), _open_milestone(repo, milestone)
+    return delivery_labels.queue_label(label), _open_milestone(repo, milestone)
 
 
 def _append_to_issue(
@@ -981,8 +976,8 @@ def _append_to_issue(
     labels = _labels(issue)
     if dispatch_label not in labels and not has_delivery_state(labels):
         edit_issue(target, repo=repo, add=dispatch_label)
-    if NEEDS_DETAIL_LABEL in labels:
-        edit_issue(target, repo=repo, remove=NEEDS_DETAIL_LABEL)
+    if delivery_labels.NEEDS_DETAIL_LABEL in labels:
+        edit_issue(target, repo=repo, remove=delivery_labels.NEEDS_DETAIL_LABEL)
     return target
 
 
@@ -991,9 +986,9 @@ def _close_the_parent(
 ) -> None:
     """Label the parent `ai-epic` and release it, the way split does."""
     labels = _labels(parent_issue)
-    add = None if EPIC_LABEL in labels else EPIC_LABEL
+    add = None if delivery_labels.EPIC_LABEL in labels else delivery_labels.EPIC_LABEL
     remove = dispatch_label if dispatch_label in labels else None
     if add is not None or remove is not None:
         edit_issue(parent, repo=repo, add=add, remove=remove)
-    if NEEDS_DETAIL_LABEL in labels:
-        edit_issue(parent, repo=repo, remove=NEEDS_DETAIL_LABEL)
+    if delivery_labels.NEEDS_DETAIL_LABEL in labels:
+        edit_issue(parent, repo=repo, remove=delivery_labels.NEEDS_DETAIL_LABEL)

@@ -16,6 +16,7 @@ Together these prove the acceptance criteria:
   queryable by the old run_id;
 - a failed attempt marks the Issue blocked with the same run_id marker.
 """
+from orbi import delivery_labels
 from orbi import config as config_domain
 import json
 import os
@@ -453,7 +454,7 @@ def test_e2e_retry_of_same_issue_gets_new_run_id_and_keeps_old_scene(
     # relabel/takeover path for the already-open stable PR.
     ready_issue = {
         **issue(),
-        "labels": [{"name": runner.READY_LABEL}],
+        "labels": [{"name": delivery_labels.READY_LABEL}],
     }
     runner.process_issue(ready_issue, config, REPO)
 

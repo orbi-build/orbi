@@ -21,7 +21,7 @@ The [Constitution](https://github.com/orbi-build/orbi/blob/main/CONSTITUTION.md)
 | CLI | `orbi` (one Runner tick), `orbi add`, `orbi suggest`, `orbi draft`, `orbi status`, `orbi session`, `orbi install-units`, `orbi sync-engine-source`, `orbi doctor`, `orbi check`, `orbi setup`, `orbi fix-base`, `orbi split`, `orbi amend` (one subcommand per registered arity-0 ticket command), `orbi milestone` (`milestone set <title>`), `orbi notify` (`notify test`) |
 | Config | `orbi.toml` fields documented in [Configuration](/configuration) — including the Telegram notification key [`telegram_chat_id`](/configuration); `.orbi/env` loaded as systemd `EnvironmentFile` (it carries `ORBI_TELEGRAM_BOT_TOKEN`); the `pi_providers` JSON file |
 | Deployment | `systemd/orbi@.service` and `systemd/orbi@.timer` templates; `.orbi/` as the run-artifact and lock directory |
-| Label state machine | `labels.toml` (names, colors, descriptions) and `src/orbi/delivery_labels.py` (transitions). The dispatch label (`ai-ready`, or the repository's `dispatch_label`) means QUEUED, not started: the claim removes it in the same write that adds `ai-in-progress`, every later non-terminal stage event removes it too, and only a ticket put back in the queue adds it (requeue, recovery after `ai-needs-detail`, the amend/draft/split re-dispatch paths, an idle release arming, a release waiting for open deliveries). The human acceptance wait clears it and adds nothing back. How to stop a delivery that is queued, running or interrupted: [Stopping a delivery](/workflow#stopping-a-delivery) |
+| Label state machine | `labels.toml` (the role -> name table, colors, descriptions; see [Label definitions](#label-definitions)) and `src/orbi/delivery_labels.py` (transitions). The dispatch label (`ai-ready`, or the repository's `dispatch_label`) means QUEUED, not started: the claim removes it in the same write that adds `ai-in-progress`, every later non-terminal stage event removes it too, and only a ticket put back in the queue adds it (requeue, recovery after `ai-needs-detail`, the amend/draft/split re-dispatch paths, an idle release arming, a release waiting for open deliveries). The human acceptance wait clears it and adds nothing back. How to stop a delivery that is queued, running or interrupted: [Stopping a delivery](/workflow#stopping-a-delivery) |
 | Journal | Every line of a run starts with `[run_id]`; event names and `key=value` fields listed in [Operations](/operations) |
 | Session files | `<worktree>/.pi-session/*.jsonl` |
 | Naming | Branch `orbi/<owner>-<repo>-issue-<N>`; worktree `.worktrees/orbi-<owner>-<repo>-issue-<N>-<run_id>` |
@@ -35,6 +35,21 @@ The [Constitution](https://github.com/orbi-build/orbi/blob/main/CONSTITUTION.md)
 | Stop question | the hidden `<!-- orbi:question:v1 {json} -->` block of a stop that needs a decision, its shape (a superset of the drafting question), the closed `action` set and the `decision_class` values, plus the `<!-- orbi:answer:v1 {json} -->` record of an answer — the automatic one the engine takes included; see [The stop question](#the-stop-question) |
 
 Anything not in this table is internal and may change without notice.
+
+## Label definitions
+
+The engine's platform label names are configuration data, not code (Issue #2347). One file — `src/orbi/labels.toml`, shipped with the engine package — is the single source:
+
+- every platform label is one `[[label]]` entry with four keys: `role` (the key the engine asks for), `name`, `color` and `description`;
+- the `[reserved]` table carries the names the engine reserves but does not own (`bug`): the engine reads them, `orbi setup` never creates or updates those labels;
+- the role vocabulary is `queue`, `in_progress`, `pr_opened`, `fix_needed`, `merged`, `blocked`, `awaiting_merge`, `priority`, `epic`, `release`, `content_only`, `ops_only`, `human_review` and `needs_detail`.
+
+Two invariants hold, and a file that breaks either one fails the start with the problem named (a missing file, malformed TOML, an unknown role, a duplicated role, a missing `queue` role, an invalid color or an empty description):
+
+1. **Every platform role appears exactly once, and exactly one role is `queue`.** No role is implied by a default in code.
+2. **The queue role is the only overridable one.** Per repository the precedence is the repository's `.github/orbi.toml` `dispatch_label` > the host `orbi.toml` `dispatch_label` > the `queue` entry in `labels.toml`. Every other role is engine data and changes only with an engine release.
+
+The engine reads the file at start and answers every label question (the queue label for this repository, is this ticket queued, put it in or take it out of the queue, and the same for the other roles) from that one table; `orbi setup` creates and updates the labels from the same file. A release that renames a label in `labels.toml` changes the engine's behavior with no code change.
 
 ## Status observation contract
 

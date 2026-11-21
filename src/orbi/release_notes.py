@@ -18,8 +18,8 @@ import re
 import subprocess
 from pathlib import Path
 
+from orbi import delivery_labels
 from orbi.journal import event, run_command
-
 
 RELEASE_CHANGELOG_CATEGORIES = (
     "Features", "Reliability and recovery", "Deployment and operations",
@@ -55,7 +55,7 @@ def release_changelog_category(item: dict) -> str:
         "exporter", "journal", "progress",
     )):
         return "Observability"
-    if "bug" in label_names:
+    if delivery_labels.BUG_LABEL in label_names:
         return "Bug fixes"
     return "Features"
 

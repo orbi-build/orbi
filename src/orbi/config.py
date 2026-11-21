@@ -436,8 +436,8 @@ def load_config(path: Path, *, check_provider_api_keys: bool = True,
         raise ValueError("health_alert_repo must be a string")
     repo_dir = _config_path(data.get("repo_dir", "."), base)
     # Deployment home: the orbi source checkout — the editable
-    # CLI install source, the systemd/ unit templates, labels.toml and the
-    # prompt defaults. Absent -> repo_dir (the orbi-bootstrap deployment,
+    # CLI install source, the systemd/ unit templates and the prompt
+    # defaults. Absent -> repo_dir (the orbi-bootstrap deployment,
     # home == delivery checkout, keeps its exact behavior). Present -> must
     # be a non-empty string, resolved like every other config path; the
     # delivery checkout (repo_dir) is then decoupled from the CLI

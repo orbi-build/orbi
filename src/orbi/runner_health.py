@@ -35,7 +35,7 @@ import time
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from orbi.delivery_labels import READY_LABEL
+from orbi import delivery_labels
 from orbi import language
 from orbi.repo_config import (
     RepoConfigError, load_repo_policy, merged_repo_language,
@@ -507,18 +507,17 @@ def health_marker(check: str) -> str:
 
 def create_health_issue(
     repo: str, check: str, detail: str, *, run_command, dispatchable=True,
+    dispatch_label: str | None = None,
 ) -> str | None:
     """Create (or find) one deduplicated bug Issue for a health alarm.
 
-    Reuses the #106 mechanism: the stable marker is written into the body
-    and `gh issue list --search 'in:body ...'` finds an existing Issue, so a
-    recurring alarm never creates a second Issue.
+    Reuses the #106 dedup: the body marker lets the search find the Issue.
 
-    ``dispatchable``: True -> the normal `bug`+`ai-ready`
-    dispatch (an orbi bug orbi's own agent can fix); False -> a
-    non-dispatchable alert (`bug` only, NO `ai-ready`) for a deployment
-    config problem only a human can fix — the Runner never picks it up.
+    ``dispatchable``: True -> the normal bug + queue-label dispatch; False
+    -> a bug-only alert no agent picks up. ``dispatch_label`` is this
+    repository's resolved queue entry.
     """
+    dispatch_label = delivery_labels.queue_label(dispatch_label)
     marker = health_marker(check)
     raw = run_command(
         [
@@ -534,11 +533,11 @@ def create_health_issue(
         existing = []
     if isinstance(existing, list) and existing:
         return existing[0].get("url")
-    closing = (
-        "该 Issue 由正常 `ai-ready` → PR → review → merge 流程处理。"
-        if dispatchable else
-        "该告警为部署配置问题，需人工修改配置后重启服务，不进入 `ai-ready` 流程。"
+    normal, broken = (
+        f"该 Issue 由正常 `{dispatch_label}` → PR → review → merge 流程处理。",
+        f"该告警为部署配置问题，需人工修改配置后重启服务，不进入 `{dispatch_label}` 流程。",
     )
+    closing = normal if dispatchable else broken
     body = "\n".join([
         "## Runner 健康巡检告警",
         "",
@@ -556,10 +555,10 @@ def create_health_issue(
     command = [
         "gh", "issue", "create",
         "--repo", repo, "--title", f"Runner 健康巡检告警: {check}",
-        "--body", body, "--label", "bug",
+        "--body", body, "--label", delivery_labels.BUG_LABEL,
     ]
     if dispatchable:
-        command += ["--label", "ai-ready"]
+        command += ["--label", dispatch_label]
     run_command(command, timeout=GH_TIMEOUT_SECONDS)
     return None
 
@@ -586,10 +585,9 @@ def repeat_failure_comment(finding: dict, *, language_code: str) -> str:
 def queue_label(config: RunnerConfig, repo: str) -> str:
     """The repository's RESOLVED claim label — the queue entry (Issue #2309).
 
-    The stale-pickup check counts QUEUED work, so it must read the label the
-    claim scans read, not the host default. Fail-open like the claim scans: a
-    malformed policy file falls back to the host value (the claim blocks the
-    Issue with the readable reason).
+    The stale-pickup check counts QUEUED work, so it reads the label the
+    claim scans read. Fail-open like the claim scans: a malformed policy file
+    falls back to the host value.
     """
     try:
         policy = load_repo_policy(config, repo)
@@ -597,7 +595,7 @@ def queue_label(config: RunnerConfig, repo: str) -> str:
         policy = None
     if policy is not None and policy.dispatch_label:
         return policy.dispatch_label
-    return config.dispatch_label or READY_LABEL
+    return delivery_labels.queue_label(config.dispatch_label)
 
 
 def run_health_check(config: RunnerConfig, *, run_command) -> list[str]:
@@ -675,6 +673,7 @@ def _run_health_check_locked(config: RunnerConfig, *, run_command) -> list[str]:
                     alert_repo, "crash_loop", detail,
                     run_command=run_command,
                     dispatchable=(kind == "bug"),
+                    dispatch_label=queue_label(config, alert_repo),
                 )
                 alerts.append("crash_loop")
             elif not alerts_off:
@@ -758,9 +757,10 @@ def _run_health_check_locked(config: RunnerConfig, *, run_command) -> list[str]:
                         (
                             "no ticket pickup for "
                             f"{int(time.time() - state['last_pickup_ts'])} "
-                            "seconds while the ai-ready queue is non-empty"
+                            "seconds while the queue is non-empty"
                         ),
                         run_command=run_command,
+                        dispatch_label=queue_label(config, alert_repo),
                     )
                     alerts.append("stale_pickup")
                 elif not alerts_off:

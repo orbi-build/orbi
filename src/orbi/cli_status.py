@@ -14,13 +14,7 @@ from pathlib import Path
 
 from orbi import claim, journal as journal_domain, status_observe
 from orbi import config as config_domain
-from orbi.delivery_labels import (
-    BLOCKED_LABEL,
-    FIX_NEEDED_LABEL,
-    IN_PROGRESS_LABEL,
-    MERGED_LABEL,
-    PR_OPENED_LABEL,
-)
+from orbi import delivery_labels
 from orbi.pilot_slots import HELD_PID_UNKNOWN, slot_occupancy
 from orbi.runner import list_issues
 
@@ -28,7 +22,12 @@ from orbi.runner import list_issues
 # review session), `ai-merged` (the Runner merged the PR
 # itself) and `ai-blocked` are all result states of an
 # opened delivery.
-RESULT_LABELS = (PR_OPENED_LABEL, FIX_NEEDED_LABEL, MERGED_LABEL, BLOCKED_LABEL)
+def result_labels() -> tuple[str, ...]:
+    """The terminal/result labels the status view reports."""
+    return (
+        delivery_labels.PR_OPENED_LABEL, delivery_labels.FIX_NEEDED_LABEL,
+        delivery_labels.MERGED_LABEL, delivery_labels.BLOCKED_LABEL,
+    )
 
 
 def list_labeled_issues(repo: str, label: str, state: str = "open", *,
@@ -45,7 +44,7 @@ def list_labeled_issues(repo: str, label: str, state: str = "open", *,
 
 
 def current_issue(repo: str) -> dict | None:
-    issues = list_labeled_issues(repo, IN_PROGRESS_LABEL)
+    issues = list_labeled_issues(repo, delivery_labels.IN_PROGRESS_LABEL)
     return issues[0] if issues else None
 
 
@@ -81,7 +80,7 @@ def recent_result(repo: str) -> dict | None:
     human attention).
     """
     newest = None
-    for label in RESULT_LABELS:
+    for label in result_labels():
         for issue in list_labeled_issues(
             repo, label, state="all",
             timeout=status_observe.STATUS_READ_TIMEOUT_SECONDS,

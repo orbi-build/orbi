@@ -101,7 +101,7 @@ from orbi.clarify_stop import (
     already_stopped, authoritative_stop, build_context, stop_marker,
 )
 from orbi.ticket_criteria import TICKET_CHECK_CRITERIA
-from orbi.delivery_labels import NEEDS_DETAIL_LABEL, READY_LABEL
+from orbi import delivery_labels
 from orbi.github import comment_issue, edit_issue
 from orbi.journal import event
 from orbi.pi_session import run_ticket_agent
@@ -338,7 +338,7 @@ def _suggestion_dropped(
 
 
 def render_comment(issue: dict, verdict: ClarifyVerdict, run_id: str, *,
-                   ready_label: str = READY_LABEL,
+                   ready_label: str | None = None,
                    language_code: str,
                    status_url: str | None = None) -> str:
     """Render the ONE comment that names the missing pieces.
@@ -357,6 +357,7 @@ def render_comment(issue: dict, verdict: ClarifyVerdict, run_id: str, *,
     it. The generic repair block is rendered only when there is no
     proposal, so the reader never has to choose between two instructions.
     """
+    ready_label = delivery_labels.queue_label(ready_label)
     def message(key: str, **fields: object) -> str:
         return language.text(language_code, key, **fields)
 
@@ -381,7 +382,7 @@ def render_comment(issue: dict, verdict: ClarifyVerdict, run_id: str, *,
             f"{message('clarify.repair_outcome')}\n"
             f"{message('clarify.repair_acceptance')}\n"
             "```\n\n"
-            f"{message('clarify.followup', needs_detail_label=NEEDS_DETAIL_LABEL)}"
+            f"{message('clarify.followup', needs_detail_label=delivery_labels.NEEDS_DETAIL_LABEL)}"
             "\n\n"
         )
     # The task identity and the optional fixed project status link follow
@@ -505,7 +506,7 @@ def stop(issue: dict, verdict: ClarifyVerdict, run_id: str, *,
         )
         edit_issue(
             issue["number"], repo=source_repo,
-            add=NEEDS_DETAIL_LABEL, remove=ready_label,
+            add=delivery_labels.NEEDS_DETAIL_LABEL, remove=ready_label,
         )
     except Exception as exc:
         event(
@@ -626,7 +627,7 @@ def enforce(issue: dict, config: RunnerConfig, source_repo: str,
     # hardcoded `ai-ready` in a custom-label repository would leave the
     # ticket claimable, and the next tick would judge it again — the gate
     # would repeat instead of stopping.
-    ready_label = config.dispatch_label or READY_LABEL
+    ready_label = delivery_labels.queue_label(config.dispatch_label)
     if draft_marker.own_draft_unchanged(issue):
         # Issue #2041: `orbi draft` already judged this exact body with
         # THIS function before the person ever saw it, and nobody has
@@ -648,7 +649,7 @@ def enforce(issue: dict, config: RunnerConfig, source_repo: str,
         try:
             edit_issue(
                 issue["number"], repo=source_repo,
-                add=NEEDS_DETAIL_LABEL, remove=ready_label,
+                add=delivery_labels.NEEDS_DETAIL_LABEL, remove=ready_label,
             )
         except Exception as exc:
             event(

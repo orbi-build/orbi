@@ -8,6 +8,7 @@ label on a scene-comment failure, and the ops ticket both with and without
 a commit.
 """
 
+from orbi import delivery_labels
 from orbi import config as config_domain
 from orbi import language
 import json
@@ -391,7 +392,7 @@ def test_process_issue_keeps_pr_ready_label_when_scene_comment_5xx_exhausts(
             issue, config_domain.RunnerConfig(base_branch="main", repo_dir=tmp_path), "o/r",
         )
     assert result == runner.IssueResult("pr", "https://github.com/o/r/pull/1")
-    assert any(kwargs.get("add") == runner.PR_OPENED_LABEL for _, kwargs in edits)
+    assert any(kwargs.get("add") == delivery_labels.PR_OPENED_LABEL for _, kwargs in edits)
     assert "progress_comment_failed" in caplog.text
 
 
@@ -520,7 +521,7 @@ def test_process_issue_ops_without_commit_closes_with_evidence(
     assert ["gh", "issue", "close", "99", "--repo", "o/r"] in commands
     # The claim added the label at pickup; the delivery removes it.
     runner.edit_issue.assert_any_call(
-        99, repo="o/r", remove=runner.IN_PROGRESS_LABEL,
+        99, repo="o/r", remove=delivery_labels.IN_PROGRESS_LABEL,
     )
 
 
@@ -618,8 +619,8 @@ def test_process_issue_ops_with_uncommitted_leftovers_fails_fast(
     cleanup.assert_not_called()
     runner.cleanup_task_worktree = original_cleanup
     runner.edit_issue.assert_called_once_with(
-        99, repo="o/r", add=runner.IN_PROGRESS_LABEL,
-        remove=runner.READY_LABEL,
+        99, repo="o/r", add=delivery_labels.IN_PROGRESS_LABEL,
+        remove=delivery_labels.READY_LABEL,
     )
 
 

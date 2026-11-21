@@ -41,20 +41,8 @@ from orbi import config as config_domain
 from orbi import failure_report, merge_exec, pi_session, review_wait, run_state
 from orbi.blocked_comment import post_blocked_comment
 from orbi.checks import test_status
-from orbi.delivery_labels import (
-    AWAITING_MERGE_LABEL,
-    EVENT_FIX_NEEDED,
-    EVENT_HUMAN_REVIEW_WAITING,
-    EVENT_MERGED,
-    EVENT_PR_OPENED,
-    HUMAN_REVIEW_LABEL,
-    IN_PROGRESS_LABEL,
-    MERGED_LABEL,
-    PR_OPENED_LABEL,
-    READY_LABEL,
-    is_resumable,
-    needs_human_intervention,
-)
+from orbi.delivery_labels import EVENT_FIX_NEEDED, EVENT_HUMAN_REVIEW_WAITING, EVENT_MERGED, EVENT_PR_OPENED, is_resumable, needs_human_intervention
+from orbi import delivery_labels
 from orbi.delivery_scene import RunContext
 from orbi.review_ci_status import log_recovery_ci_status  # noqa: F401
 from orbi.failure import failure_detail
@@ -259,7 +247,8 @@ class _Round:
     issue_body_sha256: str | None
     keep_review_record: list[bool]
     marker: str = ""
-    ready_label: str = READY_LABEL
+    ready_label: str = field(
+        default_factory=lambda: delivery_labels.READY_LABEL)
     round: int = 0
     base_advance_rounds: int = 0
     external_pr_url: str | None = None
@@ -293,7 +282,7 @@ def _round_preflight_phase(work: _Round) -> None:
     config, scene = work.config, work.scene
     number, source_repo = work.number, work.source_repo
     work.marker = run_marker(config.run_id)
-    work.ready_label = config.dispatch_label or READY_LABEL
+    work.ready_label = delivery_labels.queue_label(config.dispatch_label)
     scene_round = scene.parsed.review_round
     rounds = effective_review_round(scene, number=number, repo=source_repo)
     recovered = rounds != scene_round
@@ -954,7 +943,7 @@ def _run_review_round(
     run_id = current_run_id()
     marker = run_marker(run_id) if run_id else ""
     priority = issue_priority(issue)
-    ready_label = config.dispatch_label or READY_LABEL
+    ready_label = delivery_labels.queue_label(config.dispatch_label)
 
     def block_label_inconsistency(labels: list[str], reason: str) -> None:
         event(
@@ -980,7 +969,7 @@ def _run_review_round(
         )
 
     labels = issue_labels(number, source_repo)
-    if IN_PROGRESS_LABEL in labels:
+    if delivery_labels.IN_PROGRESS_LABEL in labels:
         try:
             apply_label_patch(
                 number, repo=source_repo, event=EVENT_PR_OPENED,
@@ -995,15 +984,15 @@ def _run_review_round(
             return None
         # The repair also removed a pre-upgrade queue residue (#2309).
         labels = [label for label in labels
-                  if label not in (IN_PROGRESS_LABEL, ready_label)]
-        labels.append(PR_OPENED_LABEL)
+                  if label not in (delivery_labels.IN_PROGRESS_LABEL, ready_label)]
+        labels.append(delivery_labels.PR_OPENED_LABEL)
         event(
             "delivery_label_repaired", issue=number, pr=pr_url,
-            **{"from": IN_PROGRESS_LABEL, "to": PR_OPENED_LABEL},
+            **{"from": delivery_labels.IN_PROGRESS_LABEL, "to": delivery_labels.PR_OPENED_LABEL},
         )
     if not (is_resumable(labels)
             and not needs_human_intervention(labels)
-            and MERGED_LABEL not in labels):
+            and delivery_labels.MERGED_LABEL not in labels):
         block_label_inconsistency(
             labels,
             "open PR has no resumable delivery label",
@@ -1021,7 +1010,7 @@ def _run_review_round(
     # is not consumed by waiting). An empty column 2 needs no human and
     # falls through to the normal review; a missing worktree falls
     # through too so the existing recovery semantics stay intact.
-    if config.human_review_gate and HUMAN_REVIEW_LABEL not in labels:
+    if config.human_review_gate and delivery_labels.HUMAN_REVIEW_LABEL not in labels:
         gate_worktree = worktree_path(
             config.repo_dir, source_repo, number, run_id,
         )
@@ -1031,7 +1020,7 @@ def _run_review_round(
             # The wait writes ONLY when it changes a label (Issue
             # #2309): a stale in-flight or queue label is cleared and
             # nothing is added, so a steady waiting tick writes no label.
-            if IN_PROGRESS_LABEL in labels or ready_label in labels:
+            if delivery_labels.IN_PROGRESS_LABEL in labels or ready_label in labels:
                 apply_label_patch(
                     number, repo=source_repo,
                     event=EVENT_HUMAN_REVIEW_WAITING,
@@ -1159,7 +1148,7 @@ def _run_review_round(
         review_kwargs = {}
         if scene.parsed.review_round > 0:
             review_kwargs["previous_comments"] = comments
-        if AWAITING_MERGE_LABEL in labels:
+        if delivery_labels.AWAITING_MERGE_LABEL in labels:
             review_kwargs["merge_only"] = True
         elif not scene.parsed.external:
             # Issue #1626: a recorded pass on this head and this Issue

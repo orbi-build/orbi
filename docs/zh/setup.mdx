@@ -67,8 +67,8 @@ setup 是 **fail-fast**：核心前提失败会在任何后续变更之前停下
      `ai-fix-needed`、`ai-merged`、`ai-blocked`、`ai-awaiting-merge`、`p0`、`ai-epic`、
      `ai-release`、`ai-content-only`、`ai-ops-only`、`ai-human-review`、
      `ai-needs-detail`）
-     从部署 home 的 `labels.toml`（`<deploy_home>/labels.toml`，Issue #330）
-     **声明式**对齐——标签名/颜色/描述的唯一事实源：缺的创建、漂移的更新、
+     从引擎自带的 `labels.toml`（`src/orbi/labels.toml`，自 Issue #2347
+     起是包数据）**声明式**对齐——标签名/颜色/描述的唯一事实源：缺的创建、漂移的更新、
      从不删除，业务标签（`bug`、`enhancement`、...）从不被碰。外部单仓库
      模式下标签来自 orbi checkout，绝不来自交付 checkout X。
 5. **调度器单元** — 部署 home 的模板（Linux：
@@ -116,8 +116,8 @@ setup 从不创建业务 Issue、从不领取任务、从不启动 Pi、从不�
 
 外部单仓库模式（Issue #330，PR #334）下，配置把两个 checkout 分开：
 `deploy_home` 是 orbi 源码 checkout，`repo_dir` 是用户仓库 X。setup
-按此路由——第 2 步（CLI editable 安装）、第 4 步（`labels.toml`）和第
-5 步（unit 模板）作用于 `deploy_home`，第 6 步（checkout + git
+按此路由——第 2 步（CLI editable 安装）和第 5 步（unit 模板）作用于
+`deploy_home`，第 4 步（标签对齐）始终读引擎自带的 `labels.toml`，第 6 步（checkout + git
 transport）检查 `repo_dir`：X 的 `origin` 必须是第一个配置的 source
 repo 所配置的 `git_transport`，X 的 worktree 必须干净，X 的 base 新鲜度只报告。注意
 外部模式下 timer 的 `ExecStartPre` fast-forward 作用于部署 home（orbi

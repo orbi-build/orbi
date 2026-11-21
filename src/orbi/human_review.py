@@ -27,7 +27,7 @@ the run verified, column 2 is the minimal set a person still confirms.
 import json
 
 from orbi import language, user_summary
-from orbi.delivery_labels import HUMAN_REVIEW_LABEL
+from orbi import delivery_labels
 from orbi.progress import run_marker
 
 # The machine-parsable block marker (an HTML comment -- GitHub renders
@@ -202,12 +202,12 @@ def render_checklist_comment(*, run_id: str, pr_url: str,
         lines.extend(f"- {item}" for item in column2)
         lines.append("")
         lines.append(message(
-            "human_review.confirm", label=HUMAN_REVIEW_LABEL,
+            "human_review.confirm", label=delivery_labels.HUMAN_REVIEW_LABEL,
             run_id=run_id,
         ))
     else:
         lines.append(message(
-            "human_review.column2_empty", label=HUMAN_REVIEW_LABEL,
+            "human_review.column2_empty", label=delivery_labels.HUMAN_REVIEW_LABEL,
             run_id=run_id,
         ))
     lines += [

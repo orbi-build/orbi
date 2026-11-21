@@ -78,7 +78,9 @@ where = ["src"]
 # Issue #1955: the clarification gate's Pi extension ships with the engine
 # — the gate passes this file to pi --extension, so a wheel install must
 # carry it exactly like the example config (Issue #163).
-orbi = ["example_config.toml", "extensions/*.ts"]
+# Issue #2347: labels.toml is the single source of the platform label
+# names the engine reads at start, so the wheel must carry it too.
+orbi = ["example_config.toml", "labels.toml", "extensions/*.ts"]
 
 # The contract test command (`python3 -m coverage run --branch -m pytest
 # tests/ -q`) runs WITHOUT installing the package: pytest puts `src/` on

@@ -365,7 +365,9 @@ GitHub 标签是外部状态机。它们不是 commit 创建的——每个仓�
 | `ai-needs-detail` | 薄 ticket 闸门（Issue #1088）：ticket 说得太少无法交付，Orbi 在开工前停住。Runner 把 `ai-ready` 换成它，并只发一条列出缺失项的评论；人补齐后重新加 `ai-ready` |
 
 「排队」意味着尚未开始（Issue #2309）。`is:open label:ai-ready`——或该仓库的
-`dispatch_label`——就是队列。领取在同一次写入里移除该标签并加上
+`dispatch_label`——就是队列。默认的 `ai-ready` 是数据而非代码：它是引擎
+`labels.toml` 里的 `queue` 角色，优先级为仓库 `dispatch_label` > 宿主
+`dispatch_label` > `labels.toml`（Issue #2347）。领取在同一次写入里移除该标签并加上
 `ai-in-progress`，此后每个非终态阶段事件也会移除它，所以旧规则下领取的票
 在下一次阶段事件时自然收敛。只有被放回队列的票才会重新加上它：requeue、
 人在 `ai-needs-detail` 之后手动重加、amend/draft/split 的重派发路径、空闲
@@ -1045,7 +1047,7 @@ contents API 读取仓库**默认分支 tip** 上的 `.github/orbi.toml`——
 | `auto_next_milestone` | boolean | 该仓库的空闲自动推进开关（Issue #1342）：为 `false` 时，已关闭的 active Milestone 即使有更高的待发布候选也不会被改写——改为发一条确认 Issue，携带票内 `/orbi milestone <版本>` 命令。缺席时回退宿主值（默认 `true`）。 |
 | `message_language` | string | Orbi 在该仓库的评论和署名页脚语言，接受 `en` 或 `zh`；显式值覆盖宿主值，不翻译用户内容，也不覆盖宿主的 Telegram 语言。见[评论语言](#评论语言)。 |
 | `context_files` | string[] | 仓库内相对路径的上下文文件；注入前校验存在性与大小上限。 |
-| `dispatch_label` | string | 该仓库的认领标签（默认 `ai-ready`）——它是领取时被**移除**的队列入口（Issue #2309）。交付生命周期标签恒为宿主常量；类型、优先级或控制标签（`p0`、`bug`、`ai-release`、`ai-ops-only`、`ai-human-review` 等）会被拒绝并点名冲突。 |
+| `dispatch_label` | string | 该仓库的认领标签——它是领取时被**移除**的队列入口（Issue #2309）。未设置时取引擎 `labels.toml` 里的 `queue` 角色（Issue #2347）；其余标签角色都来自同一个文件，这是唯一可覆盖的角色。类型、优先级或控制标签（`p0`、`bug`、`ai-release`、`ai-ops-only`、`ai-human-review` 等）会被拒绝并点名冲突。 |
 | `steering_enabled` | boolean | 为该仓库启用受信任修正轮询；缺席时回退到宿主值。 |
 | `steering_poll_seconds` | number | 该仓库的轮询间隔；缺席时回退到宿主值，且必须为有限正数。 |
 | `steering_max_rounds` | integer | 该仓库最多重启 Steering 的次数；缺席时回退到宿主值。 |
@@ -1077,7 +1079,8 @@ claim 用已知键继续（Issue #1329）。该文件由交付
 常交付。host-only 集合同样包括宿主调度：`max_concurrency`
 永远不能下放到仓库文件——并发 slot 池属于部署宿主。
 `dispatch_label` 不得是交付生命周期标签
-（`ai-in-progress`、`ai-merged` 等）：那些恒为宿主常量。阻塞落在
+（`ai-in-progress`、`ai-merged` 等）：那些角色由引擎的 `labels.toml` 固定
+（Issue #2347）。阻塞落在
 claim 选中的那个 Issue 上；`dispatch_label` 不是 `ai-ready` 的仓库在
 文件本身坏掉时没有 `ai-ready` 候选 Issue 可阻塞，此时 fail-fast 原因
 只在 journal 的 `repo_config_invalid` 行（不改标签、不发评论）。run 评论记录

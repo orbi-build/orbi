@@ -11,6 +11,7 @@ language the milestone bookkeeping comment is posted in.
 `tests/test_bootstrap_runner_main.py` and imported here.
 """
 
+from orbi import delivery_labels
 from orbi import config as config_domain
 import json
 import logging
@@ -743,7 +744,7 @@ def test_arm_release_ticket_never_rearms_a_claimed_release(monkeypatch):
     milestone.arm_release_ticket("owner/repo", "v0.4.0")
     assert searches == [
         'label:ai-release -label:ai-ready '
-        + " ".join(f"-label:{label}" for label in milestone.RELEASE_STAGE_LABELS)
+        + " ".join(f"-label:{label}" for label in milestone.release_stage_labels())
         + ' milestone:"v0.4.0"',
     ]
 

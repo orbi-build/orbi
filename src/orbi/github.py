@@ -25,13 +25,8 @@ from pathlib import Path
 from urllib.parse import quote
 
 from orbi import checks, gh_response, notify
-from orbi.delivery_labels import (
-    IN_PROGRESS_LABEL,
-    P0_LABEL,
-    READY_LABEL,
-    label_name_set,
-    label_patch,
-)
+from orbi.delivery_labels import label_name_set, label_patch
+from orbi import delivery_labels
 from orbi.journal import LOGGER, event, run_command, single_line
 from orbi.milestone_errors import MilestoneReconcileError, classify_milestone_error
 from orbi.merge_gate import classify_protection
@@ -525,7 +520,7 @@ def issue_priority(issue: dict) -> str:
     field fails open): a P0 misread as normal only loses its ordering
     for one run, never the delivery.
     """
-    return "p0" if P0_LABEL in label_name_set(issue) else "normal"
+    return "p0" if delivery_labels.P0_LABEL in label_name_set(issue) else "normal"
 
 
 def epic_issue_with_blockers(repo: str, issue: dict) -> dict:
@@ -702,7 +697,7 @@ def edit_issue(number: int, *, repo: str, add: str | None = None,
 
 def apply_label_patch(number: int, *, repo: str, event: str,
                       current_labels,
-                      ready_label: str = READY_LABEL) -> None:
+                      ready_label: str | None = None) -> None:
     """Compute the deterministic label patch for `event` and apply it.
 
     `current_labels` is the Issue's current label names (read once by the
@@ -716,6 +711,7 @@ def apply_label_patch(number: int, *, repo: str, event: str,
     nothing; after the last write `notify.patch_applied` (Issues #1673,
     #2287) sends an ordinary handoff's message, never a stop's.
     """
+    ready_label = delivery_labels.queue_label(ready_label)
     to_add, to_remove = label_patch(event, current_labels, ready_label)
     if not to_add and not to_remove:
         return
@@ -982,7 +978,7 @@ def has_in_progress_label(number: int, repo: str) -> bool:
     if not isinstance(labels, list):
         raise ValueError("issue view labels must be a JSON array")
     return any(
-        isinstance(label, dict) and label.get("name") == IN_PROGRESS_LABEL
+        isinstance(label, dict) and label.get("name") == delivery_labels.IN_PROGRESS_LABEL
         for label in labels
     )
 

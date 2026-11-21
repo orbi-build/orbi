@@ -38,14 +38,8 @@ from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
-from orbi.delivery_labels import (
-    AWAITING_MERGE_LABEL,
-    BLOCKED_LABEL,
-    FIX_NEEDED_LABEL,
-    IN_PROGRESS_LABEL,
-    PR_OPENED_LABEL,
-    label_names,
-)
+from orbi.delivery_labels import label_names
+from orbi import delivery_labels
 from orbi.github import issue_view, parse_paginated_issue_array, run_gh_read_command
 from orbi.pi_activity import activity_kind_for, read_new_events
 from orbi.progress_summary import safe_target as shared_safe_target
@@ -65,9 +59,12 @@ STATUS_READ_TIMEOUT_SECONDS = 30
 ISSUE_FIELDS = "number,title,state,labels,url"
 
 # Delivery states that count as an active delivery in the scope view.
-ACTIVE_DELIVERY_LABELS = (
-    IN_PROGRESS_LABEL, PR_OPENED_LABEL, FIX_NEEDED_LABEL, AWAITING_MERGE_LABEL,
-)
+def active_delivery_labels() -> tuple[str, ...]:
+    """Delivery states that count as an active delivery in the scope view."""
+    return (
+        delivery_labels.IN_PROGRESS_LABEL, delivery_labels.PR_OPENED_LABEL,
+        delivery_labels.FIX_NEEDED_LABEL, delivery_labels.AWAITING_MERGE_LABEL,
+    )
 
 # The run id carried by a task worktree name is the legal eight-hex id.
 RUN_ID_PATTERN = re.compile(r"^[0-9a-f]{8}$")
@@ -174,9 +171,9 @@ def is_active(delivery: Delivery) -> bool:
     decision order (`delivery_scene.classify` checks BLOCKED before every
     opened-PR state) instead of inventing a second rule.
     """
-    if BLOCKED_LABEL in delivery.labels:
+    if delivery_labels.BLOCKED_LABEL in delivery.labels:
         return False
-    return any(label in ACTIVE_DELIVERY_LABELS for label in delivery.labels)
+    return any(label in active_delivery_labels() for label in delivery.labels)
 
 
 def open_issues_complete(repo: str) -> list[dict]:

@@ -33,7 +33,7 @@ from urllib.parse import quote
 
 from orbi import config as config_domain
 from orbi import language
-from orbi.delivery_labels import RELEASE_LABEL
+from orbi import delivery_labels
 from orbi.github import list_issues, list_milestones, run_gh_read_command
 from orbi.journal import run_command
 from orbi.release_git import RELEASE_VERSION_FILE_OPTIONS
@@ -272,7 +272,7 @@ def _ensure_command_release_ticket(
 ) -> None:
     existing = list_issues(
         repo, state="all",
-        search=f'label:{RELEASE_LABEL} milestone:"{version}"',
+        search=f'label:{delivery_labels.RELEASE_LABEL} milestone:"{version}"',
         json_fields="number", limit=200, timeout=30,
     )
     if existing:
@@ -302,7 +302,7 @@ def _ensure_command_release_ticket(
         "gh", "issue", "create", "--repo", repo,
         "--title", f"release {version}",
         "--body", body,
-        "--label", RELEASE_LABEL,
+        "--label", delivery_labels.RELEASE_LABEL,
         "--label", dispatch_label,
         "--milestone", version,
     ], timeout=30)

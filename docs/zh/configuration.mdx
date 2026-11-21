@@ -11,7 +11,7 @@ description: "每个 orbi.toml 设置的作用和默认值是什么?"
 |---|---|---|---|---|
 | `source_repos` | 字符串列表 | 必填 | 非空 `owner/repo` | 每个 tick 扫描的一个 `owner/repo` 任务池。多个条目会因当前执行层只有一个 checkout 而 fail fast；多仓库 workspace 尚未提供（Issue #133） |
 | `repo_dir` | 路径 | `.` | 任意路径 | 交付 checkout：Runner 交付 Issue 的仓库。任务 worktree 从它冻结的 `origin/<base_branch>` SHA 创建，PR 对它打开，slot 锁在 `<repo_dir>/.orbi/slots/`。自举模式下它就是 orbi checkout 自身；外部单仓库模式（Issue #330）下是外部用户仓库 X |
-| `deploy_home` | 路径 | `repo_dir` | 任意路径，必须存在 | orbi **源码** checkout（Issue #330）：editable CLI 安装来源（自更新）、`systemd/` unit 模板、`labels.toml`、prompt 默认（`prompts/prompt.md`、`prompts/prompt_review.md` 未设置时）。缺省 = `repo_dir`（自举模式，行为不变）。`repo_dir` 是外部仓库 X 时把它设为 orbi checkout。必须是非空字符串；目录不存在会启动 fail fast |
+| `deploy_home` | 路径 | `repo_dir` | 任意路径，必须存在 | orbi **源码** checkout（Issue #330）：editable CLI 安装来源（自更新）、`systemd/` unit 模板、prompt 默认（标签定义随引擎包发布，位于 `src/orbi/labels.toml`，Issue #2347）（`prompts/prompt.md`、`prompts/prompt_review.md` 未设置时）。缺省 = `repo_dir`（自举模式，行为不变）。`repo_dir` 是外部仓库 X 时把它设为 orbi checkout。必须是非空字符串；目录不存在会启动 fail fast |
 | `workspace_root` | 路径 | `..` | 任意路径 | 包含任务 worktree 和 agent 可修改仓库的目录 |
 | `base_branch` | 字符串 | `main` | 任意非空字符串 | 交付 base 分支；每个任务 worktree 都从冻结的 `origin/<base_branch>` SHA 创建 |
 | `git_transport` | 字符串 | `ssh` | `ssh \| https` | 交付 checkout 的传输方式（Issue #580）。`ssh`（默认）：git 数据操作走 `git@github.com:owner/repo.git`，用机器的 SSH key；setup 会把 HTTPS origin 迁移过去。`https`：origin 保持 `https://github.com/<repo>.git`，`git ls-remote`/fetch/push 的凭据走 `gh` credential helper（`gh auth login --with-token`）——无 SSH 私钥的纯 token sandbox 路线。其他值直接让配置加载失败 |
@@ -64,7 +64,7 @@ description: "每个 orbi.toml 设置的作用和默认值是什么?"
 
 | Key | Type | Default | Allowed values | Meaning |
 |---|---|---|---|---|
-| `dispatch_label` | 字符串或空 | 未设置 → `ai-ready` | 任意非空字符串，且不能是交付生命周期、类型、优先级或控制标签 | 仓库策略使用的队列标签——领取时会**移除**它（Issue #2309）；见[仓库配置](/zh/workflow)。保留标签（`ai-in-progress`、`p0`、`bug`、`ai-release`、`ai-ops-only`、`ai-human-review` 等）在加载时被拒绝并点名冲突。 |
+| `dispatch_label` | 字符串或空 | 未设置 → `labels.toml` 里的 `queue` 角色 | 任意非空字符串，且不能是交付生命周期、类型、优先级或控制标签 | 仓库策略使用的队列标签——领取时会**移除**它（Issue #2309）；见[仓库配置](/zh/workflow)。保留标签（`ai-in-progress`、`p0`、`bug`、`ai-release`、`ai-ops-only`、`ai-human-review` 等）在加载时被拒绝并点名冲突。 |
 | `human_review_gate` | 布尔值 | `false` | `true \| false` | 人工验收门禁（Issue #763，仅宿主/部署侧——仓库的 `.github/orbi.toml` 不可携带）：`true` 时每个交付在 PR 打开时向 Issue 发一条验收清单（栏一：本次 run 已验证的证据——真实测试结果与覆盖层；栏二：按改动路径生成的机器验不了的最小集合——业务意图、UI 视觉与文案、外部环境、证据缺失）。栏二非空时评审轮次在任何 Pi session 之前短路：清除 `ai-in-progress` 与队列标签、**什么都不加**（等待中的票不在队列里，Issue #2309），opened-PR 标签保留作 resume 锚，槽位释放，此后每个 tick 结束时标签不变、不启动评审 session（PR 接续会先加 `ai-in-progress`，PR-opened 修复再摘掉）——等待绝不消耗评审轮次预算。人用只有人能打的 `ai-human-review` 标签确认清单，下一 tick 照常评审/合并（`--match-head-commit` 零改动）。栏二为空是目标状态：清单明写无需人工介入，交付不要求标签直接通过。默认关闭：关闭时交付/评审/merge/release 与之前逐字节一致。必须是布尔值，否则配置加载立即失败 |
 | `issue_comments_limit` | 整数 | `200` | 正整数 | 受信任评论注入上限（Issue #745，仅宿主/部署侧——仓库的 `.github/orbi.toml` 不可携带）：`{{ISSUE_COMMENTS}}` 占位符注入多少条受信任评论（作者对该仓有 write 权限——以 GitHub 报告的仓库权限为准，见 Issue #1806——或就是 runner 自己的 App：与恢复现场同一套信任判据），按时间正序、保留最新。超出上限时丢弃更早的，并在注入内容里标明省略条数——绝不静默截断。模板不含该占位符时不发起任何评论读取（#745 之前的行为）。必须是正整数，否则启动 fail fast |
 | `release_ci_wait_seconds` | 数字 | `1800` | 有限正数 | release 门禁 CI 上限（Issue #268）：release 状态机在 tick 内等待 release commit 上 pending（queued/in_progress）检查的最长时间，超时以独立原因失败——它只是 release 机的纯上限保护，绝不是交付等待机制（Issue #788 已移除交付路径的 CI 等待：pending 检查把交付顺延到下一 tick）。等待期间以 `release_waiting_ci` journal 行和进度评论更新可见；最终结论说了算。必须是有限正数，否则启动 fail fast |

@@ -70,14 +70,8 @@ from dataclasses import dataclass
 from orbi import acceptance_section, language, question
 from orbi.branch_reclaim import delete_merged_delivery_branch
 from orbi.comment_trust import comment_is_trusted
-from orbi.delivery_labels import (
-    BLOCKED_LABEL,
-    EVENT_FIX_NEEDED,
-    FIX_NEEDED_LABEL,
-    IN_PROGRESS_LABEL,
-    PR_OPENED_LABEL,
-    READY_LABEL,
-)
+from orbi.delivery_labels import EVENT_FIX_NEEDED
+from orbi import delivery_labels
 from orbi.github import (
     apply_label_patch,
     close_issue,
@@ -109,11 +103,14 @@ from orbi.ticket_command import (
 # The stage is the label the ticket carries when the answer is read: the
 # scan label of the stopped-ticket scans, or `ai-in-progress` for the
 # steering poll. Nothing else is a stage an answer is read at.
-STAGE_BLOCKED = BLOCKED_LABEL
-STAGE_PR_OPENED = PR_OPENED_LABEL
-STAGE_FIX_NEEDED = FIX_NEEDED_LABEL
-STAGE_SESSION = IN_PROGRESS_LABEL
-STAGES = (STAGE_BLOCKED, STAGE_PR_OPENED, STAGE_FIX_NEEDED, STAGE_SESSION)
+def stages() -> tuple[str, str, str, str]:
+    """The four stop stages an answer can target (Issue #2221)."""
+    return (
+        delivery_labels.BLOCKED_LABEL,
+        delivery_labels.PR_OPENED_LABEL,
+        delivery_labels.FIX_NEEDED_LABEL,
+        delivery_labels.IN_PROGRESS_LABEL,
+    )
 
 # The Issue fields the answer's one read needs.
 ISSUE_FIELDS = "number,body,labels"
@@ -228,7 +225,7 @@ def decide(
     answer whose `value` matches no option of the question is refused
     here, before any write.
     """
-    if stage not in STAGES:
+    if stage not in stages():
         raise NotExecuted(language.text(
             language_code, "answer.reason_no_stage", stage=stage or "-",
         ))
@@ -239,7 +236,7 @@ def decide(
             answered=answer.question, asked=asked.id,
         ))
     if answer.action == question.ANSWER_CANCEL:
-        if stage != STAGE_BLOCKED:
+        if stage != delivery_labels.BLOCKED_LABEL:
             raise NotExecuted(language.text(
                 language_code, "answer.reason_cancel_stage", stage=stage,
             ))
@@ -316,7 +313,7 @@ def _carried_out(
     """Refuse a close outside `ai-blocked`; everything else is taken."""
     if action in (
         question.ACTION_CLOSE_EXTERNAL_PR, question.ACTION_CLOSE_ALL,
-    ) and stage != STAGE_BLOCKED:
+    ) and stage != delivery_labels.BLOCKED_LABEL:
         raise NotExecuted(language.text(
             language_code, "answer.reason_close_stage", stage=stage,
         ))
@@ -441,10 +438,11 @@ def _answer_apply(
     argument: str, *, repo: str, issue_number: int, command_comment: dict,
     comments: list[dict] | None = None, stop: object = None,
     answer_problem: object = None,
-    answer_stage: object = None, dispatch_label: str = READY_LABEL,
+    answer_stage: object = None, dispatch_label: str | None = None,
     language_code: str = language.DEFAULT_LANGUAGE, **_context: object,
 ) -> None:
     """Carry the answer out and post its ONE receipt (idempotent)."""
+    dispatch_label = delivery_labels.queue_label(dispatch_label)
     comments = list(comments or [])
     receipt = _receipt_marker(command_comment)
     if runner_receipt(comments, receipt):
@@ -568,7 +566,7 @@ def _amend(
     lines = [language.text(
         language_code, "answer.effect_amended", text=text,
     )]
-    if stage == STAGE_BLOCKED:
+    if stage == delivery_labels.BLOCKED_LABEL:
         # A blocked Issue is not moved by the label event alone (a terminal
         # label wins over `fix_needed`), so the two labels are swapped
         # directly: with an open PR the review/fix state resumes it, and a
@@ -579,11 +577,11 @@ def _amend(
                 None, task_branch(repo, issue_number), repo=repo,
             ),
         )
-        target = FIX_NEEDED_LABEL if pull is not None else dispatch_label
+        target = delivery_labels.FIX_NEEDED_LABEL if pull is not None else dispatch_label
         run_step(
             "re-queue the ticket",
             lambda: edit_issue(
-                issue_number, repo=repo, add=target, remove=BLOCKED_LABEL,
+                issue_number, repo=repo, add=target, remove=delivery_labels.BLOCKED_LABEL,
             ),
         )
         lines.append(language.text(
@@ -597,7 +595,7 @@ def _requeue(number: int, *, repo: str, dispatch_label: str) -> None:
     run_step(
         "re-queue the ticket",
         lambda: edit_issue(
-            number, repo=repo, add=dispatch_label, remove=BLOCKED_LABEL,
+            number, repo=repo, add=dispatch_label, remove=delivery_labels.BLOCKED_LABEL,
         ),
     )
 
@@ -777,7 +775,7 @@ def pending_change(
     """
     decision = _pending(
         issue_comments(number, repo=repo), repo=repo,
-        stage=STAGE_PR_OPENED, language_code=language_code,
+        stage=delivery_labels.PR_OPENED_LABEL, language_code=language_code,
     )
     if decision is not None:
         event(
@@ -820,13 +818,14 @@ def refuse_superseded_merge(
 
 def stop_for_fix_round(
     number: int, *, repo: str, pr_number: int, reason: str, marker: str,
-    language_code: str, ready_label: str = READY_LABEL,
+    language_code: str, ready_label: str | None = None,
 ) -> None:
     """Send the delivery to a fix round: the Issue comment, then the label.
 
     The next tick's review session reads the amended ticket, which is why
     the label (not a second comment) is the last step.
     """
+    ready_label = delivery_labels.queue_label(ready_label)
     comment_issue(
         number, repo=repo,
         body=f"{marker}\n" + language.text(
@@ -881,7 +880,8 @@ def apply_steering(
             )
         return None
     resolved = resolve_answers(
-        occurrences, stop, STAGE_SESSION, language_code=language_code,
+        occurrences, stop, delivery_labels.IN_PROGRESS_LABEL,
+        language_code=language_code,
     )
     amended: str | None = None
     counting = len(resolved) - 1

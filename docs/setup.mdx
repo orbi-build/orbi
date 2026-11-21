@@ -85,8 +85,9 @@ non-zero exit code.
      `ai-awaiting-merge`, `p0`,
      `ai-epic`, `ai-release`, `ai-content-only`, `ai-ops-only`,
      `ai-human-review`, `ai-needs-detail`) are aligned **declaratively** from the deployment
-     home's `labels.toml` (`<deploy_home>/labels.toml`, Issue #330) — the
-     single source of truth for label name, color and description: a missing
+     engine's own `labels.toml` (`src/orbi/labels.toml`, package data since
+     Issue #2347) — the single source of truth for label name, color and
+     description: a missing
      label is created, a drifted label is updated, nothing is deleted, and
      business labels (`bug`, `enhancement`, ...) are never touched. In the
      external single-repo mode the labels come from the orbi checkout, never
@@ -147,8 +148,8 @@ Pi, and never modifies a protected branch.
 In the external single-repo mode (Issue #330, PR #334) the config
 separates the two checkouts: `deploy_home` is the orbi source checkout
 and `repo_dir` is the user repo X. Setup routes accordingly — steps 2
-(CLI editable install), 4 (`labels.toml`) and 5 (unit templates) act on
-`deploy_home`, while step 6 (checkout + git transport) checks
+(CLI editable install) and 5 (unit templates) act on `deploy_home`; step 4
+aligns the labels from the engine's packaged `labels.toml`, while step 6 (checkout + git transport) checks
 `repo_dir`: X's `origin` must match the configured `git_transport` for the first configured source
 repo, X's worktree must be clean, and X's base freshness is reported.
 Note that in external mode the timer's `ExecStartPre` fast-forward acts

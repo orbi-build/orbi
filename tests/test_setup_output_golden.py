@@ -240,21 +240,23 @@ def test_config_and_label_repair_messages_are_byte_identical(tmp_path):
         lambda: pilot_setup.load_label_defs(labels),
         pilot_setup.SetupError,
     ) == (
-        f"label definitions missing: {labels} (the repo-managed single "
-        "source of truth for the platform labels)"
+        f"label definitions invalid: labels.toml missing: {labels} "
+        f"(the engine's single source of the platform label names; "
+        f"reinstall the engine package)"
     )
     malformed = tmp_path / "malformed.toml"
     malformed.write_text(
-        '[[label]]\nname = "ai-ready"\ncolor = "zzz"\n'
-        'description = "dispatched"\n',
+        '[[label]]\nrole = "queue"\nname = "ai-ready"\n'
+        'color = "zzz"\ndescription = "dispatched"\n',
         encoding="utf-8",
     )
     assert _raised(
         lambda: pilot_setup.load_label_defs(malformed),
         pilot_setup.SetupError,
     ) == (
-        f"malformed labels.toml: {malformed}: label ai-ready has an "
-        "invalid color (6-character hex required): 'zzz'"
+        f"label definitions invalid: malformed labels.toml: {malformed}: "
+        f"label ai-ready has an invalid color (6-character hex required): "
+        f"'zzz'"
     )
 
 

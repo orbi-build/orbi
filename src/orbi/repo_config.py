@@ -35,8 +35,7 @@ from pathlib import PurePosixPath
 from typing import TYPE_CHECKING, Callable, cast
 
 from orbi import __version__, language, tick_reads
-from orbi.delivery_labels import (
-    LIFECYCLE_STATES, NON_LIFECYCLE_LABELS, READY_LABEL)
+from orbi import delivery_labels
 from orbi.journal import event, run_command
 
 if TYPE_CHECKING:
@@ -332,11 +331,11 @@ def _validate_value(key: str, value: object, *, source: str) -> object:
             f"{source}: {key} must be a non-empty string"
         )
     if key == "dispatch_label" and value in (
-            (LIFECYCLE_STATES | NON_LIFECYCLE_LABELS) - {READY_LABEL}):
-        # Decision D2 + #2309: the lifecycle labels stay host constants
-        # and the type/priority/control labels keep their routing; the
-        # claim REMOVES the dispatch label now, so a reserved name would
-        # be removed and re-added by the engine's own transitions.
+            (delivery_labels.LIFECYCLE_STATES | delivery_labels.NON_LIFECYCLE_LABELS) - {delivery_labels.READY_LABEL}):
+        # Issue #2309 + #2347: every role comes from labels.toml, and the
+        # queue is its only overridable role. The claim REMOVES the queue
+        # label, so a name another role owns would be removed and re-added
+        # by the engine's own transitions.
         raise RepoConfigError(
             f"{source}: dispatch_label must not be a delivery lifecycle, "
             f"type, priority or control label ({value!r})"

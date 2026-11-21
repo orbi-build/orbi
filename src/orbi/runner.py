@@ -69,33 +69,10 @@ from orbi.pi_activity import (
     format_run_scene,
     sanitize,
 )
-from orbi.delivery_labels import (
-    BLOCKED_LABEL,
-    AWAITING_MERGE_LABEL,
-    CONTENT_ONLY_LABEL,
-    EPIC_LABEL,
-    FIX_NEEDED_LABEL,
-    HUMAN_REVIEW_LABEL,
-    IN_PROGRESS_LABEL,
-    MERGED_LABEL,
-    OPS_LABEL,
-    P0_LABEL,
-    PR_OPENED_LABEL,
-    READY_LABEL,
-    RELEASE_LABEL,
-    EVENT_CLAIM,
-    EVENT_FIX_NEEDED,
-    EVENT_HUMAN_REVIEW_WAITING,
-    EVENT_REQUEUE,
-    EVENT_RELEASE_WAITING,
-    EVENT_MERGED,
-    EVENT_PR_OPENED,
-    is_resumable,
-    label_name_set,
-    label_patch,
-    needs_human_intervention,
-)
+from orbi.delivery_labels import EVENT_CLAIM, EVENT_FIX_NEEDED, EVENT_HUMAN_REVIEW_WAITING, EVENT_REQUEUE, EVENT_RELEASE_WAITING, EVENT_MERGED, EVENT_PR_OPENED, is_resumable, label_name_set, label_patch, needs_human_intervention
+from orbi import delivery_labels
 from orbi import human_review
+from orbi import labels as label_data
 from orbi.delivery_scene import (
     EXTERNAL_PR_MARKER,
     EXTERNAL_PR_RE,
@@ -337,13 +314,7 @@ WORKTREE_RECLAIM_MAX_PER_TICK = 25
 # Issue's conservative option (宁可不删，不可误删).
 # A closed Issue still wearing one of these was closed by a human while
 # a run was (or may still be) working in its scene — never reclaim such
-# a worktree.
-_WORKTREE_INFLIGHT_LABELS = frozenset({
-    IN_PROGRESS_LABEL, PR_OPENED_LABEL, FIX_NEEDED_LABEL,
-})
-# Terminal state takes precedence over stale in-flight labels when deciding
-# whether a closed Issue's unreachable worktree can be reclaimed.
-_WORKTREE_TERMINAL_LABELS = frozenset({MERGED_LABEL, BLOCKED_LABEL})
+# a worktree. Terminal state takes precedence over stale in-flight labels.
 # The task worktree name `worktree_path` derives: orbi-{slug}-issue-{N}-{run_id}.
 _WORKTREE_NAME_PATTERN = re.compile(
     r"^orbi-(?P<slug>.+)-issue-(?P<number>\d+)-(?P<run_id>[0-9a-f]{8})$",
@@ -514,11 +485,16 @@ def validate_config(config: config_domain.RunnerConfig) -> None:
         raise FileNotFoundError(repo_dir_failure(
             config.repo_dir, config.source_repos[0],
             mode=config.git_transport))
-    # The deployment home (CLI install source, unit templates,
-    # labels.toml, prompt defaults) must exist too — a missing home fails
-    # the start fast, like a missing delivery checkout.
+    # The deployment home (CLI install source, unit templates, prompt
+    # defaults) must exist too — a missing home fails the start fast, like
+    # a missing delivery checkout.
     if not config.deploy_home.is_dir():
         raise FileNotFoundError(config.deploy_home)
+    # The platform label names come from the engine's labels.toml only
+    # (Issue #2347). Reading it here binds the role -> name table this tick
+    # reads; a missing or invalid file fails the start with the reason
+    # instead of a silently missing delivery state later.
+    label_data.install(label_data.load_default())
     for path in [
         config.prompt, config.prompt_review,
         *config.skills, *config.context_files,
@@ -541,7 +517,7 @@ def validate_config(config: config_domain.RunnerConfig) -> None:
 
 
 def claim_route(labels: set[str], *, branch_exists: bool,
-                open_pr: bool, ready_label: str = READY_LABEL) -> str:
+                open_pr: bool, ready_label: str | None = None) -> str:
     """Choose the fresh-claim action from the physical GitHub scene.
 
     This is deliberately pure: labels are the event and branch/PR existence
@@ -549,9 +525,10 @@ def claim_route(labels: set[str], *, branch_exists: bool,
     returned ``review`` route. `ready_label` is the repository's dispatch
     label.
     """
+    ready_label = delivery_labels.queue_label(ready_label)
     if open_pr and ready_label in labels:
         return "review"
-    if open_pr and (PR_OPENED_LABEL in labels or FIX_NEEDED_LABEL in labels):
+    if open_pr and (delivery_labels.PR_OPENED_LABEL in labels or delivery_labels.FIX_NEEDED_LABEL in labels):
         return "review"
     # An existing branch without an open PR is resumed by implementation;
     # a missing branch is the same implementation path.
@@ -610,7 +587,7 @@ def external_takeover_pr(repo_dir: Path, body: str | None,
 
 
 def _route_external_pr_ticket(issue: dict, repo: str, *,
-                              language_code: str, ready_label: str = READY_LABEL,
+                              language_code: str, ready_label: str | None = None,
                               ) -> bool:
     """Route a marker-bearing opened-PR ticket through external
     integration instead of `ai-blocked`. Returns True when handled.
@@ -632,6 +609,7 @@ def _route_external_pr_ticket(issue: dict, repo: str, *,
     Only a probe failure falls through to the caller's block path (the
     pre-#726 behavior) — never a guess.
     """
+    ready_label = delivery_labels.queue_label(ready_label)
     number = int(issue["number"])
     body = issue.get("body")
     match = EXTERNAL_PR_RE.search(body) if isinstance(body, str) else None
@@ -851,8 +829,7 @@ def reclaim_released_worktrees(config: config_domain.RunnerConfig, *,
     repo_of_slug = {
         repo.replace("/", "-"): repo for repo in config.source_repos
     }
-    # (slug, issue number, path) per orbi-named registered worktree.
-    candidates: list[tuple[str, int, Path]] = []
+    candidates: list[tuple[str, int, Path]] = []  # (slug, issue, path)
     active = journal.active_run() or {}
     listing = run_command(
         ["git", "worktree", "list", "--porcelain"], cwd=repo_dir,
@@ -910,8 +887,8 @@ def reclaim_released_worktrees(config: config_domain.RunnerConfig, *,
         if now - closed_at < retain:
             continue
         labels = label_name_set(issue)
-        if (not labels & _WORKTREE_TERMINAL_LABELS
-                and labels & _WORKTREE_INFLIGHT_LABELS):
+        if (not labels & {delivery_labels.MERGED_LABEL, delivery_labels.BLOCKED_LABEL}
+                and labels & {delivery_labels.IN_PROGRESS_LABEL, delivery_labels.PR_OPENED_LABEL, delivery_labels.FIX_NEEDED_LABEL}):
             continue
         reclaimable.append((closed_at, path))
     reclaimable.sort(key=lambda item: item[0])
@@ -960,7 +937,7 @@ def is_content_only(issue: dict) -> bool:
     The content path dispatches ONLY on the explicit
     `ai-content-only` marker, never on derived state.
     """
-    return CONTENT_ONLY_LABEL in label_name_set(issue)
+    return delivery_labels.CONTENT_ONLY_LABEL in label_name_set(issue)
 
 
 def is_ops(issue: dict) -> bool:
@@ -972,7 +949,7 @@ def is_ops(issue: dict) -> bool:
     posted on the Issue, unless the session commits code (then the
     delivery takes the normal PR ceremony).
     """
-    return OPS_LABEL in label_name_set(issue)
+    return delivery_labels.OPS_LABEL in label_name_set(issue)
 
 
 def process_ticket_only(issue: dict, config: config_domain.RunnerConfig, source_repo: str) -> str:
@@ -995,7 +972,7 @@ def process_ticket_only(issue: dict, config: config_domain.RunnerConfig, source_
     apply_label_patch(
         number, repo=source_repo, event=EVENT_CLAIM,
         current_labels=label_name_set(issue),
-        ready_label=config.dispatch_label or READY_LABEL,
+        ready_label=delivery_labels.queue_label(config.dispatch_label),
     )
     ticket_ctx = RunContext(
         run_id=run_id, issue=number, branch="-", worktree=Path("-"),
@@ -1033,7 +1010,7 @@ def process_ticket_only(issue: dict, config: config_domain.RunnerConfig, source_
         close_issue(int(number), repo=source_repo)
         # It never enters the PR/review states: the claim label is cleared
         # directly (no `ai-merged` terminal — the Issue is closed).
-        edit_issue(number, repo=source_repo, remove=IN_PROGRESS_LABEL)
+        edit_issue(number, repo=source_repo, remove=delivery_labels.IN_PROGRESS_LABEL)
         publish(
             action=lambda: publisher.milestone(language.text(
                 language.of(config), "runner.ticket_only_milestone",
@@ -1059,7 +1036,7 @@ def process_ticket_only(issue: dict, config: config_domain.RunnerConfig, source_
     except Exception as exc:
         LOGGER.exception("issue=%s ticket-only failed", number)
         detail = failure_detail(exc)
-        ready_label = config.dispatch_label or READY_LABEL
+        ready_label = delivery_labels.queue_label(config.dispatch_label)
         try:
             post_blocked_comment(
                 number, repo=source_repo,
@@ -1069,7 +1046,7 @@ def process_ticket_only(issue: dict, config: config_domain.RunnerConfig, source_
                     status_url=config.status_url, title=issue.get("title"),
                     detail=detail, run_info=run_info.text(), run_id=run_id,
                 ),
-                current_labels={IN_PROGRESS_LABEL, ready_label},
+                current_labels={delivery_labels.IN_PROGRESS_LABEL, ready_label},
                 language_code=language.of(config), ready_label=ready_label)
             publish(
                 action=lambda: publisher.milestone(language.text(
@@ -1388,9 +1365,9 @@ def _gather_claim_facts(issue: dict, config: config_domain.RunnerConfig,
             previous_policy=previous_policy,
         )
     base_branch = config.base_branch
-    # The claim label is a delivery-policy key; the lifecycle
-    # labels stay host constants.
-    dispatch_label = (config.dispatch_label or READY_LABEL)
+    # The queue label is the one overridable role; every other role
+    # comes from the engine's labels.toml (Issue #2347).
+    dispatch_label = (delivery_labels.queue_label(config.dispatch_label))
     claim_labels = label_name_set(issue)
     stable_branch = task_branch(source_repo, number)
     in_progress = has_in_progress_label(number, source_repo)
@@ -1401,7 +1378,7 @@ def _gather_claim_facts(issue: dict, config: config_domain.RunnerConfig,
     resume_error: Exception | None = None
     if (not in_progress
             and (dispatch_label in claim_labels
-                 or FIX_NEEDED_LABEL in claim_labels)):
+                 or delivery_labels.FIX_NEEDED_LABEL in claim_labels)):
         # A scene-less fix-needed delivery selected by the resumable scan
         # reaches this same stable-branch takeover as a queued fresh claim.
         # The open PR skips implementation and a new trusted scene is written
@@ -1462,7 +1439,7 @@ def _gather_claim_facts(issue: dict, config: config_domain.RunnerConfig,
         # labels: a claim that landed in the scan window classifies as
         # RESTART_IN_FLIGHT and the handler's yield guard decides.
         labels=claim_labels
-        | ({IN_PROGRESS_LABEL} if in_progress else frozenset()),
+        | ({delivery_labels.IN_PROGRESS_LABEL} if in_progress else frozenset()),
         pr_state="OPEN" if takeover_pr is not None else None,
         body_markers=body_markers(issue.get("body")),
         ready_label=dispatch_label,
@@ -1509,7 +1486,7 @@ def _dispatch_implementation(issue: dict, source_repo: str,
     # label's absence, which the claim produces — Issue #2309), so a PR
     # that closed in the window yields instead of re-implementing the
     # branch. A later human re-open/requeue supplies a new claimable fact.
-    if (FIX_NEEDED_LABEL in facts.claim_labels
+    if (delivery_labels.FIX_NEEDED_LABEL in facts.claim_labels
             and not facts.in_progress
             and facts.takeover_pr is None):
         event(
@@ -1741,7 +1718,7 @@ def delivery_step(pr_url: str, issue: dict, config: config_domain.RunnerConfig,
                 number, source_repo, pr_url, marker, run_id,
                 language_code=language.of(config),
                 status_url=config.status_url,
-                ready_label=config.dispatch_label or READY_LABEL)
+                ready_label=delivery_labels.queue_label(config.dispatch_label))
             return
         # The current labels are read ONCE before the transition:
         # the terminal patch clears every delivery-state label that
@@ -1761,7 +1738,7 @@ def delivery_step(pr_url: str, issue: dict, config: config_domain.RunnerConfig,
         post_blocked_comment(
             number, repo=source_repo, body=body,
             current_labels=labels, language_code=language.of(config),
-            ready_label=config.dispatch_label or READY_LABEL,
+            ready_label=delivery_labels.queue_label(config.dispatch_label),
         )
         if run_id:
             # The blocked-scene progress publishing is
@@ -2250,7 +2227,7 @@ def main(argv: list[str] | None = None) -> int:
                 int(issue["number"]), source_repo, exc, run_id,
                 language_code=language.of(config),
                 status_url=config.status_url,
-                ready_label=config.dispatch_label or READY_LABEL,
+                ready_label=delivery_labels.queue_label(config.dispatch_label),
                 current_labels=label_name_set(issue),
             )
             return 0

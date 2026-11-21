@@ -8,5 +8,6 @@ re-export the `failure_evidence` split used (Issue #2202).
 """
 from __future__ import annotations
 
-from orbi.delivery_labels import EVENT_BLOCKED, READY_LABEL  # noqa: F401
+from orbi.delivery_labels import EVENT_BLOCKED
+from orbi import delivery_labels
 from orbi.stop_comment import post_blocked_comment as post_blocked_comment

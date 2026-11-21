@@ -60,7 +60,8 @@ from orbi.comment_kind import (
     # `answer.py` reads this pattern through this module.
     versioned_block_pattern,
 )
-from orbi.delivery_labels import EVENT_FIX_NEEDED, EVENT_REQUEUE, READY_LABEL
+from orbi.delivery_labels import EVENT_FIX_NEEDED, EVENT_REQUEUE
+from orbi import delivery_labels
 from orbi.github import (
     apply_label_patch, comment_issue, issue_comments, issue_labels,
 )
@@ -706,7 +707,7 @@ def amended_body(body: object, criterion: str, language_code: str,
 def report_once(stop: StopQuestion | None, *, issue: dict, source_repo: str,
                 run_id: str, language_code: str, status_url: str | None,
                 pr_url: str | None, current_labels,
-                ready_label: str = READY_LABEL) -> str | None:
+                ready_label: str | None = None) -> str | None:
     """Answer the stop once, or return None to keep the terminal report.
 
     The counter is the 'requeued' comment every automatic resume writes
@@ -719,6 +720,7 @@ def report_once(stop: StopQuestion | None, *, issue: dict, source_repo: str,
     The order is the ticket's: the criterion lands in the body the next
     session reads FIRST, the counter comment second, the queue label last.
     """
+    ready_label = delivery_labels.queue_label(ready_label)
     option = takeable_option(stop)
     if option is None:
         return None

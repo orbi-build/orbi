@@ -34,7 +34,8 @@ tick's bypass log — the person who replied would see no receipt at all.
 from __future__ import annotations
 
 from orbi import clarify, language
-from orbi.delivery_labels import NEEDS_DETAIL_LABEL, READY_LABEL, label_names
+from orbi.delivery_labels import label_names
+from orbi import delivery_labels
 from orbi.github import comment_issue, edit_issue, issue_view
 # The child-ticket engine moved to its own module (Issue #2207) because this one
 # sits at its recorded size ceiling (tools/size_ratchet.py); its names stay
@@ -116,7 +117,7 @@ def _split_validate(
 def _split_apply(
     argument: str, *, repo: str, issue_number: int, command_comment: dict,
     comments: list[dict], issue: dict, suggestion: object,
-    dispatch_label: str = READY_LABEL,
+    dispatch_label: str | None = None,
     language_code: str = language.DEFAULT_LANGUAGE, **_context: object,
 ) -> None:
     """Do the three command steps: apply, receipt, drop the scan label.
@@ -125,6 +126,7 @@ def _split_apply(
     here is the receipt keyed on the comment a person replied with, and the scan
     label removed LAST.
     """
+    dispatch_label = delivery_labels.queue_label(dispatch_label)
     if not isinstance(suggestion, clarify.Suggestion):
         raise TicketCommandError(
             "find or open the child",
@@ -147,8 +149,8 @@ def _split_apply(
     # the command again and finishes whatever is still missing. A failure
     # here is not wrapped in a step receipt — the split itself succeeded,
     # and a "failed" receipt beside the success would read as a second run.
-    if NEEDS_DETAIL_LABEL in label_names(issue):
-        edit_issue(issue_number, repo=repo, remove=NEEDS_DETAIL_LABEL)
+    if delivery_labels.NEEDS_DETAIL_LABEL in label_names(issue):
+        edit_issue(issue_number, repo=repo, remove=delivery_labels.NEEDS_DETAIL_LABEL)
 
 
 SPLIT_COMMAND = CommandSpec(

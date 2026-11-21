@@ -28,9 +28,9 @@ from orbi import (
     suggest,
     ticket_command_registry,
 )
+from orbi import delivery_labels
 from orbi.cli_doctor import doctor_report
 from orbi.cli_ticket_command import command_ticket_command
-from orbi.delivery_labels import READY_LABEL
 from orbi.milestone_command import MilestoneSetError, milestone_set
 from orbi.runner import freeze_base, run_command
 from orbi.session_command import command_session
@@ -108,14 +108,14 @@ def create_issue(repo: str, title: str, body: str, *,
 
 
 def dispatch_issue(repo: str, title: str, body: str, *,
-                   label: str = READY_LABEL,
+                   label: str | None = None,
                    milestone: str | None = None) -> str:
     """Create an English-first Issue, file it and mark it `label`.
 
-    The ONE Issue-creation path (Article 4.2): `orbi add` uses the
-    default `ai-ready`, `orbi suggest` passes the repository's resolved
-    `dispatch_label` and its optional open Milestone.
+    The ONE Issue-creation path (Article 4.2): `orbi add` uses the queue
+    role from `labels.toml`, `orbi suggest` the resolved `dispatch_label`.
     """
+    label = delivery_labels.queue_label(label)
     url = create_issue(repo, title, body or DEFAULT_ISSUE_BODY,
                        milestone=milestone)
     run_command([
@@ -186,7 +186,7 @@ def command_add(config: config_domain.RunnerConfig, args, parser) -> int:
     LOGGER.info("dispatch repo=%s title=%s", repo, args.title)
     url = dispatch_issue(repo, args.title, args.body)
     print(f"created: {url}")
-    print(f"label: {READY_LABEL}")
+    print(f"label: {delivery_labels.READY_LABEL}")
     return 0
 
 

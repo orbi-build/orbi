@@ -21,6 +21,7 @@ import pytest
 import dataclasses
 
 import orbi.runner as runner
+from orbi import labels as label_data
 from orbi import pilot_setup, setup_checks, setup_config
 from orbi import systemd_deploy
 
@@ -68,31 +69,31 @@ def _cli_source_world(monkeypatch, tmp_path):
 
 
 VALID_DEFS = [
-    {"name": "ai-ready", "color": "1d76db", "description": "dispatched"},
-    {"name": "ai-in-progress", "color": "fbca04", "description": "work"},
-    {"name": "ai-pr-opened", "color": "0e8a16", "description": "pr"},
-    {"name": "ai-fix-needed", "color": "fbca04", "description": "fix"},
-    {"name": "ai-merged", "color": "0e8a16", "description": "merged"},
-    {"name": "ai-blocked", "color": "d73a4a", "description": "blocked"},
-    {"name": "ai-awaiting-merge", "color": "5319e7", "description": "awaiting merge"},
-    {"name": "p0", "color": "fbca04", "description": "urgent"},
+    {"role": "queue", "name": "ai-ready", "color": "1d76db", "description": "dispatched"},
+    {"role": "in_progress", "name": "ai-in-progress", "color": "fbca04", "description": "work"},
+    {"role": "pr_opened", "name": "ai-pr-opened", "color": "0e8a16", "description": "pr"},
+    {"role": "fix_needed", "name": "ai-fix-needed", "color": "fbca04", "description": "fix"},
+    {"role": "merged", "name": "ai-merged", "color": "0e8a16", "description": "merged"},
+    {"role": "blocked", "name": "ai-blocked", "color": "d73a4a", "description": "blocked"},
+    {"role": "awaiting_merge", "name": "ai-awaiting-merge", "color": "5319e7", "description": "awaiting merge"},
+    {"role": "priority", "name": "p0", "color": "fbca04", "description": "urgent"},
     # Issue #93: the Epic marker is platform state (the claim scan
     # skips `ai-epic`), so it is part of the platform label set.
-    {"name": "ai-epic", "color": "bfdadc", "description": "epic"},
+    {"role": "epic", "name": "ai-epic", "color": "bfdadc", "description": "epic"},
     # Issue #98: the Release task marker is platform state (the ready
     # scan routes `ai-ready`+`ai-release` to the release state machine),
     # so it is part of the platform label set.
-    {"name": "ai-release", "color": "5319e7", "description": "release"},
+    {"role": "release", "name": "ai-release", "color": "5319e7", "description": "release"},
     # Issue #209/#537: ticket-only content is a separately dispatched
     # type; the content marker moved off the ops name to its own label.
-    {"name": "ai-content-only", "color": "d4c5f9", "description": "content"},
-    {"name": "ai-ops-only", "color": "0e8a16", "description": "ops"},
+    {"role": "content_only", "name": "ai-content-only", "color": "d4c5f9", "description": "content"},
+    {"role": "ops_only", "name": "ai-ops-only", "color": "0e8a16", "description": "ops"},
     # Issue #763: the human acceptance gate — a human-only label the
     # Runner never touches; setup provisions it so the gate is ready.
-    {"name": "ai-human-review", "color": "d93f0b", "description": "human"},
+    {"role": "human_review", "name": "ai-human-review", "color": "d93f0b", "description": "human"},
     # Issue #1088: the thin-ticket clarification gate's waiting state —
     # the Runner swaps `ai-ready` for it when the ticket is too thin.
-    {"name": "ai-needs-detail", "color": "fbca04", "description": "detail"},
+    {"role": "needs_detail", "name": "ai-needs-detail", "color": "fbca04", "description": "detail"},
 ]
 
 
@@ -100,9 +101,12 @@ def write_labels_toml(tmp_path: Path, defs: list[dict]) -> Path:
     lines = []
     for entry in defs:
         lines.append("[[label]]")
-        for key in ("name", "color", "description"):
+        for key in ("role", "name", "color", "description"):
             lines.append(f'{key} = "{entry[key]}"')
         lines.append("")
+    lines.append("[reserved]")
+    lines.append('bug = "bug"')
+    lines.append("")
     path = tmp_path / "labels.toml"
     path.write_text("\n".join(lines), encoding="utf-8")
     return path
@@ -258,7 +262,7 @@ def test_fake_run_factory_rejects_an_unexpected_command():
 
 def test_awaiting_merge_label_matches_resumable_workflow_direction():
     labels = tomllib.loads(
-        (Path(__file__).resolve().parent.parent / "labels.toml").read_text(
+        (Path(__file__).resolve().parent.parent / "src" / "orbi" / "labels.toml").read_text(
             encoding="utf-8",
         ),
     )["label"]
@@ -298,23 +302,35 @@ def test_load_label_defs_parses_all_platform_labels(tmp_path):
 
 
 def test_load_label_defs_rejects_a_missing_platform_label(tmp_path):
-    defs = [entry for entry in VALID_DEFS if entry["name"] != "p0"]
+    """Issue #2347: every role appears exactly once; a missing role is a
+    fail-fast error naming it, so no delivery state silently disappears."""
+    defs = [entry for entry in VALID_DEFS if entry["role"] != "priority"]
     path = write_labels_toml(tmp_path, defs)
-    with pytest.raises(pilot_setup.SetupError, match="p0"):
+    with pytest.raises(pilot_setup.SetupError, match="priority"):
         pilot_setup.load_label_defs(path)
 
 
-def test_load_label_defs_rejects_an_unknown_label(tmp_path):
+def test_load_label_defs_rejects_an_unknown_role(tmp_path):
     defs = VALID_DEFS + [
-        {"name": "ai-unknown", "color": "bfdadc", "description": "x"},
+        {"role": "ai-unknown", "name": "ai-unknown", "color": "bfdadc",
+         "description": "x"},
     ]
     path = write_labels_toml(tmp_path, defs)
-    with pytest.raises(pilot_setup.SetupError, match="ai-unknown"):
+    with pytest.raises(pilot_setup.SetupError, match="unknown label role"):
+        pilot_setup.load_label_defs(path)
+
+
+def test_load_label_defs_rejects_a_missing_queue_role(tmp_path):
+    """The queue role is required: without it nothing is claimable."""
+    defs = [entry for entry in VALID_DEFS if entry["role"] != "queue"]
+    path = write_labels_toml(tmp_path, defs)
+    with pytest.raises(pilot_setup.SetupError, match="missing label roles"):
         pilot_setup.load_label_defs(path)
 
 
 def test_load_label_defs_rejects_duplicate_names(tmp_path):
-    defs = VALID_DEFS + [dict(VALID_DEFS[0])]
+    defs = [dict(entry) for entry in VALID_DEFS]
+    defs[1]["name"] = defs[0]["name"]
     path = write_labels_toml(tmp_path, defs)
     with pytest.raises(pilot_setup.SetupError, match="duplicate"):
         pilot_setup.load_label_defs(path)
@@ -349,13 +365,12 @@ def test_load_label_defs_rejects_malformed_toml(tmp_path):
 
 
 def test_committed_labels_toml_covers_every_platform_label():
-    """The committed labels.toml (repo root) must define exactly the
-    platform labels with valid colors and non-empty descriptions."""
-    path = Path(__file__).resolve().parent.parent / "labels.toml"
+    """The packaged labels.toml defines exactly the platform roles, once
+    each (Issue #2347), with valid colors and non-empty descriptions."""
+    path = Path(__file__).resolve().parent.parent / "src" / "orbi" / "labels.toml"
     defs = pilot_setup.load_label_defs(path)
-    assert [entry["name"] for entry in defs] == list(
-        setup_config.REQUIRED_LABELS,
-    )
+    assert len(defs) == len(label_data.PLATFORM_ROLES)
+    assert len({entry["name"] for entry in defs}) == len(defs)
 
 
 def test_committed_labels_toml_descriptions_fit_the_github_limit():
@@ -363,7 +378,7 @@ def test_committed_labels_toml_descriptions_fit_the_github_limit():
     to GitHub, and the real GitHub API rejects a description longer than
     100 characters (`gh label edit` → HTTP 422 "description is too long"
     on the live repos). A longer description would fail every setup run."""
-    path = Path(__file__).resolve().parent.parent / "labels.toml"
+    path = Path(__file__).resolve().parent.parent / "src" / "orbi" / "labels.toml"
     for entry in pilot_setup.load_label_defs(path):
         assert len(entry["description"]) <= 100, entry["name"]
 
@@ -374,7 +389,7 @@ def test_committed_labels_toml_points_at_the_real_setup_entry():
     entry, never the phantom `orbi.py` (the checkout root deliberately
     carries no such file; a flat file named like the package would shadow
     the installed package, Issue #168)."""
-    path = Path(__file__).resolve().parent.parent / "labels.toml"
+    path = Path(__file__).resolve().parent.parent / "src" / "orbi" / "labels.toml"
     text = path.read_text(encoding="utf-8")
     assert "orbi.py" not in text, (
         "labels.toml references the non-existent `orbi.py` entry "
@@ -1834,15 +1849,15 @@ def test_run_setup_fails_fast_when_ssh_is_unreachable(tmp_path):
     assert [c for c in calls if c[:3] == ["git", "remote", "set-url"]] == []
 
 
-def test_run_setup_missing_labels_file_fails_fast(tmp_path):
-    repo = make_repo(tmp_path)
-    (repo / "labels.toml").unlink()
-    config = config_domain.load_config(make_config(tmp_path, repo))
-    with pytest.raises(pilot_setup.SetupError, match="labels.toml"):
-        pilot_setup.run_setup(
-            config, tmp_path / "units",
-            run_command=lambda command, **kwargs: "",
-        )
+def test_run_setup_reads_the_engine_packaged_label_definitions():
+    """Issue #2347: `orbi setup` aligns from the engine's own labels.toml,
+    the same data the Runner reads at start — never a deployment copy."""
+    path = pilot_setup.label_data.default_path()
+    assert path.is_file()
+    defs = pilot_setup.load_label_defs(path)
+    assert [entry["name"] for entry in defs] == [
+        entry["name"] for entry in VALID_DEFS
+    ]
 
 
 # --- output rendering -----------------------------------------------------------
@@ -2018,12 +2033,14 @@ def test_load_label_defs_rejects_a_non_table_entry(tmp_path):
 def test_load_label_defs_rejects_an_entry_without_a_name(tmp_path):
     path = tmp_path / "labels.toml"
     path.write_text(
-        "[[label]]\ncolor = \"1d76db\"\ndescription = \"x\"\n"
+        "[[label]]\nrole = \"queue\"\ncolor = \"1d76db\"\n"
+        "description = \"x\"\n"
         + "\n".join(
-            f'[[label]]\nname = "{e["name"]}"\ncolor = "{e["color"]}"\n'
-            f'description = "{e["description"]}"'
+            f'[[label]]\nrole = \"{e["role"]}\"\nname = \"{e["name"]}\"\n'
+            f'color = \"{e["color"]}\"\ndescription = \"{e["description"]}\"'
             for e in VALID_DEFS[1:]
-        ),
+        )
+        + "\n[reserved]\nbug = \"bug\"\n",
         encoding="utf-8",
     )
     with pytest.raises(pilot_setup.SetupError, match="no non-empty name"):
@@ -2119,9 +2136,10 @@ def test_run_setup_rejects_an_empty_repo_list(tmp_path):
 
 
 def test_run_setup_routes_home_files_to_deploy_home(tmp_path, monkeypatch):
-    """Issue #330: with deploy_home set, labels.toml, the CLI editable
-    install and the unit templates come from the deployment home; the
-    delivery checkout (repo_dir) is only the transport-checked repo."""
+    """Issue #330: with deploy_home set, the CLI editable install and the
+    unit templates come from the deployment home; the delivery checkout
+    (repo_dir) is only the transport-checked repo. Issue #2347: the label
+    definitions always come from the engine package."""
     repo, installed, state = make_run_state(tmp_path)
     fake_run, calls = fake_run_factory(state)
     home = tmp_path / "home"
@@ -2167,7 +2185,7 @@ def test_run_setup_routes_home_files_to_deploy_home(tmp_path, monkeypatch):
 
     result = pilot_setup.run_setup(config, installed, run_command=fake_run)
     assert result["setup"] == "ok"
-    assert seen["labels"] == home / "labels.toml"
+    assert seen["labels"] == pilot_setup.label_data.default_path()
     assert seen["cli"] == home
     assert seen["units"] == home
     # The delivery checkout stays the transport-checked repo.

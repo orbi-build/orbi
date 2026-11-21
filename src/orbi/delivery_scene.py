@@ -23,20 +23,7 @@ from enum import Enum
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from orbi.delivery_labels import (
-    AWAITING_MERGE_LABEL,
-    BLOCKED_LABEL,
-    CONTENT_ONLY_LABEL,
-    EPIC_LABEL,
-    FIX_NEEDED_LABEL,
-    HUMAN_REVIEW_LABEL,
-    IN_PROGRESS_LABEL,
-    MERGED_LABEL,
-    OPS_LABEL,
-    PR_OPENED_LABEL,
-    READY_LABEL,
-    RELEASE_LABEL,
-)
+from orbi import delivery_labels
 
 if TYPE_CHECKING:
     # Annotation-only: the runner imports this module's scene
@@ -88,7 +75,7 @@ def body_markers(body: object) -> frozenset[str]:
 
 
 def classify(
-    labels, scene, pr_state, body_markers, *, ready_label: str = READY_LABEL,
+    labels, scene, pr_state, body_markers, *, ready_label: str | None = None,
     human_review_hold: bool = False,
 ) -> DeliveryScene:
     """Classify one delivery scene from the gathered facts (pure).
@@ -131,25 +118,26 @@ def classify(
     7. the claim label → FRESH_CLAIM;
     8. anything else → NOT_CLAIMABLE.
     """
+    ready_label = delivery_labels.queue_label(ready_label)
     current = frozenset(labels)
     markers = frozenset(body_markers)
     opened_pr = bool(current & {
-        PR_OPENED_LABEL, FIX_NEEDED_LABEL, AWAITING_MERGE_LABEL,
+        delivery_labels.PR_OPENED_LABEL, delivery_labels.FIX_NEEDED_LABEL, delivery_labels.AWAITING_MERGE_LABEL,
     })
 
-    if BLOCKED_LABEL in current:
+    if delivery_labels.BLOCKED_LABEL in current:
         return DeliveryScene.BLOCKED
-    if MERGED_LABEL in current or EPIC_LABEL in current:
+    if delivery_labels.MERGED_LABEL in current or delivery_labels.EPIC_LABEL in current:
         return DeliveryScene.NOT_CLAIMABLE
-    if RELEASE_LABEL in current:
+    if delivery_labels.RELEASE_LABEL in current:
         return DeliveryScene.RELEASE
-    if CONTENT_ONLY_LABEL in current:
+    if delivery_labels.CONTENT_ONLY_LABEL in current:
         return DeliveryScene.CONTENT_ONLY
-    if OPS_LABEL in current:
+    if delivery_labels.OPS_LABEL in current:
         return DeliveryScene.OPS
     if opened_pr:
         if scene is not None:
-            if human_review_hold and HUMAN_REVIEW_LABEL not in current:
+            if human_review_hold and delivery_labels.HUMAN_REVIEW_LABEL not in current:
                 return DeliveryScene.HUMAN_REVIEW_WAIT
             return DeliveryScene.RESUME_REVIEW
         # No trusted scene: the review cannot be resumed, but two
@@ -160,14 +148,14 @@ def classify(
         # label. If the delivery then needs a fix and its PR is still open,
         # the PR is the surviving continuation route even when the trusted
         # scene comment was lost.
-        if FIX_NEEDED_LABEL in current and pr_state == "OPEN":
+        if delivery_labels.FIX_NEEDED_LABEL in current and pr_state == "OPEN":
             return DeliveryScene.FRESH_CLAIM
         if ready_label in current and pr_state == "OPEN":
             return DeliveryScene.FRESH_CLAIM
         return DeliveryScene.NOT_CLAIMABLE
     if EXTERNAL_PR_MARKER in markers and pr_state == "OPEN":
         return DeliveryScene.EXTERNAL_TAKEOVER
-    if IN_PROGRESS_LABEL in current:
+    if delivery_labels.IN_PROGRESS_LABEL in current:
         return DeliveryScene.RESTART_IN_FLIGHT
     if ready_label in current:
         return DeliveryScene.FRESH_CLAIM
@@ -208,13 +196,15 @@ class DeliveryFacts:
     scene: object = None
     pr_state: str | None = None
     body_markers: frozenset[str] = frozenset()
-    ready_label: str = READY_LABEL
+    ready_label: str = dataclasses.field(
+        default_factory=lambda: delivery_labels.READY_LABEL)
     # Handler facts.
     config: "RunnerConfig | None" = None
     repo_policy: "RepoPolicy | None" = None
     run_id: str = ""
     base_branch: str = ""
-    dispatch_label: str = READY_LABEL
+    dispatch_label: str = dataclasses.field(
+        default_factory=lambda: delivery_labels.READY_LABEL)
     claim_labels: frozenset[str] = frozenset()
     in_progress: bool = False
     stable_branch: str = ""
