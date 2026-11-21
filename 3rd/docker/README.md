@@ -167,8 +167,12 @@ The delivery vocabulary in one place; the full reference lives in the
   `ai-fix-needed` (the next review round fixes the finding); `ai-blocked`
   (terminal) needs a human decision. `ai-epic` marks a coordination-only
   Issue the runner never claims, and `ai-release` marks a release task
-  (below). The runner manages the delivery states; `ai-ready`, `ai-epic`,
-  `ai-release`, `p0` and `bug` are yours to add and remove.
+  (below). The runner manages the delivery states; `ai-epic`,
+  `ai-release`, `p0` and `bug` are yours to add and remove. You add
+  `ai-ready` to queue an Issue; the claim REMOVES it in the same write that
+  adds `ai-in-progress`, so `ai-ready` lists only work that has not started
+  (Issue #2309). To stop a delivery, see
+  [Stopping a delivery](https://docs.orbi.build/workflow#stopping-a-delivery).
 - **Watching** — the run keeps exactly one progress comment on the
   Issue, updated in place at every milestone, and the tick log streams
   through the `journalctl` command above.
