@@ -43,15 +43,14 @@ flowchart LR
   fixneeded -->|下一 tick：同一 run、branch、worktree、PR 的下一个审查会话| opened
   fixneeded -->|不可恢复前置条件（Issue #50）| blocked
   progress -->|fail fast（PR 尚未存在）| blocked
-  ready -->|薄票检查，在任何工作之前（clarify_thin_tickets）| needsdetail["ai-needs-detail"]
-  needsdetail -.->|有人补齐信息并重新加回队列标签| ready
-  needsdetail -->|/orbi amend，或 orbi draft 写进这张票：补上内容并重新排队| ready
+  ready -->|薄票检查：开工前停下| needsdetail["ai-needs-detail"]
+  needsdetail -->|重新排队：有人补齐信息，或 /orbi amend、orbi draft| ready
   needsdetail -->|/orbi split：子票排队，本票成为 Epic| epic
-  release -->|空闲 tick 给当前里程碑的发版票加上队列标签| ready
-  progress -->|PR 开出前第一次 GitHub 临时错误：自动重新排队一次（Issue #2202）| ready
-  progress -->|发版任务等待未完成的交付：加回队列标签、释放执行位| ready
-  progress -.->|有人关掉 Issue，或在 Runner 被杀后摘掉 ai-in-progress| stopped["被人停下<br/>（见「停下交付」一节）"]
-  opened -.->|有人关掉 Issue| stopped
+  progress -->|PR 开出前遇到 GitHub 临时错误：自动重新排队一次| ready
+  progress -->|发版任务等待未完成的交付| ready
+  progress -.->|关掉 Issue，或 Runner 被杀后摘掉 ai-in-progress| stopped["被人停下<br/>（见「停下交付」一节）"]
+  opened -.-> stopped
+  release -->|空闲 tick 给当前里程碑的发版票排队| ready
 ```
 
 ```text
