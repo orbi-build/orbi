@@ -28,9 +28,9 @@ Orbi 会领取符合条件的 Issue，在 worktree 中实现，开 PR，独立�
 ```mermaid
 flowchart LR
   epic["Epic（ai-epic）— 只协调，从不被领取"]
-  epic -.拆分为.-> ready
+  epic -.->|"拆分为"| ready
   release["Release task（ai-ready + ai-release）<br/>— Runner release 状态机，从不进 run_pi"]
-  release -.像普通任务领取.-> ready
+  release -.->|"像普通任务领取"| ready
   ready["ai-ready<br/>（领取顺序：P0 标签最先，然后 bug 标签，最后普通）"]
   ready -->|领取：移除队列标签 + 建 worktree + 启动 Pi| progress["ai-in-progress"]
   progress -->|PR 验收：base 新鲜、run marker、Fixes #N| opened["ai-pr-opened"]
