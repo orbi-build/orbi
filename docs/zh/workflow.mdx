@@ -43,7 +43,7 @@ flowchart LR
   fixneeded -->|下一 tick：同一 run、branch、worktree、PR 的下一个审查会话| opened
   fixneeded -->|不可恢复前置条件（Issue #50）| blocked
   progress -->|fail fast（PR 尚未存在）| blocked
-  ready -->|薄票检查：开工前停下| needsdetail["ai-needs-detail"]
+  ready --> needsdetail["ai-needs-detail<br/>（薄票检查：开工前停下）"]
   needsdetail -->|重新排队：有人补齐信息，或 /orbi amend、orbi draft| ready
   needsdetail -->|/orbi split：子票排队，本票成为 Epic| epic
   progress -->|PR 开出前遇到 GitHub 临时错误：自动重新排队一次| ready

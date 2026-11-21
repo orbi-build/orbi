@@ -43,7 +43,7 @@ flowchart LR
   fixneeded -->|next tick: next review session on the SAME run, branch, worktree, PR| opened
   fixneeded -->|"unrecoverable precondition (Issue #50)"| blocked
   progress -->|"fail fast (no PR yet)"| blocked
-  ready -->|"thin-ticket gate: stopped before any work"| needsdetail["ai-needs-detail"]
+  ready --> needsdetail["ai-needs-detail<br/>(thin-ticket gate: stopped before any work)"]
   needsdetail -->|"re-queued: detail added by a person, /orbi amend or orbi draft"| ready
   needsdetail -->|"/orbi split: children queued, this one becomes the Epic"| epic
   progress -->|"transient GitHub failure before a PR: re-queued once"| ready
