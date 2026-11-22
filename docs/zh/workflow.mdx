@@ -215,9 +215,9 @@ branch、base、head、精确 URL 校验全部保留，#45/#89 的防串 PR 语�
   领取；`ai-blocked` 通常等待人处理；v0.7.15 的
   [`base_ci_red` 恢复](#交付因基础分支已红而暂停base_ci_red)与 v0.7.18 起的
   [`checks_permission_missing` 恢复](#交付因-app-权限未批准而暂停checks_permission_missing)
-  是明确的例外。携带回填的 `ai-in-progress` 标签的
-  交付仍会被拾取（Issue #178：review 中被杀的 Runner 会留下该标签——
-  正向的 opened-PR 限定已保证 implement 阶段的 Issue 不会匹配该扫描）。
+  是明确的例外。仍带着 `ai-in-progress` 的交付
+  （旧版本 Runner 在 review 中被杀时留下的）仍会被拾取——正向的 opened-PR
+  限定已保证 implement 阶段的 Issue 不会匹配该扫描。
 - `ai-awaiting-merge` 是等维护者的等待态，因此永不与 Runner 能推进的工作
   抢 tick（Issue #1745）：只有在 opened-PR 评审、in-flight 接续和 ready
   领取三个扫描本 tick 都无结果时，才用同一条 merge-only 路径重试一次。
@@ -355,10 +355,10 @@ GitHub 标签是外部状态机。它们不是 commit 创建的——每个仓�
 | 标签 | 含义 |
 |---|---|
 | `ai-ready` | 队列：已派发给 Orbi 且**尚未开始**。领取时在同一次写入里移除它并加上 `ai-in-progress`，此后每个非终态阶段事件也会移除它（Issue #2309），所以 `is:open label:ai-ready` 只列出还没开始的工作 |
-| `ai-in-progress` | 已领取、正在执行。resume opened-PR 交付时 Runner 先幂等回填该标签再继续（Issue #178）；被杀后的残留由下一 tick 接回（前提是本部署仍持有该任务 worktree 与 run state 文件；不是本部署启动的 Issue 属于另一个部署，会被跳过，Issue #2256）。实现阶段的运行只靠这个标签被找到（Issue #2309） |
+| `ai-in-progress` | 已领取、正在执行。接续 opened-PR 交付时不再加回该标签：opened-PR 标签保留，从 `ai-fix-needed` 接续的轮次最后只剩 `ai-pr-opened`（Issue #2357）；被杀后的残留由下一 tick 接回（前提是本部署仍持有该任务 worktree 与 run state 文件；不是本部署启动的 Issue 属于另一个部署，会被跳过，Issue #2256）。实现阶段的运行只靠这个标签被找到（Issue #2309） |
 | `ai-pr-opened` | PR 已创建并验收；等待独立审查 |
 | `ai-fix-needed` | PR head 尚不可合并，或已有 run/PR 的可恢复失败（Issue #50）；下一 tick 在同一 run、branch、worktree、PR 上继续 |
-| `ai-merged` | 成功终态；Runner 已合并 PR 并确认 merge commit 落在保护分支。合并同时清除 `ai-ready` 残留，因此合并后的 Issue 只剩 `ai-merged`（Issue #1526；不回溯已合并的 Issue） |
+| `ai-merged` | 成功终态；Runner 已合并 PR 并确认 merge commit 落在保护分支。合并同时清除 `ai-ready` 残留，因此合并后的 Issue 只剩 `ai-merged`（Issue #1526；不回溯已合并的 Issue）。旧的状态标签先摘掉再加 `ai-merged`，所以它是 Issue 上最后一个标签事件；加失败时会把摘掉的标签加回去（Issue #2357） |
 | `ai-awaiting-merge` | 评审和检查已通过，但已知仓库策略仍阻塞合并；评论写明维护者动作。只在队列无事可做的 tick 重试（Issue #1745），随后由 Orbi 合并指定 PR head |
 | `ai-blocked` | 交付已停下且无法自动恢复：AI 无法安全判断或修复的外部前置条件（Issue #50），或动作为 `fix_ticket`、`decide` 的失败（如 `no_commit_delivered`、`release_failed`、`review_budget_exhausted`，见下文「失败记录」一节的原因表）。blocked comment 写明原因和动作；人工必须决定下一步 |
 | `ai-human-review` | 人工验收门禁（Issue #763）：人已确认该交付的验收清单。只有人能打或摘——Runner 永不增删 |
@@ -422,8 +422,7 @@ host 配置打开门禁（`orbi.toml` 里 `human_review_gate = true`——这是
 栏二非空时它就是门禁：评审轮次在任何 Pi session 之前短路——清除
 `ai-in-progress` 与队列标签，**什么都不加**（等待中的票不在队列里，
 Issue #2309），opened-PR 标签保留作 resume 锚，槽位释放，此后每个 tick
-结束时标签不变、也不启动评审 session（同一 tick 里 PR 接续仍会先加
-`ai-in-progress`，PR-opened 修复再把它摘掉）。等待**不消耗**评审轮次预算，也**不碰**
+结束时标签不变、不写任何标签，也不启动评审 session。等待**不消耗**评审轮次预算，也**不碰**
 `ai-fix-needed`。
 人确认清单后打 `ai-human-review`，下一 tick 照常评审与合并（verdict 绑定
 与 `--match-head-commit` 零改动）。
@@ -631,7 +630,8 @@ provider 账户充值（或改用有余额的 key）后重新加标签；`wait_q
 重置后重试。人类可读的标题、`**Reason:**` 与 `**Action:**` 行与 block 并列：
 标题和 Action 由同一个函数（`orbi.failure_stop.stop_wording`）根据记录一起
 决定，所以只有 `decide` 的停止才说"等待人工决定"——没有提交的停止会说明本次
-运行没有产生提交、Issue 需要修改；无法确定原因的停止会直接说明原因未知，而不会
+运行没有产生提交、Issue 需要修改；没有改动文件的停止会说明本次运行没有改动任何文件，
+会话判断已经满足时直接关票即可（Issue #2358）；无法确定原因的停止会直接说明原因未知，而不会
 把问题归到 Issue 正文（Issue #1651），配置的基础分支不存在时也会直接说明
 （Issue #1749）；终态进度评论也会重复同一句标题。会话自己
 最后的说明会作为独立的一段（最多 4000 字符，并像所有评论文字一样脱敏）出现在
@@ -825,7 +825,7 @@ Epic 或父 Issue 做协调，把每个阶段拆成子 Issue；每张子票各�
   来源是 GitHub 原生 `sub-issues` 关系：所有子 Issue 必须 CLOSED（或其
   PR 已 merged），且没有 open 的原生 `blockedBy`。正文中的引用（包括
   `Children`/`Child Issues` 段落）不构成声明。没有 sub-issues 或子票、依赖
-  状态畸形时 fail-closed；Runner 每个 tick 重试并留下幂等审计评论。随后
+  状态畸形时 fail-closed；Runner 每个 tick 重试并留下幂等审计评论。评论逐项写明每张子票怎么结束的（由 Orbi 合并、在 ai-blocked 状态下关闭、由人关闭并标记为已完成或未计划）；只有所有子票都由 Orbi 交付，才写 Epic 已完成。没有一张由 Orbi 交付、也没有一张被人标记为已完成时，Epic 以「未计划」关闭（Issue #2356）。随后
   同一个 tick reconcile open Milestone：title 精确匹配的已发布 Release
   （draft 不算）且当前没有 open Issue 才关闭，其余情况保持 open。最后
   同一个 tick 还会扫一遍 open PR（Issue #746）：head 为稳定交付命名
