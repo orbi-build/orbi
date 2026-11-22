@@ -47,7 +47,7 @@ description: "使用者可以依赖什么，status 与进度文档又如何报�
 两条不变量，违反任一条都会让启动失败并点名问题（文件缺失、TOML 损坏、未知角色、角色重复、缺少 `queue` 角色、颜色非法、描述为空）：
 
 1. **每个平台角色恰好出现一次，且恰好一个 `queue` 角色。** 任何角色都不再由代码里的默认值隐含。
-2. **只有 queue 角色可覆盖。** 每个仓库的优先级是仓库 `.github/orbi.toml` 的 `dispatch_label` > 宿主 `orbi.toml` 的 `dispatch_label` > `labels.toml` 的 `queue` 条目。其余角色都是引擎数据，只随引擎发版变化。
+2. **只有 queue 角色可覆盖。** 每个仓库的优先级是仓库 `.github/orbi.toml` 的 `dispatch_label` > `labels.toml` 的 `queue` 条目；宿主 `orbi.toml` 不读 `dispatch_label`。其余角色都是引擎数据，只随引擎发版变化。
 
 引擎在启动时读取该文件，所有标签问题（本仓库的队列标签是什么、这张票是否在队列中、把它放进或拿出队列，以及其他角色同理）都由这一张表回答；`orbi setup` 也从同一文件创建和更新标签。发布时在 `labels.toml` 里改名即可改变引擎行为，无需改代码。
 

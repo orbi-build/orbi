@@ -360,14 +360,14 @@ GitHub 标签是外部状态机。它们不是 commit 创建的——每个仓�
 | `ai-fix-needed` | PR head 尚不可合并，或已有 run/PR 的可恢复失败（Issue #50）；下一 tick 在同一 run、branch、worktree、PR 上继续 |
 | `ai-merged` | 成功终态；Runner 已合并 PR 并确认 merge commit 落在保护分支。合并同时清除 `ai-ready` 残留，因此合并后的 Issue 只剩 `ai-merged`（Issue #1526；不回溯已合并的 Issue） |
 | `ai-awaiting-merge` | 评审和检查已通过，但已知仓库策略仍阻塞合并；评论写明维护者动作。只在队列无事可做的 tick 重试（Issue #1745），随后由 Orbi 合并指定 PR head |
-| `ai-blocked` | 只用于 AI 无法安全判断或修复的外部前置条件（Issue #50）；blocked comment 写明为什么不能自动恢复；人工必须决定下一步 |
+| `ai-blocked` | 交付已停下且无法自动恢复：AI 无法安全判断或修复的外部前置条件（Issue #50），或动作为 `fix_ticket`、`decide` 的失败（如 `no_commit_delivered`、`release_failed`、`review_budget_exhausted`，见下文「失败记录」一节的原因表）。blocked comment 写明原因和动作；人工必须决定下一步 |
 | `ai-human-review` | 人工验收门禁（Issue #763）：人已确认该交付的验收清单。只有人能打或摘——Runner 永不增删 |
 | `ai-needs-detail` | 薄 ticket 闸门（Issue #1088）：ticket 说得太少无法交付，Orbi 在开工前停住。Runner 把 `ai-ready` 换成它，并只发一条列出缺失项的评论；人补齐后重新加 `ai-ready` |
 
 「排队」意味着尚未开始（Issue #2309）。`is:open label:ai-ready`——或该仓库的
 `dispatch_label`——就是队列。默认的 `ai-ready` 是数据而非代码：它是引擎
-`labels.toml` 里的 `queue` 角色，优先级为仓库 `dispatch_label` > 宿主
-`dispatch_label` > `labels.toml`（Issue #2347）。领取在同一次写入里移除该标签并加上
+`labels.toml` 里的 `queue` 角色，优先级为仓库 `.github/orbi.toml` 的
+`dispatch_label` > `labels.toml`（Issue #2347）；宿主 `orbi.toml` 不读它。领取在同一次写入里移除该标签并加上
 `ai-in-progress`，此后每个非终态阶段事件也会移除它，所以旧规则下领取的票
 在下一次阶段事件时自然收敛。只有被放回队列的票才会重新加上它：requeue、
 人在 `ai-needs-detail` 之后手动重加、amend/draft/split 的重派发路径、空闲
@@ -849,15 +849,18 @@ Epic 或父 Issue 做协调，把每个阶段拆成子 Issue；每张子票各�
   `run_pi`——没有 Pi 会话、没有 PR。状态机幂等且可恢复（重启后恢复同一
   run id/worktree），按顺序执行这些步骤：
 
-  1. 严格解析 Issue 正文的 `## Release` 声明：`version`、
+  1. 解析发版契约。版本号和范围取自 Issue 的 Milestone（标题即版本号），
+     base branch 取自仓库配置；Issue 没有 Milestone 时 fail fast。
+     Issue 正文里的 `## Release` 段是可选的覆盖段：没有这一段就不再解析别的。
+     有这一段时严格解析：`version`、
      `base_branch`、`scope`（`#N` 列表）或 `scope_from_milestone`，
      以及可选的 `version_file`（默认 `pyproject.toml`；也可为
      `package.json`、`pom.xml`、`build.gradle`、`build.gradle.kts`、
      `gradle.properties`、`Cargo.toml`、`composer.json`、`pubspec.yaml`，
      或 `none` 跳过版本元数据改动）。声明不携带任何测试契约
      （Issue #569）：测试验收就是 release commit 的 GitHub Actions
-     CI 结果（#268 CI-wait 门）。字段缺失、重复或未知
-     都 fail fast。
+     CI 结果（#268 CI-wait 门）。有这一段时，字段缺失、重复或未知
+     都 fail fast；`version` 与 Milestone 标题不一致也 fail fast。
   2. 冻结 base——release commit 就是 `origin/<base_branch>`（在
      base-sync 锁下 fetch）。在任何门禁等待之前，校验声明（或默认）
      的 `version_file` 确实存在于该冻结树的根目录（Issue #740）：
@@ -900,8 +903,10 @@ Epic 或父 Issue 做协调，把每个阶段拆成子 Issue；每张子票各�
      `main`，这是可接受的终态。bump 是幂等的，修复 CI 后重试 release
      会安全地再次准备所请求的版本。
   6. 打 tag：远端 tag 不存在时，在 release commit 上创建 annotated
-     tag 并普通 push（绝不 `--force`）。已存在时必须精确指向 release
-     commit——不匹配 fail fast。已存在的 tag 绝不移动、覆盖或
+     tag 并普通 push（绝不 `--force`）。已存在且指向 release commit 时
+     幂等跳过；指向 release commit 的祖先时（之前某次尝试已推送、此后 base
+     又前进了），记录 `release_base_advanced_past_tag`，并从该 tag 所在
+     commit 继续发布；其他情况 fail fast。已存在的 tag 绝不移动、覆盖或
      force-push。
   7. 发布 GitHub Release（幂等），notes 带完整验证证据：version、
      tag、release commit、逐项 scope 证据、门禁证据、测试证据和 run

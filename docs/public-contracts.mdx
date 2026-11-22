@@ -47,7 +47,7 @@ The engine's platform label names are configuration data, not code (Issue #2347)
 Two invariants hold, and a file that breaks either one fails the start with the problem named (a missing file, malformed TOML, an unknown role, a duplicated role, a missing `queue` role, an invalid color or an empty description):
 
 1. **Every platform role appears exactly once, and exactly one role is `queue`.** No role is implied by a default in code.
-2. **The queue role is the only overridable one.** Per repository the precedence is the repository's `.github/orbi.toml` `dispatch_label` > the host `orbi.toml` `dispatch_label` > the `queue` entry in `labels.toml`. Every other role is engine data and changes only with an engine release.
+2. **The queue role is the only overridable one.** Per repository the precedence is the repository's `.github/orbi.toml` `dispatch_label` > the `queue` entry in `labels.toml`; the host `orbi.toml` does not read `dispatch_label`. Every other role is engine data and changes only with an engine release.
 
 The engine reads the file at start and answers every label question (the queue label for this repository, is this ticket queued, put it in or take it out of the queue, and the same for the other roles) from that one table; `orbi setup` creates and updates the labels from the same file. A release that renames a label in `labels.toml` changes the engine's behavior with no code change.
 

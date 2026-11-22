@@ -439,15 +439,15 @@ commits — initialize them per repository (see
 | `ai-fix-needed` | The PR head is not mergeable yet, or an AI-recoverable failure of the run/PR (Issue #50); the next tick resumes the same run, branch, worktree and PR |
 | `ai-merged` | Success terminal state; the Runner merged the PR and confirmed the merge commit on the protected branch. The merge also clears an `ai-ready` residue, so a merged Issue is `ai-merged` alone (Issue #1526; existing merged Issues are not backfilled) |
 | `ai-awaiting-merge` | Review and checks passed, but a known repository policy blocker remains; the comment names the maintainer action. Re-checked only on a tick whose queue is otherwise empty (Issue #1745), then Orbi merges the named PR head |
-| `ai-blocked` | Only an external precondition the AI cannot safely judge or fix (Issue #50); the blocked comment states why automatic recovery is impossible; a human must decide the next step |
+| `ai-blocked` | The delivery stopped and cannot recover on its own: an external precondition the AI cannot safely judge or fix (Issue #50), or a failure whose action is `fix_ticket` or `decide` (for example `no_commit_delivered`, `release_failed`, `review_budget_exhausted`; see the reason table under "Failure record" below). The blocked comment states the reason and the action; a human must decide the next step |
 | `ai-human-review` | The human acceptance gate (Issue #763): a person confirmed the delivery's acceptance checklist. Only a human applies or removes it — the Runner never touches it |
 | `ai-needs-detail` | The thin-ticket clarification gate (Issue #1088): the ticket states too little to deliver, so Orbi stopped BEFORE any work. The Runner swaps `ai-ready` for it and posts ONE comment naming the missing pieces; a human adds them and re-adds `ai-ready` |
 
 Queued means not started (Issue #2309). `is:open label:ai-ready` — or the
 repository's `dispatch_label` — is the queue. The default `ai-ready` is data,
 not code: it is the `queue` role in the engine's `labels.toml`, and the
-precedence is repository `dispatch_label` > host `dispatch_label` >
-`labels.toml` (Issue #2347). The claim removes that label in
+precedence is the repository's `.github/orbi.toml` `dispatch_label` >
+`labels.toml` (Issue #2347); the host `orbi.toml` does not read it. The claim removes that label in
 the same write that adds `ai-in-progress`, and every later non-terminal stage
 event removes it too, so a ticket claimed under the older rule converges on its
 next stage event. Only a ticket that is put back in the queue adds it again: a
@@ -1060,16 +1060,21 @@ DAG, no priority numbers, no separate queues:
   idempotent and resumable (a restart resumes the same run id/worktree) and
   runs these steps in order:
 
-  1. Strictly parse the `## Release` declaration from the Issue body:
-     `version`, `base_branch`, and `scope` (a list of `#N` items) or
+  1. Resolve the release contract. The version and scope come from the
+     Issue's Milestone (its title is the version) and the base branch from
+     the repository configuration; an Issue without a Milestone fails fast.
+     The `## Release` section in the Issue body is an optional override:
+     without it nothing more is parsed. When present it is parsed
+     strictly: `version`, `base_branch`, and `scope` (a list of `#N` items) or
      `scope_from_milestone`, plus optional `version_file`
      (`pyproject.toml` by default; also `package.json`, `pom.xml`,
      `build.gradle`, `build.gradle.kts`, `gradle.properties`, `Cargo.toml`,
      `composer.json`, `pubspec.yaml`, or `none` to skip version metadata
      changes). The declaration carries NO test contract (Issue #569): test
      acceptance is the GitHub Actions CI result on the release commit
-     (the Issue #268 CI-wait gate). Missing, duplicated or unknown
-     fields fail fast.
+     (the Issue #268 CI-wait gate). In a present section, missing,
+     duplicated or unknown fields fail fast, and a `version` that differs
+     from the Milestone title fails fast.
   2. Freeze the base — the release commit is exactly
      `origin/<base_branch>` (fetched under the base-sync lock). Before
      any gate wait, the declared (or defaulted) `version_file` is
@@ -1126,8 +1131,11 @@ DAG, no priority numbers, no separate queues:
      CI and retrying the release safely prepares the requested version again.
   6. Tag: when the remote tag is absent, create an annotated tag at the
      release commit and push it with a plain push (never `--force`).
-     When it exists it must point EXACTLY at the release commit — a
-     mismatch fails fast. An existing tag is never moved, overwritten
+     When it exists at the release commit, the step is idempotent. When
+     it exists at an ancestor of the release commit (an earlier attempt
+     pushed it and the base advanced since), Orbi logs
+     `release_base_advanced_past_tag` and continues the release from that
+     tag's commit. Any other existing tag fails fast. An existing tag is never moved, overwritten
      or force-pushed.
   7. Publish the GitHub Release (idempotent) whose notes carry the full
      verification evidence: version, tag, release commit, per-item
