@@ -32,9 +32,10 @@ callers can share it: it imports no gate module, so no import cycle exists.
 from __future__ import annotations
 
 import re
+import subprocess
 from dataclasses import dataclass
 
-from orbi import clarify_proposal, language
+from orbi import attachments, clarify_proposal, language
 from orbi.delivery_labels import label_names
 from orbi import delivery_labels
 from orbi.github import (
@@ -62,6 +63,9 @@ CHILD_MARKER_RE = re.compile(r"<!-- orbi:split-child:([0-9]+):([0-9]+) -->")
 CHILD_FIELDS = "number,title,body,author,labels,parent,blockedBy"
 PARENT_FIELDS = "number,title,body,labels,author,parent,milestone"
 SEARCH_LIMIT = 200
+# A create that uploads attachments gets a fixed longer limit than the plain
+# 30 seconds: gh uploads every file before it prints the Issue's URL.
+FILED_CREATE_TIMEOUT_SECONDS = 300
 # The structural child-body headings (`orbi add`'s own template uses the
 # same English section names, so a child ticket reads like a filed Issue)
 # and the origin line every child carries.
@@ -381,6 +385,7 @@ def add_blocked_by(issue: int, blocker: int, *, repo: str) -> None:
 def create_ticket(
     repo: str, *, title: str, body: str, labels: list[str] | None = None,
     milestone: str | None = None, step: str = "create the child ticket",
+    filed: "attachments.Filing | None" = None,
 ) -> int:
     """Open one ticket; `gh issue create` prints its URL.
 
@@ -389,25 +394,49 @@ def create_ticket(
     the caller queues the ticket with its own later step.
 
     Only the labels the caller names and the Milestone are passed; the
-    dispatch label is never one of them.
+    dispatch label is never one of them. `filed` adds the draft's attached
+    files: one `--attach` per local image, run from their staging directory,
+    and the fixed longer limit an upload needs (Issue #2364).
     """
     command = [
         "gh", "issue", "create", "--repo", repo,
         "--title", title, "--body", body,
+        *(filed.arguments() if filed is not None else ()),
     ]
     for label in labels or []:
         command += ["--label", label]
     if milestone:
         command += ["--milestone", milestone]
-    url = run_step(
-        step, lambda: run_command(command, timeout=30).strip(),
-    )
+    url = run_step(step, lambda: _created_url(command, filed))
     try:
         return int(url.rstrip("/").rsplit("/", 1)[-1])
     except ValueError:
         raise TicketCommandError(
             step, f"gh returned no issue URL: {url!r}",
         ) from None
+
+
+def _created_url(command: list[str], filed: "attachments.Filing | None") -> str:
+    """The created Issue's URL, also when one attachment upload failed.
+
+    gh uploads a local image before the Issue exists; when it refuses one
+    upload it still creates the Issue with the rest, prints the URL and exits
+    non-zero. That IS a creation — the images it dropped are read from the
+    created body afterwards (`attachments.Filing.unuploaded`), so a refusal is
+    reported instead of failing a creation that already happened. A failed
+    create without a URL stays the step's own failure.
+    """
+    try:
+        return run_command(
+            command,
+            timeout=30 if filed is None else FILED_CREATE_TIMEOUT_SECONDS,
+            cwd=filed.directory if filed is not None else None,
+        )
+    except subprocess.CalledProcessError as exc:
+        output = (exc.stdout or "").strip()
+        if filed is None or not output.startswith("https://"):
+            raise
+        return output
 
 
 def create_child(

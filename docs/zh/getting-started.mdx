@@ -82,7 +82,7 @@ provider——失败即快速退出，并给出原因、修复动作和官方文
 | [uv](https://docs.astral.sh/uv/) | 把 `orbi` CLI 装进隔离的 tool 环境（setup 的 CLI editable 步骤会调 `uv tool install`） | `uv --version` |
 | [Pi](https://github.com/earendil-works/pi) CLI，需 Node ≥ 22.19.0 | 开发 agent；每个任务一个完整 session——由一键安装器安装（经 npm）；手动安装命令：`npm install -g --ignore-scripts @earendil-works/pi-coding-agent` | `pi --version` |
 | Git | worktree、分支、base 新鲜度 | `git --version` |
-| [GitHub CLI（`gh`）≥ 2.94](https://github.com/cli/cli/blob/trunk/docs/install_linux.md) | Issue、标签、PR、merge | `gh --version`，再 `gh auth status` |
+| [GitHub CLI（`gh`）≥ 2.99](https://github.com/cli/cli/blob/trunk/docs/install_linux.md) | Issue、标签、PR、merge，`orbi draft` 附带的图片 | `gh --version`，再 `gh auth status` |
 | systemd user session（Linux） | 每 5 分钟触发一个 tick 的用户级 timer | `systemctl --user status` |
 | launchd（macOS） | 每 5 分钟触发一个 tick 的用户级 agent——尚未在真机验证，欢迎回报 | `launchctl print gui/$(id -u)` |
 | 可用的模型 provider | Pi 能真正使用的模型——Pi 自身配置的 provider，或指向 OpenAI-compatible endpoint（本地 `llama.cpp` server 或任意兼容 API）的 `pi_providers` 文件 | 一次真实 `pi --print` 调用（见下）；第 4 步给出两条路径 |
@@ -94,13 +94,15 @@ provider——失败即快速退出，并给出原因、修复动作和官方文
 curl -LsSf https://astral.sh/uv/install.sh | sh
 ```
 
-从 GitHub CLI 官方仓库安装 `gh`——最低已验证版本为 **2.94.0**：Runner 的
+从 GitHub CLI 官方仓库安装 `gh`——最低已验证版本为 **2.99.0**：Runner 的
 队列扫描用到 `gh api --paginate --slurp`（gh 2.48.0 引入）和原生的
-`blockedBy` 依赖字段（gh 2.94.0 引入）。过旧的包会让 `orbi setup` 通过，
+`blockedBy` 依赖字段（gh 2.94.0 引入），而 `orbi draft --create` 用
+`gh issue create --attach` 上传草稿里的图片（gh 2.99.0 引入）。过旧的包会让
+`orbi setup` 通过，
 但每个 tick 都以 `unknown flag: --slurp` /
 `Unknown JSON field: "blockedBy"` 失败，永远领不到 Issue——Ubuntu 24.04
-的发行版包（2.45.0）正是这种情况；Fedora（2.97.0）与 Arch（2.100.0）
-当前原生满足最低版本。在 Ubuntu/Debian 上，用官方 apt 仓库安装或修复
+的发行版包（2.45.0）正是这种情况；Fedora（2.97.0）尚无 `--attach`，
+Arch（2.100.0）当前原生满足最低版本。在 Ubuntu/Debian 上，用官方 apt 仓库安装或修复
 （[官方 Linux 安装说明](https://github.com/cli/cli/blob/trunk/docs/install_linux.md)）：
 
 ```bash

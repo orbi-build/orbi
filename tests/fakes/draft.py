@@ -24,9 +24,11 @@ class GhRecorder:
     def __init__(self, gh: FakeGh) -> None:
         self.gh = gh
         self.commands: list[list[str]] = []
+        self.kwargs: list[dict] = []
 
     def __call__(self, command, **kwargs):
         self.commands.append(list(command))
+        self.kwargs.append(dict(kwargs))
         return self.gh(list(command), **kwargs)
 
     def issues_commands(self) -> list[list[str]]:
@@ -127,10 +129,11 @@ class FakeSessions:
         })
 
     def session(self, config, repo, *, session_root, system_prompt, context,
-                run_id, out_path, resume=False):
+                run_id, out_path, resume=False, attached=None):
         self.calls.append(SimpleNamespace(
             session_root=Path(session_root), system_prompt=system_prompt,
             context=context, resume=resume, out_path=Path(out_path),
+            attached=attached,
         ))
         view = repo_view(context)
         self.views.append(SimpleNamespace(
@@ -161,10 +164,10 @@ class FakeSessions:
         Path(out_path).write_text(json.dumps(answer), encoding="utf-8")
 
     def fidelity_session(self, config, repo, *, session_root, system_prompt,
-                         context, run_id):
+                         context, run_id, attached=None):
         self.fidelity_calls.append(SimpleNamespace(
             session_root=Path(session_root), system_prompt=system_prompt,
-            context=context,
+            context=context, attached=attached,
         ))
         if self.fidelity:
             answer = self.fidelity.pop(0)
@@ -191,7 +194,8 @@ def fidelity_echoes_request(monkeypatch, sessions) -> None:
     the recorded context.
     """
 
-    def echo(config, repo, *, session_root, system_prompt, context, run_id):
+    def echo(config, repo, *, session_root, system_prompt, context, run_id,
+             attached=None):
         payload = _record_fidelity(
             sessions, session_root=session_root,
             system_prompt=system_prompt, context=context,
@@ -218,7 +222,8 @@ def fidelity_removes_unmentioned_lines(monkeypatch, sessions) -> None:
     verbatim.
     """
 
-    def strip(config, repo, *, session_root, system_prompt, context, run_id):
+    def strip(config, repo, *, session_root, system_prompt, context, run_id,
+              attached=None):
         payload = _record_fidelity(
             sessions, session_root=session_root,
             system_prompt=system_prompt, context=context,
@@ -380,6 +385,81 @@ def stub_agent_dir(monkeypatch, path: Path) -> None:
     monkeypatch.setattr(
         seam, "prepare_pi_agent_dir", lambda *args, **kwargs: path,
     )
+
+
+# One small PNG and one small HTML document: the attached bytes a test
+# hands through the network boundary (Issue #2364).
+PNG_BYTES = b"\x89PNG\r\n\x1a\n" + b"0" * 16
+HTML_BYTES = b"<html><body><h1>spec</h1></body></html>"
+
+
+class FakeResponse:
+    """The minimal `urlopen` answer: `read()` inside a `with` block."""
+
+    def __init__(self, data: bytes) -> None:
+        self.data = data
+
+    def read(self) -> bytes:
+        return self.data
+
+    def __enter__(self) -> "FakeResponse":
+        return self
+
+    def __exit__(self, *exc: object) -> bool:
+        return False
+
+
+class FakeDownloads:
+    """The network boundary of an attached-image download (Issue #2364)."""
+
+    def __init__(self) -> None:
+        self.requests: list[SimpleNamespace] = []
+        self.answers: dict[str, bytes] = {}
+        self.failures: dict[str, Exception] = {}
+
+    def urlopen(self, url, **kwargs):
+        self.requests.append(SimpleNamespace(url=url, kwargs=kwargs))
+        if url in self.failures:
+            raise self.failures[url]
+        return FakeResponse(self.answers.get(url, PNG_BYTES))
+
+    def urls(self) -> list[str]:
+        """Every URL asked for, in order."""
+        return [request.url for request in self.requests]
+
+
+def install_downloads(monkeypatch) -> FakeDownloads:
+    """Answer every image download; nothing leaves the process."""
+    import urllib.request
+
+    fake = FakeDownloads()
+    monkeypatch.setattr(urllib.request, "urlopen", fake.urlopen)
+    return fake
+
+
+def stub_pi_answers(monkeypatch, *answers: object, fidelity=None) -> list[dict]:
+    """The REAL drafting session build, with a fake Pi that answers.
+
+    The engine's own argv, agent directory and environment are built — what
+    an attachment test asserts — and Pi answers from the queue through the
+    answer-file variable instead of starting a process. The fidelity pass
+    returns `fidelity` (nothing by default, which keeps the draft).
+    """
+    calls: list[dict] = []
+    queue = list(answers)
+
+    def stream(command, **kwargs):
+        calls.append({"command": command, **kwargs})
+        out_path = (kwargs.get("pi_env") or {}).get(draft.DRAFT_OUT_ENV)
+        if out_path is None:
+            return fidelity if fidelity is not None else ""
+        Path(out_path).parent.mkdir(parents=True, exist_ok=True)
+        answer = queue.pop(0) if queue else {"kind": "reply", "reply": ""}
+        Path(out_path).write_text(json.dumps(answer), encoding="utf-8")
+        return ""
+
+    monkeypatch.setattr(seam, "stream_pi", stream)
+    return calls
 
 
 def stub_create_error(monkeypatch, error: Exception) -> None:

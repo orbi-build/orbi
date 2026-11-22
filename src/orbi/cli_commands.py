@@ -195,7 +195,7 @@ def command_draft(config: config_domain.RunnerConfig, args, parser) -> int:
     return draft_cli.run_draft(
         config, _selected_repo(config, args, parser),
         request=args.request, session_dir=args.session_dir,
-        create=args.create,
+        create=args.create, attach=args.attach,
     )
 
 

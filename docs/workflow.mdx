@@ -782,6 +782,7 @@ at all — readers ignore it (`parse` returns `None`).
 | `release_failed` | a release task failed at one of the state machine's steps; the visible reason names that step | `fix_ticket` | false |
 | `no_commit_delivered` | the agent session ended without a commit on the task branch (HEAD is still the frozen base) | `fix_ticket` | false |
 | `no_file_change` | the delivered commits change no file (the head tree equals the frozen base tree) | `fix_ticket` | false |
+| `attachment_unavailable` | an image the Issue attaches cannot be read (Issue #2364): the session does not start, because an attachment is often the request itself | `fix_ticket` | false |
 | `unclassified` | any other runner exception | `fix_ticket` | false |
 
 Actions: `requeue` relabels the Issue `ai-ready` (or presses retry) —
@@ -798,7 +799,9 @@ together, so only a `decide` stop says "waiting on a human decision" — a
 no-commit stop says the run produced no commit and the ticket needs a
 change, a no-file-change stop says the run changed no file and that an
 Issue the session found already satisfied can simply be closed
-(Issue #2358), an undetermined cause says so instead of blaming the Issue text
+(Issue #2358), an unreadable attachment names the file and asks the person to
+upload it again or remove it (Issue #2364), an undetermined cause says so
+instead of blaming the Issue text
 (Issue #1651), and a configured base branch that does not exist says that
 (Issue #1749) — and the terminal progress comment repeats that same
 sentence. The

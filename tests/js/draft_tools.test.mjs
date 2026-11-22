@@ -197,6 +197,40 @@ test("the schema accepts a draft of one or several Issues", () => {
   );
 });
 
+test("the schema accepts the attachments each Issue uses (Issue #2364)", () => {
+  // Absent = every file, an empty list = none, numbers = exactly those.
+  assert.equal(validates(writeDraftTool, TWO_ISSUES), true);
+  assert.equal(
+    validates(writeDraftTool, {
+      reply: "x",
+      issues: [{ ...TWO_ISSUES.issues[0], attachments: [1, 2] }],
+    }),
+    true,
+  );
+  assert.equal(
+    validates(writeDraftTool, {
+      reply: "x",
+      issues: [{ ...TWO_ISSUES.issues[0], attachments: [] }],
+    }),
+    true,
+  );
+  // A number is 1-based and an integer.
+  assert.equal(
+    validates(writeDraftTool, {
+      reply: "x",
+      issues: [{ ...TWO_ISSUES.issues[0], attachments: [0] }],
+    }),
+    false,
+  );
+  assert.equal(
+    validates(writeDraftTool, {
+      reply: "x",
+      issues: [{ ...TWO_ISSUES.issues[0], attachments: ["1"] }],
+    }),
+    false,
+  );
+});
+
 test("the schema rejects a draft the engine cannot create", () => {
   // No Issue at all: a draft round must carry at least one.
   assert.equal(validates(writeDraftTool, { reply: "x", issues: [] }), false);

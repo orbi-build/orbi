@@ -1163,6 +1163,40 @@ def test_the_fake_closes_a_pull_request_once(fake_gh):
         fake_gh(["gh", "pr", "close", "7", "--repo", fake_gh.repo])
 
 
+# --------------------------------------------------------------------------
+# The attachment surfaces (Issue #2364)
+# --------------------------------------------------------------------------
+
+def test_the_fake_refuses_a_markdown_request_it_does_not_model(fake_gh):
+    """Only the `-f text=... -f context=...` shape renders (Issue #2364)."""
+    base = ["gh", "api", "--method", "POST", "/markdown"]
+    assert_fails_with(
+        lambda: fake_gh([*base, "bare-token"]),
+        "unsupported command",
+    )
+    assert_fails_with(
+        lambda: fake_gh([*base, "-f", "text=![x](./1.png)"]),
+        "unsupported command",
+    )
+    assert_fails_with(
+        lambda: fake_gh([
+            *base, "-f", "text=no image here", "-f",
+            "context=owner/repo",
+        ]),
+        "unsupported command",
+    )
+
+
+def test_the_fake_can_answer_a_comment_read_as_a_failure(fake_gh):
+    """A failing comment read is the bypass the delivery path tests."""
+    fake_gh.add_issue(1, title="first")
+    fake_gh.comment_read_failure = "gh: HTTP 502"
+    assert_fails_with(
+        lambda: github.issue_comments(1, repo="owner/repo"),
+        "HTTP 502",
+    )
+
+
 def test_the_fake_deletes_a_ref_once_and_refuses_another_path(fake_gh):
     fake_gh([
         "gh", "api", "-X", "DELETE",

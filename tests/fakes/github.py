@@ -105,6 +105,17 @@ class FakeGh:
         # Label edits that fail server-side, keyed as (add|remove, label)
         # — the terminal-transition restore tests (Issue #2357).
         self.fail_label_edits: set[tuple[str, str]] = set()
+        # The attached images gh refuses to upload, by their body reference
+        # ("1.png" for `![x](./1.png)`, Issue #2364): gh still creates the
+        # Issue with the rest and exits non-zero.
+        self.refuse_attachments: set[str] = set()
+        # Every uploaded attachment and every Markdown rendering, in order.
+        self.uploads: list[str] = []
+        self.markdown_calls: list[str] = []
+        # `gh issue create` failing outright (no Issue, no URL printed).
+        self.create_failure: str | None = None
+        # A failed `gh issue view --json comments` read (Issue #2364).
+        self.comment_read_failure: str | None = None
         # The whole-set label replacement fails server-side (Issue #2369).
         self.failing_label_replace = False
         self._clock = 0
@@ -327,7 +338,8 @@ class FakeGh:
                  "--add-sub-issue", "--add-blocked-by", "--body"),
         "comment": ("--repo", "--body"),
         "close": ("--repo",),
-        "create": ("--repo", "--title", "--body", "--milestone", "--label"),
+        "create": ("--repo", "--title", "--body", "--milestone", "--label",
+                   "--attach"),
     }
 
     def _issue(self, args: list[str]) -> str:
@@ -376,9 +388,23 @@ class FakeGh:
         self._known_flags(
             flags, self._ISSUE_FLAGS["create"], ["gh", "issue", "create"],
         )
+        if self.create_failure is not None:
+            self._fail(1, self.create_failure)
         self._repo_or_fail((flags.get("--repo") or [self.repo])[0])
         title = (flags.get("--title") or [""])[0]
         body = (flags.get("--body") or [""])[0]
+        refused = 0
+        for reference in flags.get("--attach") or []:
+            name = reference.removeprefix("./")
+            if name in self.refuse_attachments:
+                refused += 1
+                continue
+            self.uploads.append(name)
+            body = body.replace(
+                f"](./{name})",
+                "](https://github.com/user-attachments/assets/"
+                f"{len(self.uploads)})",
+            )
         milestone = None
         if "--milestone" in flags:
             milestone = self._milestone_number(flags["--milestone"][0])
@@ -392,7 +418,14 @@ class FakeGh:
         self.add_issue(number, title=title, body=body, milestone=milestone,
                        labels=tuple(flags.get("--label") or []),
                        author=f"app/{self.login}")
-        return f"https://github.com/{self.repo}/issues/{number}"
+        url = f"https://github.com/{self.repo}/issues/{number}"
+        if refused:
+            # gh 2.99 --attach: the Issue exists, one upload failed, the URL
+            # is still printed and the exit code is non-zero.
+            self._fail(
+                1, f"gh: failed to upload {refused} attachment(s)", output=url,
+            )
+        return url
 
     def _milestone_number(self, title: str) -> int:
         for milestone in self.milestones.values():
@@ -554,6 +587,8 @@ class FakeGh:
                 })
 
     def _issue_fields(self, issue: dict, fields: list[str]) -> dict:
+        if "comments" in fields and self.comment_read_failure is not None:
+            self._fail(1, self.comment_read_failure)
         rendered: dict = {}
         for field in fields:
             if field == "labels":
@@ -673,7 +708,44 @@ class FakeGh:
 
     # --- api verbs -----------------------------------------------------------
 
+    def _markdown(self, args: list[str]) -> str:
+        """`POST /markdown`: one native image rendered to a signed address.
+
+        The documented way an installation token reads a native attachment
+        (Issue #2364): the answer carries the image as a private-user-images
+        address whose query IS the credential. Only the
+        `-f text=... -f context=...` shape is modelled.
+        """
+        fields: dict[str, str] = {}
+        index = 0
+        while index < len(args):
+            if args[index] not in ("-f", "--field") or index + 1 >= len(args):
+                return self._unsupported(
+                    ["gh", "api", "--method", "POST", "/markdown", *args]
+                )
+            key, _, value = args[index + 1].partition("=")
+            fields[key] = value
+            index += 2
+        if set(fields) != {"text", "context"}:
+            return self._unsupported(
+                ["gh", "api", "--method", "POST", "/markdown", *args]
+            )
+        self._repo_or_fail(fields["context"])
+        match = re.search(r"\((\S+)\)", fields["text"])
+        if match is None:
+            return self._unsupported(
+                ["gh", "api", "--method", "POST", "/markdown", *args]
+            )
+        self.markdown_calls.append(match.group(1))
+        number = len(self.markdown_calls)
+        return (
+            '<p><img src="https://private-user-images.githubusercontent.com/'
+            f'1/{number}.png?jwt=signed-{number}" alt="image" /></p>'
+        )
+
     def _api(self, args: list[str]) -> str:
+        if args[:2] == ["--method", "POST"] and args[2:3] == ["/markdown"]:
+            return self._markdown(args[3:])
         if args[:2] == ["--method", "PUT"]:
             return self._api_put(args[2:])
         if args[:2] == ["-X", "DELETE"]:
@@ -971,18 +1043,22 @@ class FakeGh:
         return f"2026-09-13T00:{minutes:02d}:{seconds:02d}Z"
 
     def _fail(self, code: int, stderr: str, *,
-              status: int | None = None, reason: str = "Error"):
+              status: int | None = None, reason: str = "Error",
+              output: str | None = None):
         """Raise a failed call; `status` also emits the response headers.
 
         A failed `gh api --include` prints the status line and headers
         in front of the (empty) body, which is how the adapter classifies
-        the failure (Issue #1760).
+        the failure (Issue #1760). `output` is the stdout a real gh prints
+        beside a failure (the created Issue's URL, Issue #2364).
         """
+        if output is None:
+            output = (
+                _with_response_headers("", status, reason)
+                if status is not None else ""
+            )
         raise subprocess.CalledProcessError(
-            code, ["gh"],
-            output=(_with_response_headers("", status, reason)
-                    if status is not None else ""),
-            stderr=stderr,
+            code, ["gh"], output=output, stderr=stderr,
         )
 
     def _unsupported(self, command: list[str]):

@@ -303,6 +303,7 @@ JOURNAL_EVENTS: dict[str, str] = {
     "suggest_understanding_failed": "the parallel understanding session of orbi suggest failed or timed out (bypass: no understanding.md)",
     # Drafting (Issue #2041, `orbi draft`).
     "draft_session_failed": "a drafting session failed after it wrote its draft: the draft is returned (bypass)",
+    "issue_images_unreadable": "an attached image could not be read: the session does not start, the failure report names it as attachment_unavailable (Issue #2364)",
     "draft_failed": "an orbi draft run failed (invalid input, failed session or failed gh call)",
     # Dead-loop guard (Issue #825).
     "failure_comment_deduplicated": "an identical failure repeat bumped the existing comment's counter; no second comment",

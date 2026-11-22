@@ -937,8 +937,10 @@ def test_docs_document_the_gh_minimum_version_and_install_source():
     """Issue #862: the prerequisites name a tested minimum GitHub CLI
     version and an installation source that provides it. The Runner's
     queue scans need `gh api --paginate --slurp` (gh 2.48+) and the
-    native `blockedBy` dependency field (gh 2.94+), so the minimum is
-    2.94.0. Ubuntu 24.04's distribution package (2.45.0) predates both —
+    native `blockedBy` dependency field (gh 2.94+), and `orbi draft`
+    uploads attached images with `gh issue create --attach` (gh 2.99+,
+    Issue #2364), so the minimum is 2.99.0. Ubuntu 24.04's distribution
+    package (2.45.0) predates all of them —
     `orbi setup` passes but every tick fails with `unknown flag: --slurp`
     / `Unknown JSON field: "blockedBy"` — so the docs must carry the
     failure signature and the official apt repository repair. Verified on
@@ -946,7 +948,7 @@ def test_docs_document_the_gh_minimum_version_and_install_source():
     2.100.0 already satisfy the minimum)."""
     for slug in ("getting-started", "zh/getting-started"):
         text = page_text(slug)
-        assert "2.94" in text, f"{slug} must state the tested minimum gh version"
+        assert "2.99" in text, f"{slug} must state the tested minimum gh version"
         assert "gh api --paginate --slurp" in text, (
             f"{slug} must name the gh api --slurp surface the Runner needs"
         )
@@ -965,13 +967,13 @@ def test_docs_document_the_gh_minimum_version_and_install_source():
         )
     for slug in ("setup", "zh/setup"):
         text = page_text(slug)
-        assert "2.94" in text, (
+        assert "2.99" in text, (
             f"{slug} must point at the minimum gh version at the command "
             "check"
         )
     for readme in (README, REPO_ROOT / "README.zh-CN.md"):
         text = readme.read_text(encoding="utf-8")
-        assert "2.94" in text, (
+        assert "2.99" in text, (
             f"{readme.name} must state the minimum gh version in the "
             "ready check"
         )

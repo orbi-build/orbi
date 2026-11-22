@@ -731,6 +731,7 @@ journalctl --user -u orbi@1.service -u orbi@2.service | grep e07383c2
 | `suggest_understanding_failed` | `orbi suggest` 的并行理解会话失败或超时（旁路：不写 `understanding.md`） |
 | `draft_session_failed` | 起草会话在写出草稿之后失败：仍然返回该草稿（旁路） |
 | `draft_failed` | `orbi draft` 运行失败（输入无效、会话失败或 `gh` 调用失败） |
+| `issue_images_unreadable` | 附件图片无法读取：会话不启动，失败报告以 `attachment_unavailable` 记录并指明（Issue #2364） |
 
 idle 告警和模型请求挂死 kill 是日志/健康阈值——它们不是每 5 分钟
 调度，也不是业务任务 timeout。

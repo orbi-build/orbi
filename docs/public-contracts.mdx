@@ -30,7 +30,7 @@ The [Constitution](https://github.com/orbi-build/orbi/blob/main/CONSTITUTION.md)
 | Run scene | the hidden versioned block `<!-- orbi:scene:v1 {json} -->` in the trusted `Orbi opened PR` comment, rendered and parsed by `src/orbi/scene.py`; the machine-readable record used to resume an opened-PR delivery (the human-readable text beside it is display only) |
 | Requirements skill | the directory `integrations/claude-plugin/skills/write-ai-ready-issue/` — `SKILL.md` (how an agent turns a one-line idea into a deliverable Issue) and `fidelity-pass.md` (the independent check that the draft asks for exactly what the person asked) |
 | Suggestions | the document `orbi suggest --json` prints — `{"repo", "base_sha", "session_dir", "suggestions": [{"kind": "existing" or "new", "issue": the Issue number for existing and null for new, "title", "why", "body": the Issue body for new and null for existing, "size": the estimated number of files the change edits (an integer, or null when unknown)}]}` — that `size` key is present only when the caller passed `--size <n>` — at most three entries, ordered by priority; `--size <n>` (a positive integer) also asks the answer's first entry to be exactly one task grounded in the repository's own files that edits at most n files (none when the repository offers none, never padded), and a value that is not a positive integer is an argument error; `base_sha` is the `origin/<base_branch>` commit fetched when the run starts, which both sessions read (the deployment checkout itself is never moved or advanced); `session_dir` is `<deploy_home>/.orbi/suggest/<run_id>/.pi-session/`, holding the suggestions session's Pi JSONL in the same format as delivery session files; the same run directory also holds the parallel understanding session's Pi JSONL at `<deploy_home>/.orbi/suggest/<run_id>/.understanding/.pi-session/`, in the same format, so a caller accounting the run's model usage reads both directories. The run directory `<deploy_home>/.orbi/suggest/<run_id>/` is kept after the command exits, on success and on failure — and the skill directory `integrations/claude-plugin/skills/suggest-ai-ready-issues/` that produces it |
-| Drafting | `orbi draft`'s round document (`{"message","conversation","draft"}` in, `{"reply","questions","issues","check","warning"}` out), its creation document (`{"key","issues","header","issue"}` in, `{"created"}` out), its failure document (`{"code","step","detail"}` on stderr), the session directory layout and the `<!-- orbi:draft:v1:... -->` Issue marker; see [The draft command contract](#the-draft-command-contract) |
+| Drafting | `orbi draft`'s round document (`{"message","conversation","draft","attachments"}` in, `{"reply","questions","issues","check","warning"}` out), its creation document (`{"key","issues","header","issue","attachments"}` in, `{"created"}` out), its failure document (`{"code","step","detail"}` on stderr), the draft-level `attachments` list and where a round stages it, the session directory layout and the `<!-- orbi:draft:v1:... -->` Issue marker; see [The draft command contract](#the-draft-command-contract) |
 | Clarification proposal | the hidden `<!-- orbi:suggestion:v1 kind=split -->` / `kind=criteria` section of the clarification stop comment, its line grammar, the authoritative-stop rule and the public refusal/failure markers (`orbi-<name>-command`, `orbi-<name>-command-rejected`, `orbi-<name>-command-failed step=...` with their `comment=...` key); see [The clarification proposal and command receipts](#the-clarification-proposal-and-command-receipts) |
 | Stop question | the hidden `<!-- orbi:question:v1 {json} -->` block of a stop that needs a decision, its shape (a superset of the drafting question), the closed `action` set and the `decision_class` values, plus the `<!-- orbi:answer:v1 {json} -->` record of an answer — the automatic one the engine takes included; see [The stop question](#the-stop-question) |
 
@@ -691,8 +691,8 @@ modes:
 Round input and output:
 
 ```json
-{"message": "one sentence", "conversation": [{"role": "person", "text": "..."}], "draft": {"issues": []}}
-{"reply": "what will change", "questions": [{"question": "What should the other person get?", "header": "Sharing", "options": [{"label": "A read-only link (Recommended)", "description": "Opens the list, cannot change it."}, {"label": "An editable link", "description": "Lets whoever holds it change the list."}]}], "issues": [{"title": "...", "body": "...", "after": 1}], "check": "passed", "warning": "..."}
+{"message": "one sentence", "conversation": [{"role": "person", "text": "..."}], "draft": {"issues": []}, "attachments": [{"name": "screen.png", "src": "./screen.png"}]}
+{"reply": "what will change", "questions": [{"question": "What should the other person get?", "header": "Sharing", "options": [{"label": "A read-only link (Recommended)", "description": "Opens the list, cannot change it."}, {"label": "An editable link", "description": "Lets whoever holds it change the list."}]}], "issues": [{"title": "...", "body": "...", "after": 1, "attachments": [1, 2]}], "check": "passed", "warning": "..."}
 ```
 
 `questions` carries at most three questions, in one round. A question is
@@ -726,7 +726,7 @@ or returned nothing: the draft is still returned.
 Creation input, and the created numbers on stdout:
 
 ```json
-{"key": "the caller's draft id", "issues": [{"title": "...", "body": "...", "after": 1}], "header": "optional text above every body", "issue": 12}
+{"key": "the caller's draft id", "issues": [{"title": "...", "body": "...", "after": 1, "attachments": [1]}], "header": "optional text above every body", "issue": 12, "attachments": [{"name": "screen.png", "src": "./screen.png"}]}
 {"created": [41, 42, 43]}
 ```
 
@@ -736,6 +736,65 @@ label; with several, that Issue becomes the parent of the drafted Issues (native
 sub-issues, `blockedBy` for `after`, dispatch label last, `ai-epic` on the parent).
 Running `--create` again with the same input creates nothing new: each created Issue
 carries the marker below, and only an Issue this runner authored is adopted.
+
+### Attachments
+
+Both documents carry the draft's files in one list, `attachments: [{name, src}]`:
+`src` is a local path or an `http(s)` address, and the type follows from the
+extension. `orbi draft --attach <path>` (repeatable) adds one file to either mode,
+after the document's own list; the interactive mode hands the same list to every
+round and to its creation. Allowed are images (`png`, `jpg`, `jpeg`, `gif`,
+`webp`), HTML (`html`, `htm`) and plain text (`txt`, `md`, `csv`, `tsv`,
+`json`, `log`): at most 10 files, 10 MB each, and all HTML and text of one draft
+at most 50,000 characters together. Anything else — an 11th file, a larger file, any
+other extension, a longer text — fails `invalid_input` at the `read the
+attachments` step, with the reason as the `detail`.
+
+Every file is copied or downloaded into
+`<session-dir>/.pi-session/attachments/<n>.<ext>`, never under its own name, so a
+name carrying `../` cannot leave that directory, and the context names all of them in
+one line (`The person attached: 1.png = screen.png, 2.html = spec.html`) with the
+directory. An image reaches the model as a Pi `@<path>` argument in front of the
+context file only when the run's model declares `"input": ["text", "image"]` in its
+catalog entry (`orbi.model_catalog`; the shipped DeepSeek template does); otherwise
+it is named as not viewable. The drafting session reads HTML and text with `read`,
+and the tool-less fidelity pass receives them as `@<path>` arguments too.
+
+Each Issue of the draft output carries `attachments`: the 1-based numbers of the
+draft's files that Issue uses; the field is absent when the Issue uses all of them,
+and an empty list means none. The creation document carries the same per-Issue
+numbers and the whole list, so a split into several new Issues writes only what each
+Issue uses. When the draft is shown during local drafting, each Issue lists the
+files it uses as `<n>.<ext>  <name>  <src>` — the number a created Issue
+references, the person's own name and where the file sits
+(`1.png  checkout-error.png  ./screens/checkout-error.png`).
+
+A `--create` that makes NEW Issues writes one `## Attachments` section AFTER the
+draft marker, in the same create: an image with a local `src` is uploaded by
+`gh issue create --attach` and referenced as `![name](./<n>.<ext>)`, an image with
+an `http(s)` `src` is written as `![name](src)`, and each HTML or text file is a
+collapsed block (`<details><summary>name</summary>` with a fenced block tagged with
+the language from the extension: `html`, `csv`, `json`, …). An amend to an
+existing Issue carries no attachment; a `/orbi split` of an existing Issue copies
+the links of the attachments each child uses from the original body into the child
+instead of uploading a file again. A gh that refuses an upload still creates the
+Issue and exits non-zero: the creation counts as created, and the command prints the
+images that did not upload with the repair (paste them into the Issue, or run
+`gh auth login` as yourself).
+
+Delivery and review sessions (review re-reads every round) receive the images of
+the Attachments section and any native GitHub image of the body or a trusted comment
+(`github.com/user-attachments/assets/...`, read through GitHub's Markdown rendering
+and downloaded with no token), with the same naming line. Unreadable means stop: a
+drafting round that cannot read an attachment fails and names the file, and a
+delivery or review session does not start — the stop goes through the failure-stop
+path with the reason code `attachment_unavailable` (its record is defined in
+[Workflow](/workflow#failure-record-orbifailurev1)), so
+the Issue ends `ai-blocked` with ONE comment naming the image and the repair (upload
+it again, or remove it from the Issue, then remove `ai-blocked` and add
+`ai-ready`, or `ai-fix-needed` when a PR is open) and no tick re-runs it. Nothing is
+skipped silently, and the journal line `issue_images_unreadable` records the reason
+without the signed address.
 
 Failure output is one JSON object on stderr and exit code 1:
 
@@ -770,10 +829,12 @@ and every delivery worktree stay exactly where they were. A fetch that fails
 fails the round — `{"code": "draft_failed", "step": "read the repository at
 origin/<base_branch>", ...}` — with no fallback to the stale checkout.
 
-The Issue marker: every Issue `orbi draft` creates ends with
+The Issue marker: every Issue `orbi draft` creates carries
 `<!-- orbi:draft:v1:<key>:<position>:<sha256> -->` — the caller's `key`, the Issue's
-1-based position in that draft, and the sha256 of the body as created (the
-marker line excluded). The pre-work check reads it at claim time
+1-based position in that draft, and the sha256 of the drafted text BEFORE the marker
+line (the Attachments section a creation writes after the marker, and the asset
+addresses a gh upload rewrites inside it, are outside the fingerprint). The pre-work
+check reads it at claim time
 (`clarify.enforce`): an Issue this runner authored whose body still hashes to
 the marker's fingerprint is not judged again, because the same check judged it
 when it was drafted. An edited body, or a marker on an Issue another account

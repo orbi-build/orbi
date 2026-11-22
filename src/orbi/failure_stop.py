@@ -44,6 +44,13 @@ _REASON_WORDING = {
         "failure.terminal_no_file_change",
         "failure.disposition_no_file_change",
     ),
+    # An unreadable attachment (Issue #2364): the repair is the FILE — upload
+    # it again or remove it — never a body edit, so this reason owns its
+    # sentence too.
+    "attachment_unavailable": (
+        "failure.terminal_attachment_unavailable",
+        "failure.disposition_attachment_unavailable",
+    ),
 }
 
 # action_code -> the headline disposition that action really asks for

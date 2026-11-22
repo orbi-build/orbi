@@ -40,7 +40,7 @@ orbi --version            # → orbi <version>
 ### 就绪检查（setup 之前）
 
 - `uv`：`uv --version`；Pi 和其 provider：`pi --version`，然后运行 `pi --print "reply with the single word: ok"`
-- GitHub CLI ≥ 2.94（从[官方仓库](https://github.com/cli/cli/blob/trunk/docs/install_linux.md)安装——Ubuntu 24.04 自带的 2.45.0 过旧）：先运行一次 `gh auth login`，再验证 `gh auth status`
+- GitHub CLI ≥ 2.99（从[官方仓库](https://github.com/cli/cli/blob/trunk/docs/install_linux.md)安装——Ubuntu 24.04 自带的 2.45.0 过旧）：先运行一次 `gh auth login`，再验证 `gh auth status`
 - Linux —— systemd user session：`systemctl --user status`
 - macOS —— launchd GUI session：`launchctl print gui/$(id -u)`（尚未在真机验证，欢迎回报）
 

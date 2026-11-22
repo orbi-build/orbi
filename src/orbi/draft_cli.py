@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """`orbi draft`'s command boundary (Issue #2041).
 
-The drafting engine lives in `orbi.draft`; this module owns the three
-modes a caller drives — interactive, one drafting round (`--session-dir`)
-and creation (`--create`) — plus the stdout/stderr documents they read and
+The drafting engine lives in `orbi.draft`; this module owns the command a
+caller drives — one drafting round (`--session-dir`), creation
+(`--create`) and the interactive entry it dispatches to
+(`orbi.draft_interactive`) — plus the stdout/stderr documents they read and
 write and the exit codes. Split out of `orbi.draft` so the engine stays one
 readable unit.
 
@@ -15,132 +16,17 @@ from __future__ import annotations
 
 import json
 import logging
-import shutil
 import sys
-import tempfile
 from pathlib import Path
+from typing import Sequence
 
-from orbi import draft, journal
+from orbi import attachments, draft, journal
 from orbi.config import RunnerConfig
-from orbi.draft_document import render_round
+from orbi.draft_interactive import interactive
 from orbi.journal import event
 from orbi.ticket_command import TicketCommandError
 
 # --- the command ---------------------------------------------------------
-
-def _ask(stdin, stdout, prompt: str) -> str | None:
-    """One terminal line; None at EOF, so a scripted or closed stdin never
-    loops and never creates anything by itself."""
-    stdout.write(prompt)
-    stdout.flush()
-    line = stdin.readline()
-    if line == "":
-        return None
-    is_tty = getattr(stdin, "isatty", None)
-    if not (callable(is_tty) and is_tty()):
-        # A terminal echoes the typed line itself; a scripted stdin does
-        # not, so the next line of output would otherwise run into the
-        # prompt.
-        stdout.write("\n")
-    return line.rstrip("\n")
-
-
-def _declined(stdout) -> int:
-    print("Nothing was created.", file=stdout)
-    return 0
-
-
-def _interactive(
-    config: RunnerConfig, repo: str, *, request: str | None, stdin, stdout,
-    run_id: str,
-) -> int:
-    """Questions, draft, typed edits and the confirmation in one process.
-
-    Nothing is left behind: the drafting session lives in a temp directory
-    that is removed when the command ends, created or not.
-    """
-    message = (request or "").strip()
-    if not message:
-        asked = _ask(stdin, stdout, "What should Orbi build? ")
-        if asked is None or not asked.strip():
-            raise draft.DraftError(
-                "no_request", "read the request", "no request was given",
-            )
-        message = asked.strip()
-    conversation: list[dict] = []
-    current: dict | None = None
-    session_root = Path(tempfile.mkdtemp(prefix="orbi-draft-"))
-    try:
-        for _round in range(draft.MAX_ROUNDS):
-            payload = {
-                "message": message,
-                "conversation": list(conversation),
-                "draft": current,
-            }
-            round_ = draft.run_round(
-                config, repo, session_dir=session_root, payload=payload,
-                run_id=run_id,
-            )
-            if round_.reply.strip():
-                print(round_.reply, file=stdout)
-            if round_.questions:
-                for position, question in enumerate(
-                    round_.questions, start=1,
-                ):
-                    print(
-                        f"Q{position} — {question.text}", file=stdout,
-                    )
-                    for option in question.options:
-                        print(
-                            f"  - {option.label}: {option.description}",
-                            file=stdout,
-                        )
-                answer = _ask(stdin, stdout, "Your answers: ")
-                if answer is None:
-                    return _declined(stdout)
-                conversation.append({"role": "person", "text": message})
-                conversation.append({"role": "orbi", "text": round_.reply})
-                # A bare Enter accepts no default answer (Issue #2133): an
-                # empty line answers nothing, so nothing is drafted from it.
-                if not answer.strip():
-                    return _declined(stdout)
-                message = answer.strip()
-                continue
-            if not round_.issues:
-                # Issue #2201: the round answered with a reply alone (a
-                # request not to change any code). The reply is the whole
-                # answer, so there is nothing to show or to create.
-                return 0
-            print(render_round(round_), file=stdout)
-            current = {"issues": [i.as_json() for i in round_.issues]}
-            answer = _ask(
-                stdin, stdout,
-                "Press Enter to create these Issues, type an edit, or 'n' "
-                "to cancel: ",
-            )
-            if answer is None:
-                return _declined(stdout)
-            typed = answer.strip()
-            if typed.lower() in draft.DECLINE:
-                return _declined(stdout)
-            if typed.lower() in draft.CONFIRM:
-                created = draft.create_issues(config, repo, {
-                    "key": f"draft-{run_id}",
-                    "issues": [issue.as_json() for issue in round_.issues],
-                })
-                for number in created:
-                    print(f"#{number}", file=stdout)
-                return 0
-            conversation.append({"role": "person", "text": message})
-            conversation.append({"role": "orbi", "text": round_.reply})
-            message = typed
-        raise draft.DraftError(
-            "too_many_rounds", "run the drafting round",
-            f"the draft still needs changes after {draft.MAX_ROUNDS} rounds",
-        )
-    finally:
-        shutil.rmtree(session_root, ignore_errors=True)
-
 
 def _fail(exc: draft.DraftError, *, non_interactive: bool, stderr) -> int:
     """Report one failed step: the JSON triple for a caller, prose for a
@@ -172,9 +58,12 @@ def _read_stdin(stdin) -> str:
 def run_draft(
     config: RunnerConfig, repo: str, *, request: str | None = None,
     session_dir: Path | None = None, create: bool = False,
-    stdin=None, stdout=None, stderr=None,
+    attach: Sequence[str] = (), stdin=None, stdout=None, stderr=None,
 ) -> int:
-    """Run one orbi draft invocation; return the process exit code."""
+    """Run one orbi draft invocation; return the process exit code.
+
+    `attach` is the repeatable `--attach <path>` list (Issue #2364).
+    """
     stdin = sys.stdin if stdin is None else stdin
     stdout = sys.stdout if stdout is None else stdout
     stderr = sys.stderr if stderr is None else stderr
@@ -182,25 +71,32 @@ def run_draft(
     journal.set_run_id(run_id)
     non_interactive = create or session_dir is not None
     try:
+        payload = (
+            attachments.with_paths(draft.read_payload(_read_stdin(stdin)), attach)
+            if create or session_dir is not None else {}
+        )
         if create:
-            created = draft.create_issues(
-                config, repo, draft.read_payload(_read_stdin(stdin)),
-            )
-            print(json.dumps({"created": created}), file=stdout)
+            created = draft.create_issues(config, repo, payload)
+            print(json.dumps({"created": created.numbers}), file=stdout)
+            if created.unuploaded:
+                print(
+                    attachments.upload_notice(created.unuploaded),
+                    file=stderr,
+                )
             return 0
         if session_dir is not None:
             round_ = draft.run_round(
-                config, repo, session_dir=Path(session_dir),
-                payload=draft.read_payload(_read_stdin(stdin)), run_id=run_id,
+                config, repo, session_dir=Path(session_dir), payload=payload,
+                run_id=run_id,
             )
             print(
                 json.dumps(round_.as_json(), ensure_ascii=False),
                 file=stdout,
             )
             return 0
-        return _interactive(
+        return interactive(
             config, repo, request=request, stdin=stdin, stdout=stdout,
-            run_id=run_id,
+            stderr=stderr, run_id=run_id, attach=attach,
         )
     except draft.DraftError as exc:
         return _fail(exc, non_interactive=non_interactive, stderr=stderr)
@@ -241,6 +137,10 @@ def register_cli(subparsers, common) -> None:
         help="run ONE drafting round: stdin "
              '{"message","conversation","draft"}, stdout '
              '{"reply","questions","issues"}',
+    )
+    parser.add_argument(
+        "--attach", action="append", default=[], metavar="PATH",
+        help="attach an image, HTML or text file to the draft (repeatable)",
     )
     parser.add_argument(
         "--create", action="store_true",

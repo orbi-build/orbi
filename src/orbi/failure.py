@@ -80,6 +80,11 @@ REASON_CODES = frozenset({
     "release_failed",
     "no_commit_delivered",
     "no_file_change",
+    # An image the Issue attaches cannot be read (Issue #2364,
+    # `orbi.issue_images.REASON_CODE`): an attachment is often the request
+    # itself, so the session never starts; the person uploads it again or
+    # removes it.
+    "attachment_unavailable",
     # Any other runner exception the classifier does not recognize.
     "unclassified",
 })
@@ -327,6 +332,7 @@ DISPOSITIONS: dict[str, tuple[str, bool]] = {
     "release_failed": ("fix_ticket", False),
     "no_commit_delivered": ("fix_ticket", False),
     "no_file_change": ("fix_ticket", False),
+    "attachment_unavailable": ("fix_ticket", False),
     "unclassified": ("fix_ticket", False),
 }
 

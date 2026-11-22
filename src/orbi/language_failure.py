@@ -56,6 +56,11 @@ FAILURE_MESSAGES: dict[str, tuple[str, str]] = {
         "the failure was temporary, so this Issue can be run again",
         "这是临时失败，重新运行这个 Issue 即可",
     ),
+    # Issue #2364: an image the Issue attaches could not be read.
+    "failure.disposition_attachment_unavailable": (
+        "an image attached to this Issue could not be read",
+        "这个 Issue 附带的图片无法读取",
+    ),
     # The two dispositions whose reason owns its own action sentence
     # (Issue #2351 with #1651/#1749): the headline names what is actually
     # wrong, so it never asks for a ticket edit the action does not ask for.
@@ -132,6 +137,17 @@ FAILURE_MESSAGES: dict[str, tuple[str, str]] = {
         "——无需其他操作。如果还缺少信息，请写进 Issue 正文，然后去掉 "
         "`ai-blocked`、重新加上 `ai-ready`（你们仓库的排队标签）——Orbi "
         "会按更新后的正文重新交付这个 Issue。",
+    ),
+    "failure.terminal_attachment_unavailable": (
+        "Upload the image named in the reason again (or paste it into a "
+        "comment), or remove it from the Issue; then remove `ai-blocked` and "
+        "add `ai-ready` when this Issue has no open PR, or `ai-fix-needed` "
+        "when one is open — Orbi runs this Issue again with the file it can "
+        "read.",
+        "请重新上传原因里指出的图片（或把它粘贴进一条评论），或者从 Issue "
+        "中删除它；然后去掉 `ai-blocked`：该 Issue 没有打开的 PR 时加 "
+        "`ai-ready`，有 PR 时加 `ai-fix-needed`——Orbi 会用能读出"
+        "的文件重新运行这个 Issue。",
     ),
     "failure.terminal_check_credentials": (
         "Verify the GitHub/provider credential this run needed — it must be "
