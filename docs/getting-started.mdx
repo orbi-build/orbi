@@ -30,7 +30,8 @@ less install.sh
 bash install.sh
 ```
 
-The installer requires `git`, `gh`, and a scheduler user session
+The installer requires `git`, `gh`, a GitHub SSH key (it clones
+`git@github.com:orbi-build/orbi.git` over SSH), and a scheduler user session
 (systemd on Linux, launchd on macOS); uv provisions
 Python 3.14 when needed. It also installs the
 [Pi](https://github.com/earendil-works/pi) CLI for you (via
@@ -685,7 +686,7 @@ concrete, checkable success criterion:
 
 | Stage | Success criterion | Where to check |
 |---|---|---|
-| Picked up | The Issue label moves `ai-ready → ai-in-progress`; the task worktree and branch exist (both carry the run id) | `gh issue view <n> --json labels`; journal `run_start run=<run_id> ...` |
+| Picked up | The Issue label moves `ai-ready → ai-in-progress`; the task worktree (its path carries the run id) and the branch `orbi/<owner>-<repo>-issue-<n>` exist | `gh issue view <n> --json labels`; journal `run_start run=<run_id> ...` |
 | Implemented and tested | Pi runs the TDD loop in the worktree; the single progress comment on the Issue reports the tests milestone | `orbi session --follow`; the progress comment on the Issue |
 | PR opened | Journal `run_end ... result=pr_opened pr=<url> commit=<sha>`; the Issue label is `ai-pr-opened`; the PR body contains `Fixes #<n>` and the run marker | `gh pr view <n> --json url,body` |
 | Reviewed | The next tick resumes the same run; journal `review pr=<n> round=1 verdict=pass blockers=0 majors=0` | the journal; the PR |

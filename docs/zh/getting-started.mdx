@@ -27,7 +27,8 @@ less install.sh
 bash install.sh
 ```
 
-安装器需要 `git`、`gh` 和调度器 user session（Linux 为 systemd，macOS
+安装器需要 `git`、`gh`、GitHub SSH key（它通过 SSH 克隆
+`git@github.com:orbi-build/orbi.git`）和调度器 user session（Linux 为 systemd，macOS
 为 launchd）；uv 会在需要时提供 Python 3.14。安装器还会替你安装
 [Pi](https://github.com/earendil-works/pi) CLI（通过
 `npm install -g --ignore-scripts @earendil-works/pi-coding-agent`）——
@@ -597,7 +598,7 @@ tick（手工或 timer）里继续走独立审查和 merge。每个阶段都有�
 
 | 阶段 | 成功标准 | 在哪里检查 |
 |---|---|---|
-| 被领取 | Issue 标签 `ai-ready → ai-in-progress`；任务 worktree 和分支存在（都带 run id） | `gh issue view <n> --json labels`；journal `run_start run=<run_id> ...` |
+| 被领取 | Issue 标签 `ai-ready → ai-in-progress`；任务 worktree（路径带 run id）和分支 `orbi/<owner>-<repo>-issue-<n>` 存在 | `gh issue view <n> --json labels`；journal `run_start run=<run_id> ...` |
 | 实现并测试 | Pi 在 worktree 里跑 TDD 循环；Issue 上唯一的 progress comment 报告 tests milestone | `orbi session --follow`；Issue 上的 progress comment |
 | PR 打开 | journal `run_end ... result=pr_opened pr=<url> commit=<sha>`；Issue 标签 `ai-pr-opened`；PR body 含 `Fixes #<n>` 和 run marker | `gh pr view <n> --json url,body` |
 | 独立审查 | 下一个 tick 恢复同一个 run；journal `review pr=<n> round=1 verdict=pass blockers=0 majors=0` | journal；PR |
