@@ -263,7 +263,18 @@ def test_process_ticket_only_posts_agent_output_without_git_delivery(monkeypatch
     )
     assert "<!-- orbi:run=a1b2c3d4 -->" in comments[0][1]["body"]
     assert "run_id=a1b2c3d4" in comments[0][1]["body"]
-    assert ["gh", "issue", "close", "99", "--repo", "o/r"] in commands
+    # The ticket-only path still runs NO git command: its whole
+    # subprocess traffic is the claim's label read and the terminal close.
+    assert commands == [
+        ["gh", "issue", "view", "99", "--repo", "o/r", "--json", "labels"],
+        [
+            "gh", "api", "--method", "PUT",
+            "repos/o/r/issues/99/labels",
+            "-f", "labels[]=ai-content-only", "-f", "labels[]=bug",
+            "-f", "labels[]=ai-in-progress", "--include",
+        ],
+        ["gh", "issue", "close", "99", "--repo", "o/r"],
+    ]
 
 
 def _answer_terminal_labels(monkeypatch, labels):
