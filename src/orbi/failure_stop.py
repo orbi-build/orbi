@@ -23,10 +23,11 @@ from orbi import language, provider_balance
 if TYPE_CHECKING:  # the record's home imports this module's names back
     from orbi.failure import Failure
 
-# reason_code -> (action key, disposition key): the two reasons that own a
+# reason_code -> (action key, disposition key): the reasons that own a
 # better sentence than their action family can give: the undetermined cause
-# (which must not blame the Issue text, Issue #1651) and the branch a human
-# must create or pick (Issue #1749). ONE table feeds BOTH strings, so a
+# (which must not blame the Issue text, Issue #1651), the branch a human
+# must create or pick (Issue #1749) and the empty-tree stop (whose Issue may
+# already be satisfied, Issue #2358). ONE table feeds BOTH strings, so a
 # headline can never tell the reader to change the Issue while the action
 # beside it names a repository or evidence repair. They are read before the
 # action family, never instead of it.
@@ -37,6 +38,10 @@ _REASON_WORDING = {
     "base_branch_missing": (
         "failure.terminal_base_branch_missing",
         "failure.disposition_base_branch",
+    ),
+    "no_file_change": (
+        "failure.terminal_no_file_change",
+        "failure.disposition_no_file_change",
     ),
 }
 
@@ -65,9 +70,10 @@ def _disposition_key(record: "Failure") -> str:
     A `retry_safe` stop needs no repair (a plain re-queue can succeed), so it
     never claims a decision; the no-commit stop names what happened instead,
     because "the ticket needs a change" is not what its reader would guess;
-    and a reason with its own action sentence above keeps the opposite
-    disposition, so the headline never asks for a ticket edit the action
-    does not ask for (Issue #2351).
+    and a reason in `_REASON_WORDING` above keeps the disposition paired with
+    its action sentence (the empty-tree stop says its Issue may already be
+    satisfied), so the headline never asks for a ticket edit the action does
+    not ask for (Issue #2351, #2358).
     """
     if record.retry_safe:
         return "failure.disposition_retry"

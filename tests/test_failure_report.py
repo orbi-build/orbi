@@ -524,6 +524,13 @@ NO_COMMIT_DETAIL = (
 )
 
 
+NO_FILE_CHANGE_DETAIL = (
+    "the agent delivered no file change on the task branch (HEAD abc123 tree "
+    "def456 equals the frozen base def456 tree def456; last commit subject: "
+    "'… is already delivered — no code change')"
+)
+
+
 def assistant_message(text: str, *, timestamp: str = "2026-11-21T17:51:00Z"):
     """One assistant message record carrying `text`."""
     return json.dumps({
@@ -655,6 +662,102 @@ def test_the_terminal_progress_comment_uses_the_same_headline(
     assert language.text("en", "failure.disposition_decide") not in (
         publisher.finish_bodies[0]
     )
+
+
+def no_file_change() -> BaseException:
+    """The real record-carrying empty-tree stop of the commit boundary."""
+    from orbi import terminal_stops
+
+    return terminal_stops.NoFileChange(NO_FILE_CHANGE_DETAIL)
+
+
+def report_no_file_change(monkeypatch, tmp_path, language_code: str, *,
+                          session_content: str, publisher: FakePublisher):
+    """One no-file-change stop through the reporter, with a real session log."""
+    error = no_file_change()
+    action = failure.terminal_action(error.failure_record, language_code)
+    outcome, posted, _pr_comments = _report(
+        monkeypatch, tmp_path, session=True, publisher=publisher,
+        session_content=session_content, exc=error,
+        classify=False, evidence=True, finish=True,
+        action=action, language_code=language_code,
+    )
+    return outcome, posted[0], action
+
+
+@pytest.mark.parametrize("language_code", ["en", "zh"])
+def test_no_file_change_stop_names_the_no_file_change_and_both_steps(
+        monkeypatch, tmp_path, language_code):
+    """Issue #2358 acceptance 1 (en + zh): driven by a real fixture session
+    log through the delivery failure report, the no-file-change stop says the
+    run changed no file, gives BOTH next steps (close an already satisfied
+    Issue, or add the missing detail and re-queue), quotes the session's
+    explanation and never shows the generic `fix_ticket` wording."""
+    publisher = FakePublisher()
+    outcome, body, action = report_no_file_change(
+        monkeypatch, tmp_path, language_code,
+        session_content=explanation_session(WORKING_TURN),
+        publisher=publisher,
+    )
+    assert outcome == "blocked"
+    assert language.text(
+        language_code, "failure.disposition_no_file_change") in body
+    assert language.text(
+        language_code, "failure.disposition_ticket_change") not in body
+    assert language.text(
+        language_code, "failure.terminal_ticket_change") not in body
+    assert language.text(language_code, "failure.disposition_decide") not in body
+    assert EXPLANATION in body
+    assert f"```\n{EXPLANATION}\n```" in body
+    action_line = next(
+        line for line in body.splitlines()
+        if line.startswith(language.text(language_code, "failure.action_label"))
+    )
+    assert action == language.text(
+        language_code, "failure.terminal_no_file_change")
+    assert action_line == (
+        f"{language.text(language_code, 'failure.action_label')} {action}"
+    )
+    assert "`ai-blocked`" in action_line and "`ai-ready`" in action_line
+    if language_code == "en":
+        assert "close the Issue" in action_line
+        assert "already satisfied" in action_line
+        assert "still missing" in action_line
+    # The comment's section order is unchanged.
+    headline = language.text(
+        language_code, "failure.headline_blocked",
+        disposition=language.text(
+            language_code, "failure.disposition_no_file_change"),
+    )
+    assert body.index(headline) < body.index(action_line)
+    if language_code == "en":
+        assert "changed no file" in headline
+    reason_label = language.text(language_code, "failure.reason_label")
+    assert body.index(action_line) < body.index(reason_label)
+    assert body.index(reason_label) < body.index("<details>")
+
+
+def test_the_terminal_progress_comment_of_a_no_file_change_stop_matches(
+        monkeypatch, tmp_path):
+    """Issue #2358 acceptance 2: the terminal progress comment of the same
+    record shows the same headline as the failure comment."""
+    publisher = FakePublisher()
+    _outcome, body, _action = report_no_file_change(
+        monkeypatch, tmp_path, "en",
+        session_content=explanation_session(WORKING_TURN),
+        publisher=publisher,
+    )
+    headline = language.text(
+        "en", "failure.headline_blocked",
+        disposition=language.text("en", "failure.disposition_no_file_change"),
+    )
+    assert headline in body
+    assert publisher.finish_bodies, "the terminal progress scene was not published"
+    assert f"**{headline}**" in publisher.finish_bodies[0]
+    assert language.text(
+        "en", "failure.disposition_ticket_change") not in (
+            publisher.finish_bodies[0]
+        )
 
 
 def test_the_explanation_is_redacted_like_every_comment_sentence(
