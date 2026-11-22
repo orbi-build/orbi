@@ -787,10 +787,14 @@ the Attachments section and any native GitHub image of the body or a trusted com
 (`github.com/user-attachments/assets/...`, read through GitHub's Markdown rendering
 and downloaded with no token), with the same naming line. Unreadable means stop: a
 drafting round that cannot read an attachment fails and names the file, and a
-delivery or review session does not start — the engine posts one comment naming the
-image and the repair (upload it again, or remove it from the Issue, then put the
-ticket back in the queue). Nothing is skipped silently, and the journal line
-`issue_images_unreadable` records the reason without the signed address.
+delivery or review session does not start — the stop goes through the failure-stop
+path with the reason code `attachment_unavailable` (its record is defined in
+[Workflow](/workflow#failure-record-orbifailurev1)), so
+the Issue ends `ai-blocked` with ONE comment naming the image and the repair (upload
+it again, or remove it from the Issue, then remove `ai-blocked` and add
+`ai-ready`, or `ai-fix-needed` when a PR is open) and no tick re-runs it. Nothing is
+skipped silently, and the journal line `issue_images_unreadable` records the reason
+without the signed address.
 
 Failure output is one JSON object on stderr and exit code 1:
 

@@ -522,7 +522,7 @@ def run_pi(issue: dict, ctx: RunContext, config: config_domain.RunnerConfig, *,
         render_prompt(template, prompt_values), language.of(config),
     )
     # Issue #2364: the Issue's images, staged before the session starts.
-    images = issue_images.for_session_or_stop(
+    images = issue_images.for_session(
         issue, config=config, repo=source_repo, worktree=worktree,
     )
     context = (
@@ -835,7 +835,7 @@ def run_review(ctx: RunContext, pr: dict, config: config_domain.RunnerConfig, ro
         language.of(config),
     )
     # Every review round reads the Issue's images again (Issue #2364).
-    images = issue_images.for_session_or_stop(
+    images = issue_images.for_session(
         {"number": issue, "body": issue_body}, config=config,
         repo=source_repo, worktree=worktree, review=True,
     )

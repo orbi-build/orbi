@@ -648,9 +648,12 @@ session 用 `read` 读取 HTML 与文本，而无工具的保真检查同样以 
 或可信评论中任何原生 GitHub 图片
 （`github.com/user-attachments/assets/...`，经 GitHub 的 Markdown 渲染读出、下载时
 不带任何 token），并使用同一行说明。读不出来即停止：读不到附件的起草轮会失败并指出
-文件名；交付或审查 session 不会启动，引擎会在 Issue 上发一条评论，指出读不出的图片
-与修复方式（重新上传它，或把它从 Issue 中删除，然后把工单放回队列）。绝不静默跳过；
-journal 的 `issue_images_unreadable` 记录原因，但不含签名地址。
+文件名；交付或审查 session 不会启动，停止走失败报告路径，原因码为
+`attachment_unavailable`（记录定义见[工作流](/zh/workflow)），
+因此 Issue 停在 `ai-blocked`，只有一条评论指出读不出的图片与修复方式（重新上传它，
+或把它从 Issue 中删除，然后去掉 `ai-blocked`：没有打开的 PR 时加 `ai-ready`，
+有 PR 时加 `ai-fix-needed`），不会再有 tick 重试它。绝不静默跳过；journal 的
+`issue_images_unreadable` 记录原因，但不含签名地址。
 
 失败时向 stderr 输出一个 JSON 对象并返回退出码 1：
 

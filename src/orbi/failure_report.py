@@ -56,6 +56,7 @@ from orbi.github import (
     issue_labels, issue_priority, pr_comments, run_gh_write_command,
     update_issue_comment,
 )
+from orbi.issue_images import Unreadable
 from orbi.journal import LOGGER, event, issue_context, run_command
 from orbi.pi_activity import activity_snapshot
 from orbi.pi_process import RateLimitExhaustedError
@@ -149,7 +150,10 @@ def is_unrecoverable_failure(exc: BaseException) -> bool:
     budget of the delivery attempt is spent on an external condition,
     and a recoverable classification would resume the open-PR review
     with the persisted counter already at the limit — one 429 exit per
-    tick, forever, the unbounded loop the issue bans. Every other
+    tick, forever, the unbounded loop the issue bans. So does an
+    unreadable attachment (`issue_images.Unreadable`, Issue #2364): the
+    same file cannot become readable by itself, so a retry only repeats
+    the stop. Every other
     failure — Pi execution failure (pi exit, upstream dead, idle
     recovery), timeout, runner exception, missing/malformed verdict,
     missing worktree, unpushed local commit, gate failure — is
@@ -157,7 +161,9 @@ def is_unrecoverable_failure(exc: BaseException) -> bool:
     resumes the same run, branch, worktree and PR. A single failure
     must never permanently stop an Issue.
     """
-    return isinstance(exc, (UnrecoverableDeliveryError, RateLimitExhaustedError))
+    return isinstance(exc, (
+        UnrecoverableDeliveryError, RateLimitExhaustedError, Unreadable,
+    ))
 
 
 # The delivery exception hierarchy is OURS; the closed code set and its
@@ -536,6 +542,20 @@ def _update_reported_failure(*, number: int, source_repo: str,
             run_id=run_id, fingerprint=fingerprint,
         )
     return False
+
+
+def blocked_action(exc: BaseException, text) -> str:
+    """The blocked review stop's Action sentence.
+
+    An unreadable attachment is repaired by the FILE (upload it again or
+    remove it), never by editing the Issue body, so the review comment reuses
+    the delivery comment's ONE sentence instead of a review-specific copy of
+    it (Issue #2364). Every other failure keeps the review loop's generic
+    resume sentence.
+    """
+    if isinstance(exc, Unreadable):
+        return text("failure.terminal_attachment_unavailable")
+    return text("review.blocked_generic_action")
 
 
 def _typed_failure_wording(

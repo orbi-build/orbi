@@ -6,6 +6,7 @@ the headers they carried, the argv the session received and the journal.
 """
 from __future__ import annotations
 
+import functools
 import json
 import logging
 from pathlib import Path
@@ -13,6 +14,9 @@ from pathlib import Path
 import pytest
 
 import orbi.attachments as attachments
+import orbi.failure as failure
+import orbi.failure_report as failure_report
+import orbi.language as language
 import orbi.issue_images as issue_images
 import orbi.model_catalog as model_catalog
 import orbi.pi_session as pi_session
@@ -185,28 +189,6 @@ def test_a_download_that_is_not_an_image_is_unreadable(
     assert "ValueError" in caplog.text
 
 
-def test_a_stop_comment_that_cannot_be_posted_still_stops(
-    gh, downloads, worktree, monkeypatch, caplog,
-):
-    """The comment is a bypass: the delivery stops either way (Issue #79)."""
-    address = "https://cdn.example.test/gone.png"
-    downloads.failures[address] = OSError("no route")
-    body = drafted(BODY, section=f"## Attachments\n\n![shot]({address})")
-
-    def refuse(*args, **kwargs):
-        raise RuntimeError("gh: HTTP 403")
-
-    monkeypatch.setitem(issue_images.__dict__, "comment_issue", refuse)
-    with caplog.at_level(logging.WARNING), pytest.raises(
-        issue_images.Unreadable, match="shot",
-    ):
-        issue_images.for_session_or_stop(
-            {"number": 1, "body": body}, config=image_input_config(),
-            repo=REPO, worktree=worktree,
-        )
-    assert "issue_images_stop_comment_failed" in caplog.text
-
-
 def test_an_unreadable_image_stops_and_names_the_file(
     gh, downloads, worktree, caplog,
 ):
@@ -260,7 +242,6 @@ def test_the_signed_address_is_never_logged(
         )
     assert "jwt=" not in caplog.text
     assert "secret" not in caplog.text
-    assert issue_images.stop_comment(("shot",)).count("jwt=") == 0
 
 
 # --- the sessions -------------------------------------------------------
@@ -341,12 +322,78 @@ def test_an_unreadable_image_stops_before_any_session(
             config,
         )
     assert calls == []
-    [comment] = gh.issues[4]["comments"]
-    assert "shot" in comment["body"]
-    assert "gh auth login" not in comment["body"]
-    assert "upload" in comment["body"].lower()
-    assert "jwt=" not in comment["body"]
+    # The failure report posts the ONE comment, so the session boundary
+    # posts none (Issue #2364: exactly one stop comment).
+    assert gh.issues[4]["comments"] == []
     assert not (worktree / ".orbi" / "attachments" / "1.png").exists()
+
+
+def test_the_stop_carries_its_own_failure_record():
+    """Acceptance 6: the reason is decided at the source, not by the text."""
+    exc = issue_images.Unreadable(("shot", "spec.png"))
+    assert exc.failure_record.reason_code == issue_images.REASON_CODE
+    assert exc.failure_record.reason_code in failure.REASON_CODES
+    assert exc.failure_record.retry_safe is False
+    assert str(exc) == "the attached images shot, spec.png could not be read"
+    assert failure_report.is_unrecoverable_failure(exc) is True
+
+
+def _stop_report(gh, exc, *, classify: bool, action: str, reason: str):
+    """Report the stop the way the delivery (`classify=False`) or the
+    review round (`classify=True`) does: the caller supplies the readable
+    Reason/Action exactly as `implementation_delivery` and
+    `review_merge` build them."""
+    gh.add_issue(4, title="Tag a note", labels=[{"name": "ai-in-progress"}])
+    failure_report.report_delivery_failure(
+        exc,
+        issue={"number": 4, "title": "Tag a note",
+               "labels": [{"name": "ai-in-progress"}]},
+        source_repo=REPO, run_id=None, pr_url=None, worktree=None,
+        branch="b", role="implement", language_code="en",
+        classify=classify, evidence=False, finish=False,
+        ready_label="ai-ready", current_labels={"ai-in-progress", "ai-ready"},
+        action=action, reason=reason,
+    )
+    return gh.issues[4]
+
+
+@pytest.mark.parametrize("review", [False, True])
+def test_an_unreadable_image_blocks_the_issue_with_one_comment(gh, review):
+    """Acceptance 6: `ai-blocked` and ONE comment naming the file and the fix.
+
+    `classify=False` is the implement-phase terminal report and
+    `classify=True` an open PR's review round: both stop this way, and a
+    blocked Issue is not claimed again, so no second tick comments. The
+    failure block carries `attachment_unavailable` either way.
+    """
+    exc = issue_images.Unreadable(("shot",))
+    record = failure_report._classify_failure(exc, outcome="blocked")
+    repair = failure_report.terminal_action(record, "en")
+    issue = _stop_report(
+        gh, exc, classify=review,
+        action=(
+            failure_report.blocked_action(
+                exc, functools.partial(language.text, "en"),
+            ) if review else repair
+        ),
+        reason=(
+            failure.failure_detail(exc) if not review
+            else language.text(
+                "en", "review.blocked_failed_reason", detail=str(exc),
+                pr_url="https://x/pull/9",
+            )
+        ),
+    )
+    assert "ai-blocked" in issue["labels"]
+    assert "ai-in-progress" not in issue["labels"]
+    [comment] = issue["comments"]
+    body = comment["body"]
+    assert "shot" in body
+    assert "could not be read" in body
+    assert '"reason_code":"attachment_unavailable"' in body
+    assert "ai-ready" in body and "ai-fix-needed" in body
+    assert "Upload the image" in body
+    assert "jwt=" not in body
 
 
 # --- the catalog --------------------------------------------------------

@@ -77,6 +77,7 @@ def test_reason_and_action_codes_are_closed_sets_with_expected_members():
         "release_failed",
         "no_commit_delivered",
         "no_file_change",
+        "attachment_unavailable",
         "unclassified",
     }
     assert failure.ACTION_CODES == {
@@ -527,10 +528,10 @@ def test_every_retry_unsafe_stop_words_its_own_action(reason_code):
     assert failure.parse(body) == record
 
 
-def test_the_twelve_retry_unsafe_codes_are_covered():
-    """The Issue names twelve codes: the table above must not silently
-    shrink to a subset of them."""
-    assert len(RETRY_UNSAFE) == 12
+def test_the_thirteen_retry_unsafe_codes_are_covered():
+    """The twelve codes of Issue #2351 plus `attachment_unavailable`
+    (Issue #2364): the table above must not silently shrink to a subset."""
+    assert len(RETRY_UNSAFE) == 13
 
 
 def test_two_reasons_with_the_same_action_get_the_same_wording():

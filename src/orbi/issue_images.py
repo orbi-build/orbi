@@ -20,9 +20,12 @@ reach any other model, so nothing is read for it (orbi.model_catalog).
 
 Unreadable means stop: an attachment is often the request itself, so
 skipping it would write the wrong code. A failed image download or render
-raises `Unreadable` naming the files, and the caller stops before the
-session starts and comments the repair on the Issue. A failed COMMENT read
-stays a bypass (Issue #79): the body's own images still arrive.
+raises `Unreadable` naming the files, the caller stops before the session
+starts, and the exception CARRIES its failure record: the existing
+failure-stop path reports it once as `attachment_unavailable`, blocks the
+Issue and resumes nothing, so an unreadable file cannot be retried every tick
+(Issue #2364). A failed COMMENT read stays a bypass (Issue #79): the body's
+own images still arrive.
 """
 from __future__ import annotations
 
@@ -31,22 +34,38 @@ import re
 import urllib.request
 from pathlib import Path
 
-from orbi import attachments, draft_marker, model_catalog
+from orbi import attachments, draft_marker, failure, model_catalog
 from orbi.comment_trust import comment_is_trusted
-from orbi.github import comment_issue, issue_comments, run_gh_write_command
+from orbi.github import issue_comments, run_gh_write_command
 from orbi.journal import event
+
+# The stop's own reason code, one member of `orbi.failure`'s closed set: a
+# person repairs it by uploading the file again or removing it, and no
+# automatic retry can.
+REASON_CODE = "attachment_unavailable"
 
 
 class Unreadable(RuntimeError):
     """One or more of an Issue's images could not be read.
 
-    The names are what the Issue comment shows; a URL never rides along,
-    because a signed address carries its credential in the query.
+    The names are what the failure comment shows; a URL never rides along,
+    because a signed address carries its credential in the query. The failure
+    record rides the exception, so the STOP is decided at its source: the
+    failure report reads the record, never the sentence, and the Issue blocks
+    with one comment instead of re-running the same unreadable image.
     """
 
     def __init__(self, names: "tuple[str, ...]") -> None:
         self.names = names
-        super().__init__(", ".join(names))
+        plural = "s" if len(names) > 1 else ""
+        super().__init__(
+            f"the attached image{plural} {', '.join(names)} could not be read"
+        )
+        action_code, retry_safe = failure.DISPOSITIONS[REASON_CODE]
+        self.failure_record = failure.Failure(
+            reason_code=REASON_CODE, action_code=action_code,
+            retry_safe=retry_safe,
+        )
 
 
 # The repository-relative directory the images are staged in, inside the
@@ -71,9 +90,10 @@ def for_session(
     """The images one delivery or review session receives.
 
     Raises `Unreadable` when any image cannot be read: the caller stops
-    before the session starts and comments the repair, so the request is
-    never half-seen. A failed comment read is still a bypass, logged and
-    skipped, and leaves the body's own images in place.
+    before the session starts, so the request is never half-seen, and the
+    failure-stop path reports it once as `attachment_unavailable` (the
+    record rides the exception). A failed comment read is still a bypass,
+    logged and skipped, and leaves the body's own images in place.
     """
     viewable = model_catalog.declares_image_input(config, review=review)
     if not viewable:
@@ -109,46 +129,6 @@ def for_session(
     if unreadable:
         raise Unreadable(tuple(unreadable))
     return attachments.Attached(files=tuple(files), viewable=True)
-
-
-def for_session_or_stop(
-    issue: dict, *, config, repo: str, worktree: Path, review: bool = False,
-) -> attachments.Attached:
-    """The images one session receives; unreadable stops it (Issue #2364).
-
-    An attachment is often the request itself: skipping one writes the
-    wrong code, so the delivery does not start. The comment names what
-    could not be read and the repair, then the original error stops the
-    run. A comment-write failure never masks that stop.
-    """
-    try:
-        return for_session(
-            issue, config=config, repo=repo, worktree=worktree,
-            review=review,
-        )
-    except Unreadable as exc:
-        try:
-            comment_issue(
-                int(issue["number"]), repo=repo,
-                body=stop_comment(exc.names),
-            )
-        except Exception as failure:  # noqa: BLE001 - a bypass on a stop
-            event(
-                "issue_images_stop_comment_failed", level=logging.WARNING,
-                issue=issue.get("number"), reason=type(failure).__name__,
-            )
-        raise
-
-
-def stop_comment(names: "tuple[str, ...]") -> str:
-    """The one Issue comment naming the images and the repair."""
-    listed = ", ".join(names)
-    return (
-        f"Orbi stopped before starting the delivery: it could not read the "
-        f"image {listed} of this Issue. Upload {listed} again (or paste it "
-        "as a new comment), or remove it from the Issue, then put the "
-        "ticket back in the queue."
-    )
 
 
 def with_context(context: str, images: attachments.Attached) -> str:

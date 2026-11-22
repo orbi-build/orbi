@@ -1201,7 +1201,7 @@ def _run_review_round(
         else:
             reason = text("review.blocked_failed_reason", detail=detail)
         if not action and failure_report.is_unrecoverable_failure(exc):
-            action = text("review.blocked_generic_action")
+            action = failure_report.blocked_action(exc, text)
         # The shared classified reporter: recoverable ->
         # `ai-fix-needed` with the full scene on Issue AND PR,
         # unrecoverable -> `ai-blocked` ALONE. No wrapper: a reporting
