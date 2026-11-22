@@ -153,8 +153,8 @@ def test_resume_decision_and_journal_line_are_golden(
 ):
     """The recoverable unpushed-commit scene: the local HEAD is AHEAD of
     the PR head and the PR head is its ancestor. The resume CONTINUES
-    (the next review pushes), records the exact journal line and
-    backfills the in-flight label."""
+    (the next review pushes) and records the exact journal line; it
+    writes no label, the opened-PR state carries the round (#2357)."""
     fake = FakeGh("owner/repo")
     fake.add_issue(9, title="ship", labels=("ai-pr-opened",))
     fake.add_pr(
@@ -184,8 +184,9 @@ def test_resume_decision_and_journal_line_are_golden(
         f"[{FAKE_RUN_ID}] local_head_ahead_of_pr_head "
         f"pr_head={REMOTE_HEAD} local_head={LOCAL_HEAD} branch={FAKE_BRANCH}",
     ]
-    # The in-flight label is backfilled before the work continues.
-    assert "ai-in-progress" in fake.issues[9]["labels"]
+    # Issue #2357: the resumed round writes no ai-in-progress; the
+    # opened-PR label carries it.
+    assert "ai-in-progress" not in fake.issues[9]["labels"]
     assert "ai-pr-opened" in fake.issues[9]["labels"]
 
 
@@ -244,8 +245,9 @@ def test_resume_fast_forwards_a_pr_head_advanced_on_github(
         f"[{FAKE_RUN_ID}] pr_head_fast_forwarded pr_head={REMOTE_HEAD} "
         f"previous_head={LOCAL_HEAD} branch={FAKE_BRANCH}",
     ]
-    # The in-flight label is backfilled before the work continues.
-    assert "ai-in-progress" in fake.issues[9]["labels"]
+    # Issue #2357: no ai-in-progress write; the label set is unchanged.
+    assert "ai-in-progress" not in fake.issues[9]["labels"]
+    assert "ai-pr-opened" in fake.issues[9]["labels"]
 
 
 def test_reconcile_pr_head_fetches_under_the_base_sync_lock(

@@ -3,7 +3,8 @@ answer: True
 command ["gh", "pr", "view", "4", "--json", "mergeable"]
 command ["git", "rev-parse", "HEAD"]
 command ["git", "rev-list", "--count", "m1^1..m1^2"]
-label {"add": "ai-merged", "remove": "ai-pr-opened", "repo": "owner/repo"}
+label {"remove": "ai-pr-opened", "repo": "owner/repo"}
+label {"add": "ai-merged", "repo": "owner/repo"}
 comment
   <!-- orbi:run=a1b2c3d4 -->
   <!-- orbi:comment=merged -->

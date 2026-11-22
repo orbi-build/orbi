@@ -1,7 +1,7 @@
 {
   "boundary_total": 1152,
   "command_shape_asserts": 437,
-  "internal_total": 1623,
+  "internal_total": 1622,
   "monkeypatch_setattr_runner": 104,
   "monkeypatch_setattr_runner_string": 3,
   "per_target": {
@@ -37,7 +37,7 @@
     "release_run": 8,
     "request": 1,
     "resume_verification": 5,
-    "review_merge": 50,
+    "review_merge": 49,
     "run_state": 5,
     "runner": 109,
     "runner_health": 14,

@@ -1749,11 +1749,11 @@ def test_resumed_awaiting_merge_succeeds_without_review(monkeypatch, tmp_path):
             "owner/repo", 4, title="Review task", priority="normal",
             scene=_scene(), merge_only=True,
         ) is True
-    assert any(
-        call.get("add") == "ai-merged"
-        and call.get("remove") == "ai-awaiting-merge"
-        for call in calls
-    )
+    # Issue #2357: the removal is written before the terminal add.
+    assert calls == [
+        {"repo": "owner/repo", "remove": "ai-awaiting-merge"},
+        {"repo": "owner/repo", "add": "ai-merged"},
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -2720,12 +2720,17 @@ def test_review_and_merge_clean_verdict_merges_and_labels_merged(
     )
     assert merged is True
     assert "sync" in calls
-    assert ("edit", {"repo": "owner/repo", "add": "ai-merged",
-                     "remove": "ai-pr-opened"}) in calls
+    # Issue #2357: every removal is written before the terminal add, so
+    # the timeline ends on ai-merged.
+    assert ("edit", {"repo": "owner/repo", "remove": "ai-pr-opened"}) in calls
     # Issue #1526: the merge also clears the ready queue entry, so the
-    # Issue ends `ai-merged` ALONE (the extra remove is a second,
-    # remove-only edit_issue call).
+    # Issue ends `ai-merged` ALONE.
     assert ("edit", {"repo": "owner/repo", "remove": "ai-ready"}) in calls
+    assert [c[1] for c in calls if c[0] == "edit"] == [
+        {"repo": "owner/repo", "remove": "ai-pr-opened"},
+        {"repo": "owner/repo", "remove": "ai-ready"},
+        {"repo": "owner/repo", "add": "ai-merged"},
+    ]
     comments = [c[1] for c in calls if c[0] == "comment"]
     receipts = [body for body in comments if "Orbi merged PR: u" in body]
     assert len(receipts) == 1, comments
@@ -2755,8 +2760,8 @@ def test_review_and_merge_clean_verdict_merges_and_labels_merged(
     assert "- review_rounds: 1\n" in milestone[0]
     # Delivery labels land before the local checkout sync: a sync
     # failure must not rewrite a landed merge as ai-blocked.
-    assert calls.index(("edit", {"repo": "owner/repo", "add": "ai-merged",
-                                 "remove": "ai-pr-opened"})) < calls.index("sync")
+    assert calls.index(("edit", {"repo": "owner/repo",
+                                 "add": "ai-merged"})) < calls.index("sync")
     # Issue #1660: the review/merge phase PATCHes the run's LIVE progress
     # comment, so the round's context and publisher carry the bound
     # message language: a zh-bound delivery renders the header and the
@@ -3020,13 +3025,13 @@ def test_review_and_merge_fix_round_clears_live_delivery_labels(
         "owner/repo", 4, title="Review task", priority="normal",
     scene=_scene(),
     ) is True
+    # Issue #2357: every state label is removed before the terminal add,
+    # so the timeline ends on ai-merged and the Issue carries it alone.
     assert calls == [
-        {"repo": "owner/repo", "add": "ai-merged",
-         "remove": "ai-in-progress"},
+        {"repo": "owner/repo", "remove": "ai-in-progress"},
         {"repo": "owner/repo", "remove": "ai-fix-needed"},
-        # Issue #1526: the merge clears the ready queue entry too, so a
-        # resumed fix round ends `ai-merged` ALONE.
         {"repo": "owner/repo", "remove": "ai-ready"},
+        {"repo": "owner/repo", "add": "ai-merged"},
     ]
 
 
@@ -3328,8 +3333,8 @@ def test_review_and_merge_keeps_merged_when_checkout_sync_fails(
         scene=_scene(),
     )
     assert merged is True
-    assert ("edit", {"repo": "owner/repo", "add": "ai-merged",
-                     "remove": "ai-pr-opened"}) in calls
+    assert ("edit", {"repo": "owner/repo", "remove": "ai-pr-opened"}) in calls
+    assert ("edit", {"repo": "owner/repo", "add": "ai-merged"}) in calls
     assert any(
         c[0] == "comment" and "Orbi merged PR:" in (c[1] or "")
         for c in calls

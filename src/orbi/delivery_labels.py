@@ -120,11 +120,10 @@ def label_patch(event: str, current_labels,
     - claim: add in-progress; remove the queue label and a stale
       fix-needed / needs-detail (a resumed fix round, the thin-ticket gate
       once the author re-readied the ticket).
-    - pr_opened / fix_needed: add the opened-PR state, remove in-progress
-      and the queue label. A TERMINAL Issue (merged / blocked) changes
-      nothing on fix_needed: the delivery is over or waiting for a human,
-      and a fix-needed label beside it would let a later terminal label
-      removal resume an automatic fix nobody asked for (Issue #1786).
+    - pr_opened: add the opened-PR state, remove in-progress, fix-needed
+      and the queue label. A TERMINAL Issue changes nothing on fix_needed:
+      the delivery is over or waits for a human, and a stale label would
+      resume an automatic fix nobody asked for (Issue #1786).
     - human_review_waiting: add NOTHING, clear in-progress and the queue
       label; the opened-PR anchor stays (the resume scan needs it).
     - requeue / release_waiting: add the queue label back (the ticket is
@@ -157,8 +156,8 @@ def label_patch(event: str, current_labels,
         return ([in_progress], to_remove)
     if event == EVENT_PR_OPENED:
         return ([pr_opened], [
-            label for label in (in_progress, queue) if label in current
-        ])
+            label for label in (in_progress, fix_needed, queue)
+            if label in current])
     if event == EVENT_FIX_NEEDED:
         if merged in current or blocked in current:
             return ([], [])

@@ -8,9 +8,9 @@ comment), recreates a missing worktree from the remote delivery branch
 (the worktree is a local cache of the remote state — branch and PR live
 on GitHub), verifies the PR through
 `pr_verification.verify_pr` with the EXACT URL of the recovered scene,
-and backfills the in-flight label before the delivery continues. The
-returned URL is the one that was verified: the delivery wait never sees
-the comment string.
+and leaves the opened-PR state label as it is: a resumed round writes no
+`ai-in-progress` (Issue #2357). The returned URL is the one that was
+verified: the delivery wait never sees the comment string.
 
 A verification failure is classified here: a RECOVERABLE failure keeps
 the Issue in the automatic fix loop (`ai-fix-needed` with the full scene
@@ -35,7 +35,7 @@ from orbi import failure_report
 from orbi import language
 from orbi import pr_verification
 from orbi import run_state
-from orbi.delivery_labels import EVENT_CLAIM, EVENT_MERGED, EVENT_REQUEUE, label_name_set
+from orbi.delivery_labels import EVENT_MERGED, EVENT_REQUEUE
 from orbi import delivery_labels
 from orbi.delivery_scene import RunContext
 from orbi.failure import failure_detail
@@ -184,24 +184,9 @@ def verify_resumed_pr(resume: run_state.ResumeScene, issue: dict,
             expected_url=resume.parsed.pr_url, require_latest_base=False,
             external_pr=external,
         )
-        # The resumed delivery is in flight from here on —
-        # the Runner holds the slot and continues the review/merge
-        # work — so the Issue must carry the in-flight label BEFORE
-        # the work continues. The backfill is an idempotent label
-        # projection repair: the run, worktree and PR are the ones
-        # verified above (nothing is recreated), and the opened-PR
-        # state label (ai-pr-opened / ai-fix-needed) is untouched. A
-        # label API failure falls into the failure handler below: it
-        # is a recoverable resume failure (ai-fix-needed, failure
-        # comment, tick stops) with the command evidence in the
-        # journal.
-        # Resume scans include labels; a caller that provides a minimal
-        # issue object represents the normal ai-pr-opened state.
-        apply_label_patch(
-            number, repo=source_repo, event=EVENT_CLAIM,
-            current_labels=label_name_set(issue) or {delivery_labels.PR_OPENED_LABEL},
-            ready_label=delivery_labels.queue_label(config.dispatch_label),
-        )
+        # The resumed delivery stays on its opened-PR label: the round
+        # writes no ai-in-progress (Issue #2357). The review round that
+        # follows owns the ai-fix-needed -> ai-pr-opened transition.
         return verified_url
     except Exception as exc:
         if isinstance(exc, ResumePrClosedError):
