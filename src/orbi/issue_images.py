@@ -72,6 +72,10 @@ class Unreadable(RuntimeError):
 # worktree's excluded run dir.
 IMAGES_DIRNAME = "attachments"
 DOWNLOAD_TIMEOUT_SECONDS = 60
+# orbi.build and beta.orbi.build answer urllib's default `Python-urllib/3.x`
+# User-Agent with HTTP 403 and Orbi's own value with 200 (measured 2026-11-23),
+# so every download names this project instead of urllib (Issue #2377).
+USER_AGENT = "orbi"
 NATIVE_PREFIX = "https://github.com/user-attachments/assets/"
 _MARKER_LINE_RE = re.compile(
     r"<!-- " + re.escape(draft_marker.DRAFT_MARKER) + r":"
@@ -205,8 +209,11 @@ def _comments(number: object, *, repo: str) -> list[dict]:
 def _image_bytes(url: str, *, repo: str) -> bytes:
     """One image's bytes; a native one through its rendered address."""
     address = _signed(url, repo=repo) if url.startswith(NATIVE_PREFIX) else url
+    request = urllib.request.Request(
+        address, headers={"User-Agent": USER_AGENT},
+    )
     with urllib.request.urlopen(
-        address, timeout=DOWNLOAD_TIMEOUT_SECONDS,
+        request, timeout=DOWNLOAD_TIMEOUT_SECONDS,
     ) as response:
         return response.read()
 
