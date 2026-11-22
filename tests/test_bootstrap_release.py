@@ -39,6 +39,7 @@ from orbi.comment_kind import COMMENT_KIND_FAILURE, comment_kind_marker
 # Issue #1826: the operator's one optional project status page.
 TASK_STATUS_URL = "https://tasks.example.org/project-status?repo=example%2Fwidget"
 from seam import seam
+from tests.fakes.github import FakeGh
 from tests.fakes.bootstrap_release import (
     _EMPTY_SCOPE_BODY,
     _NEITHER_SCOPE_BODY,
@@ -1261,10 +1262,17 @@ def test_process_release_parse_failure_publishes_final_comment(
     assert result == runner.IssueResult("release", "")
     # The handled failure is terminal: `ai-blocked` ALONE.
     edits = [c for c in gh_calls if c[:3] == ["gh", "issue", "edit"]]
+    # Issue #2369: the claim is ONE whole-set replacement; the terminal
+    # keeps #2357's removal-before-add sequence.
+    assert [
+        c for c in gh_calls
+        if c[:4] == ["gh", "api", "--method", "PUT"]
+    ] == [[
+        "gh", "api", "--method", "PUT",
+        "repos/orbi-build/orbi/issues/467/labels",
+        "-f", "labels[]=ai-in-progress", "--include",
+    ]]
     assert edits == [
-        ["gh", "issue", "edit", "467", "--repo", "orbi-build/orbi",
-         "--add-label", "ai-in-progress"],
-        # Issue #2357: every removal is written before the terminal add.
         ["gh", "issue", "edit", "467", "--repo", "orbi-build/orbi",
          "--remove-label", "ai-ready"],
         ["gh", "issue", "edit", "467", "--repo", "orbi-build/orbi",
@@ -2814,6 +2822,11 @@ def test_process_release_blocks_at_claim_when_default_version_file_missing(monke
     # Nothing ran between the frozen base and the check: no gate, no
     # scope verification, no version write.
     assert [c for c, _ in state["commands"]] == [
+        # Issue #2369: the claim reads the real set and replaces it once.
+        ["gh", "issue", "view", "99", "--repo", "o/r", "--json", "labels"],
+        ["gh", "api", "--method", "PUT", "repos/o/r/issues/99/labels",
+         "-f", "labels[]=ai-release", "-f", "labels[]=ai-in-progress",
+         "--include"],
         ["git", "ls-tree", "--name-only", "abc123"],
         # The terminal transition reads the real label set (Issue #2357).
         ["gh", "issue", "view", "99", "--repo", "o/r", "--json", "labels"],
@@ -2942,11 +2955,17 @@ def test_process_release_success_end_to_end(monkeypatch):
         issue, config_domain.RunnerConfig(repo_dir=Path("/r"), base_branch="main"), "o/r",
     )
     assert url == "https://github.com/o/r/releases/tag/v0.3.0"
-    # Claim first (Issue #2309: the queue label goes with the in-flight
-    # one), terminal ai-merged at the end (ai-in-progress removed).
-    assert state["edits"][0] == (99, {"repo": "o/r",
-                                      "add": "ai-in-progress",
-                                      "remove": "ai-ready"})
+    # Claim first (Issue #2369: ONE whole-set replacement — the queue
+    # label goes, the in-flight one comes, `ai-release` stays), terminal
+    # ai-merged at the end (ai-in-progress removed).
+    assert [
+        command for command, _ in state["commands"]
+        if command[0:4] == ["gh", "api", "--method", "PUT"]
+    ] == [[
+        "gh", "api", "--method", "PUT", "repos/o/r/issues/99/labels",
+        "-f", "labels[]=ai-release", "-f", "labels[]=ai-in-progress",
+        "--include",
+    ]]
     assert state["edits"][-2] == (99, {"repo": "o/r",
                                        "remove": "ai-in-progress"})
     # Issue #1526: the release merge also clears the ready queue entry.
@@ -4989,3 +5008,50 @@ def test_process_release_failed_merged_add_restores_the_in_progress_label(
     assert "ai-in-progress" in state["labels"]
     assert "ai-ready" not in state["labels"]
     assert "ai-merged" not in state["labels"]
+
+
+def test_process_release_claim_is_one_whole_set_replacement(monkeypatch):
+    """Issue #2369 acceptance 1: `process_release`'s claim is ONE
+    whole-set replacement computed from a fresh read — the queue label
+    goes, `ai-in-progress` comes, and a label the ticket snapshot lacks
+    (`bug`) survives."""
+    make_release_process_env(monkeypatch)
+    env_run = seam.run_command
+    fake = FakeGh("o/r")
+    fake.add_issue(
+        99, title="Release v0.3.0", body=RELEASE_DECLARATION_BODY,
+        labels=("ai-ready", "ai-release", "bug"),
+    )
+
+    def run(command, **kwargs):
+        label_read = (
+            command[0:3] == ["gh", "issue", "view"]
+            and command[-1] == "labels"
+        )
+        label_write = (
+            command[0:4] == ["gh", "api", "--method", "PUT"]
+            and command[4].endswith("/labels")
+        )
+        if label_read or label_write:
+            return fake(command, **kwargs)
+        return env_run(command, **kwargs)
+
+    monkeypatch.setattr(seam, "run_command", run)
+    issue = {
+        "number": 99, "title": "Release v0.3.0",
+        "body": RELEASE_DECLARATION_BODY,
+        "labels": [{"name": "ai-ready"}, {"name": "ai-release"}],
+    }
+    assert release_run.process_release(
+        issue,
+        config_domain.RunnerConfig(repo_dir=Path("/r"), base_branch="main"),
+        "o/r",
+    ) == "https://github.com/o/r/releases/tag/v0.3.0"
+    assert [
+        command for command in fake.commands
+        if command[0:4] == ["gh", "api", "--method", "PUT"]
+    ] == [[
+        "gh", "api", "--method", "PUT", "repos/o/r/issues/99/labels",
+        "-f", "labels[]=ai-release", "-f", "labels[]=bug",
+        "-f", "labels[]=ai-in-progress", "--include",
+    ]]

@@ -306,6 +306,23 @@ def test_claim_label_patch_is_idempotent_on_the_fake(fake_gh):
     assert github.issue_labels(5, "owner/repo") == []
 
 
+def test_fake_gh_rejects_a_malformed_whole_set_label_write(fake_gh):
+    """The fake models `PUT .../issues/{n}/labels` exactly: a write whose
+    fields are not the documented `-f labels[]=<name>` form fails fast
+    instead of silently replacing the labels with something else
+    (Issue #2369)."""
+    fake_gh.add_issue(5, labels=(READY_LABEL,))
+    path = "repos/owner/repo/issues/5/labels"
+    for command in (
+        ["gh", "api", "--method", "PUT", path, "--field", "labels=x"],
+        ["gh", "api", "--method", "PUT", path, "-f", "other=x"],
+        ["gh", "api", "--method", "PUT", path, "-f"],
+    ):
+        with pytest.raises(subprocess.CalledProcessError):
+            fake_gh(command)
+    assert github.issue_labels(5, "owner/repo") == [READY_LABEL]
+
+
 def test_comments_append_in_order_and_read_back_oldest_first(fake_gh):
     fake_gh.add_issue(5)
     github.comment_issue(5, repo="owner/repo", body="first runner note")

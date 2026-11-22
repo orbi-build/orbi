@@ -597,12 +597,14 @@ def _closeout_implementation(attempt: _Attempt) -> IssueResult:
         return _closeout_issue_closed(attempt, commit)
     # The implementer always commits the delivery on top of the
     # frozen base, so the head always advanced.
-    # The REAL label set, not a synthetic one (Issue #2309): the patch
-    # must remove a pre-upgrade claim's dispatch residue too.
+    # Issue #2369: this event's patch is computed from the callee's own
+    # fresh label read and written as ONE whole-set replacement, so the
+    # pre-upgrade claim's dispatch residue it must remove is seen there;
+    # the snapshot below is the function's contract for the other events.
     apply_label_patch(
         int(attempt.issue["number"]), repo=attempt.source_repo,
         event=EVENT_PR_OPENED,
-        current_labels=facts.claim_labels | {delivery_labels.IN_PROGRESS_LABEL},
+        current_labels=facts.claim_labels,
         ready_label=facts.dispatch_label,
     )
     # The label transition has landed and must remain the state

@@ -294,6 +294,16 @@ def install_fake_gh(monkeypatch, comments: list[str],
                     return "[]"
                 return ""
             if command[1] == "api":
+                if command[2:4] == ["--method", "PUT"]:
+                    # Issue #2369: the whole-set label replacement.
+                    new_labels = [
+                        value[len("labels[]="):] for value in command
+                        if value.startswith("labels[]=")
+                    ]
+                    labels[:] = new_labels
+                    return json.dumps([
+                        {"name": name} for name in new_labels
+                    ])
                 if "/collaborators/" in command[2]:
                     # Issue #1806: the author's repository permission.
                     login = command[2].rsplit("/", 2)[-2]

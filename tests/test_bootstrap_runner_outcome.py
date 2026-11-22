@@ -90,7 +90,23 @@ def test_process_issue_success_records_base_and_run_in_comment(monkeypatch, tmp_
     issue = {"number": 4, "title": "Fix", "body": "Body"}
     config = config_domain.RunnerConfig(repo_dir=tmp_path, prompt=tmp_path / "prompt.md", base_branch="main")
     assert runner.process_issue(issue, config, "xqliu/orbi-backlog") == runner.IssueResult("pr", "https://github.com/orbi-build/orbi/pull/4")
-    assert calls[0] == ("edit", (4,), {"repo": "xqliu/orbi-backlog", "add": "ai-in-progress"})
+    # Issue #2369: the claim and the PR-opened transition are ONE
+    # whole-set replacement each.
+    assert [
+        call for call in gh_calls
+        if call[2:4] == ["--method", "PUT"]
+    ] == [
+        [
+            "gh", "api", "--method", "PUT",
+            "repos/xqliu/orbi-backlog/issues/4/labels",
+            "-f", "labels[]=ai-in-progress", "--include",
+        ],
+        [
+            "gh", "api", "--method", "PUT",
+            "repos/xqliu/orbi-backlog/issues/4/labels",
+            "-f", "labels[]=ai-pr-opened", "--include",
+        ],
+    ]
     # The run state is published automatically: exactly one progress
     # comment (hidden run marker); started and PR-opened scenes are
     # separate resume announcements.
@@ -213,10 +229,10 @@ def test_process_issue_failure_marks_blocked_and_ends_cleanly(monkeypatch, tmp_p
     # does NOT re-raise — the service must not crash on it (Issue #239).
     assert runner.process_issue({"number": 8, "title": "Fail", "body": ""}, config_domain.RunnerConfig(repo_dir=tmp_path, prompt=tmp_path / "prompt.md", base_branch="main"), "xqliu/orbi-backlog").kind == "failed"
     # Issue #2357: the removal is written before the terminal add.
-    assert calls[1][2] == {"repo": "xqliu/orbi-backlog", "remove": "ai-ready"}
-    assert calls[2][2] == {"repo": "xqliu/orbi-backlog", "add": "ai-blocked"}
-    assert calls[3][0] == "comment"
-    failure_body = calls[3][2]["body"]
+    assert calls[0][2] == {"repo": "xqliu/orbi-backlog", "remove": "ai-ready"}
+    assert calls[1][2] == {"repo": "xqliu/orbi-backlog", "add": "ai-blocked"}
+    assert calls[2][0] == "comment"
+    failure_body = calls[2][2]["body"]
     # The failure is also published as the blocked milestone (Issue
     # #18). The worktree was never created, so no progress comment
     # exists to PATCH: the milestone alone carries the notification.
@@ -272,10 +288,10 @@ def test_process_issue_terminal_failure_clears_the_repositorys_dispatch_label(
         "xqliu/orbi-backlog",
     )
     assert result.kind == "failed"
-    # The claim adds the in-flight label; the terminal blocked patch
-    # removes the queue label first and ends on ai-blocked (Issue #2357).
+    # The claim is one whole-set replacement (Issue #2369); the terminal
+    # blocked patch removes the queue label first and ends on ai-blocked
+    # (Issue #2357).
     assert edits == [
-        {"repo": "xqliu/orbi-backlog", "add": "ai-in-progress"},
         {"repo": "xqliu/orbi-backlog", "remove": "ship"},
         {"repo": "xqliu/orbi-backlog", "add": "ai-blocked"},
     ]
@@ -418,9 +434,9 @@ def test_process_issue_delivery_no_commit_marks_blocked_without_crashing(
         "xqliu/orbi",
     ).kind == "failed"
     edits = [entry for entry in calls if isinstance(entry, dict)]
+    # Issue #2369: the claim's whole-set replacement is not an
+    # `edit_issue`; the terminal removes first and adds ai-blocked last.
     assert edits == [
-        {"repo": "xqliu/orbi", "add": "ai-in-progress"},
-        # Issue #2357: removals first, the terminal add last.
         {"repo": "xqliu/orbi", "remove": "ai-ready"},
         {"repo": "xqliu/orbi", "add": "ai-blocked"},
     ]
@@ -633,14 +649,12 @@ def test_process_issue_model_wait_dead_failure_stays_in_progress(
         config_domain.RunnerConfig(repo_dir=tmp_path, prompt=tmp_path / "prompt.md", base_branch="main"),
         "xqliu/orbi",
     ).kind == "failed"
-    # The Issue keeps `ai-in-progress`: the ONLY label edit is the claim
-    # at the start — no `ai-blocked`, no removal of `ai-in-progress`
-    # (the edit calls are the dict entries; the `gh issue comment`
-    # traffic is tuple entries).
+    # The Issue keeps `ai-in-progress`: the claim's whole-set
+    # replacement (Issue #2369) is the ONLY label write — no
+    # `ai-blocked`, no removal of `ai-in-progress` (the edit calls are
+    # the dict entries; the `gh issue comment` traffic is tuple entries).
     edits = [entry for entry in calls if isinstance(entry, dict)]
-    assert edits == [
-        {"repo": "xqliu/orbi", "add": "ai-in-progress"},
-    ]
+    assert edits == []
     comment_bodies = [
         entry[2]["body"] for entry in calls
         if isinstance(entry, tuple) and entry[0] == "comment"
@@ -978,13 +992,12 @@ def test_process_issue_model_wait_dead_comment_failure_stays_in_progress(
         config_domain.RunnerConfig(repo_dir=tmp_path, prompt=tmp_path / "prompt.md", base_branch="main"),
         "xqliu/orbi",
     ).kind == "failed"
-    # The Issue keeps `ai-in-progress`: the ONLY label edit is the claim
-    # at the start — the failed recovery comment must NOT fall through
-    # to the generic handler's terminal `ai-blocked` (Issue #227).
+    # The Issue keeps `ai-in-progress`: the claim's whole-set
+    # replacement (Issue #2369) is the ONLY label write — the failed
+    # recovery comment must NOT fall through to the generic handler's
+    # terminal `ai-blocked` (Issue #227).
     edits = [entry for entry in calls if isinstance(entry, dict)]
-    assert edits == [
-        {"repo": "xqliu/orbi", "add": "ai-in-progress"},
-    ]
+    assert edits == []
     # No terminal failure comment was posted.
     comment_bodies = [
         entry[2]["body"] for entry in calls
@@ -1048,9 +1061,9 @@ def test_process_issue_idle_recovery_failure_marks_blocked(
         "xqliu/orbi",
     ).kind == "failed"
     edits = [entry for entry in calls if isinstance(entry, dict)]
+    # Issue #2369: the claim's whole-set replacement is not an
+    # `edit_issue`; the terminal removes first and adds ai-blocked last.
     assert edits == [
-        {"repo": "xqliu/orbi", "add": "ai-in-progress"},
-        # Issue #2357: removals first, the terminal add last.
         {"repo": "xqliu/orbi", "remove": "ai-ready"},
         {"repo": "xqliu/orbi", "add": "ai-blocked"},
     ]
@@ -1093,6 +1106,9 @@ def test_process_issue_ends_cleanly_when_reporting_fails(monkeypatch, tmp_path, 
     gh_calls, posted = make_fake_gh(monkeypatch)
 
     def fake_run(command, **kwargs):
+        if command[0:2] == ["gh", "api"]:
+            # Issue #2369: the claim's whole-set replacement.
+            return _gh_api(command, posted)
         if command[:2] == ["gh", "issue"] and "comment" in command:
             # The `Orbi failed` comment POST is the only
             # non-bypass traffic of this scenario: it fails, the
@@ -1130,9 +1146,9 @@ def test_process_issue_ends_cleanly_when_reporting_fails(monkeypatch, tmp_path, 
     # claim label, not the opened-PR label (Issue #79: the scene
     # comment is the first failure after the transition; its test in
     # test_progress_wiring pins the other branch).
+    # Issue #2369: the claim is a whole-set replacement (not an
+    # `edit_issue`); the terminal removes first and adds ai-blocked last.
     assert edit_calls == [
-        {"repo": "xqliu/orbi-backlog", "add": "ai-in-progress"},
-        # Issue #2357: removals first, the terminal add last.
         {"repo": "xqliu/orbi-backlog", "remove": "ai-ready"},
         {"repo": "xqliu/orbi-backlog", "add": "ai-blocked"},
     ]

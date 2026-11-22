@@ -628,6 +628,25 @@ def edit_issue(number: int, *, repo: str, add: str | None = None,
     run_gh_write_command(command)
 
 
+def set_issue_labels(number: int, *, repo: str, labels: list[str]) -> None:
+    """Replace an Issue's WHOLE label set in one write (Issue #2369).
+
+    GitHub's documented "Set labels for an issue"
+    (`PUT /repos/{owner}/{repo}/issues/{issue_number}/labels`,
+    https://docs.github.com/en/rest/issues/labels#set-labels-for-an-issue)
+    applies the removals before the additions in the timeline, and it is
+    ONE write — the claim window `claim_race` guards does not grow. gh's
+    documented array form is repeated `-f labels[]=<name>`.
+    """
+    command = [
+        "gh", "api", "--method", "PUT",
+        f"repos/{repo}/issues/{number}/labels",
+    ]
+    for label in labels:
+        command += ["-f", f"labels[]={label}"]
+    run_gh_write_command(command)
+
+
 def apply_label_patch(number: int, *, repo: str, event: str,
                       current_labels,
                       ready_label: str | None = None) -> None:
@@ -638,29 +657,48 @@ def apply_label_patch(number: int, *, repo: str, event: str,
     the one transition decision. A TERMINAL patch (merged / blocked)
     removes every old state label first and adds the terminal label LAST,
     so the timeline ends on the new state (Issue #2357); a failed write
-    restores what it removed. Other events keep the pre-#2357 writes. A
-    no-op patch applies nothing; `notify.patch_applied` (Issues #1673,
-    #2287) sends an ordinary handoff's message, never a stop's.
+    restores what it removed. The claim and PR-opened transitions read the
+    Issue's real labels once and replace the whole set in ONE write
+    (Issue #2369), so the timeline ends on the new state label there too
+    and every non-state label survives. Other events keep the pre-#2357
+    writes. A no-op patch applies nothing; `notify.patch_applied`
+    (Issues #1673, #2287) sends an ordinary handoff's message, never a
+    stop's.
     """
     ready_label = delivery_labels.queue_label(ready_label)
-    to_add, to_remove = label_patch(event, current_labels, ready_label)
-    if not to_add and not to_remove:
-        return
-    if event in (delivery_labels.EVENT_MERGED, delivery_labels.EVENT_BLOCKED):
-        terminal_labels.apply_terminal_patch(
-            number, repo=repo, to_add=to_add, to_remove=to_remove,
-            edit_issue=edit_issue, read_labels=issue_labels,
-        )
+    if event in (delivery_labels.EVENT_CLAIM,
+                 delivery_labels.EVENT_PR_OPENED):
+        # The caller's snapshot predates the write: the set to write is
+        # computed from a fresh read, and the whole set — every label not
+        # being swapped out included — goes back in that one replacement.
+        current_labels = issue_labels(number, repo=repo)
+        to_add, to_remove = label_patch(event, current_labels, ready_label)
+        removed = set(to_remove)
+        whole = [label for label in current_labels if label not in removed]
+        whole += [label for label in to_add if label not in whole]
+        if whole == current_labels:
+            return
+        set_issue_labels(number, repo=repo, labels=whole)
     else:
-        first_remove = to_remove[0] if to_remove else None
-        kwargs: dict = {"repo": repo}
-        if to_add:
-            kwargs["add"] = to_add[0]
-        if first_remove is not None:
-            kwargs["remove"] = first_remove
-        edit_issue(number, **kwargs)
-        for label in to_remove[1:]:
-            edit_issue(number, repo=repo, remove=label)
+        to_add, to_remove = label_patch(event, current_labels, ready_label)
+        if not to_add and not to_remove:
+            return
+        if event in (delivery_labels.EVENT_MERGED,
+                     delivery_labels.EVENT_BLOCKED):
+            terminal_labels.apply_terminal_patch(
+                number, repo=repo, to_add=to_add, to_remove=to_remove,
+                edit_issue=edit_issue, read_labels=issue_labels,
+            )
+        else:
+            first_remove = to_remove[0] if to_remove else None
+            kwargs: dict = {"repo": repo}
+            if to_add:
+                kwargs["add"] = to_add[0]
+            if first_remove is not None:
+                kwargs["remove"] = first_remove
+            edit_issue(number, **kwargs)
+            for label in to_remove[1:]:
+                edit_issue(number, repo=repo, remove=label)
     # Notifying the person is a pure bypass owned by `notify` (Issues
     # #1673/#1691): it decides from the event, the added labels and the
     # current labels, and reads the title lazily through the callable --

@@ -435,9 +435,17 @@ def test_process_issue_resumes_existing_run_and_same_progress_comment(
     assert runner.process_issue(
         issue, config, "xqliu/orbi-backlog",
     ) == runner.IssueResult("pr", "https://github.com/orbi-build/orbi/pull/4")
-    # The reused run id drives the branch and the scene comments.
-    assert calls[0] == ("edit", (4,), {"repo": "xqliu/orbi-backlog",
-                                       "add": "ai-in-progress"})
+    # The reused run id drives the branch and the scene comments. The
+    # claim changes nothing on an already in-progress Issue, so Issue
+    # #2369 skips that write; PR-opened is ONE whole-set replacement.
+    assert calls == []
+    assert [
+        call for call in gh_calls if call[2:4] == ["--method", "PUT"]
+    ] == [[
+        "gh", "api", "--method", "PUT",
+        "repos/xqliu/orbi-backlog/issues/4/labels",
+        "-f", "labels[]=ai-pr-opened", "--include",
+    ]]
     scene_comments = [
         call for call in gh_calls
         if call[:2] == ["gh", "issue"] and "comment" in call

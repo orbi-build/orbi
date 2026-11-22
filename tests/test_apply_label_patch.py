@@ -257,3 +257,53 @@ def test_double_failure_leaves_the_issue_without_a_state_label(
             apply(fake_gh, EVENT_MERGED)
     assert labels(fake_gh) == set()
     assert "label_restore_failed" in caplog.text
+
+
+def _label_replacements(fake_gh) -> list[list[str]]:
+    """The whole-set label writes the fake answered, in order."""
+    return [
+        command for command in fake_gh.commands
+        if command[0:4] == ["gh", "api", "--method", "PUT"]
+        and command[4].endswith("/labels")
+    ]
+
+
+def test_claim_replacement_keeps_a_label_missing_from_the_snapshot(fake_gh):
+    """Issue #2369 acceptance 1: the claim reads the Issue's real labels
+    and replaces the WHOLE set once. A label the caller's snapshot does
+    not carry stays on the Issue; the queue and stale fix-needed labels
+    go; `ai-in-progress` comes."""
+    fake_gh.add_issue(
+        NUMBER, labels=("bug", READY_LABEL, FIX_NEEDED_LABEL),
+    )
+    github.apply_label_patch(
+        NUMBER, repo=REPO, event=EVENT_CLAIM,
+        current_labels={READY_LABEL, FIX_NEEDED_LABEL},
+    )
+    assert labels(fake_gh) == {"bug", IN_PROGRESS_LABEL}
+    assert _label_replacements(fake_gh) == [[
+        "gh", "api", "--method", "PUT",
+        f"repos/{REPO}/issues/{NUMBER}/labels",
+        "-f", "labels[]=bug", "-f", f"labels[]={IN_PROGRESS_LABEL}",
+        "--include",
+    ]]
+
+
+def test_pr_opened_replacement_ends_on_the_new_state_alone(fake_gh):
+    """Issue #2369 acceptance 2: a resumed `ai-fix-needed` round is one
+    whole-set replacement that ends on `ai-pr-opened`; every other label
+    on the Issue survives."""
+    fake_gh.add_issue(NUMBER, labels=(FIX_NEEDED_LABEL, "bug"))
+    apply(fake_gh, EVENT_PR_OPENED)
+    assert labels(fake_gh) == {"bug", PR_OPENED_LABEL}
+    assert len(_label_replacements(fake_gh)) == 1
+
+
+def test_failed_replacement_leaves_the_labels_as_they_were(fake_gh):
+    """Issue #2369 acceptance 3: the replacement is ONE write, so a
+    failed one changes nothing and the step fails as today."""
+    fake_gh.add_issue(NUMBER, labels=(READY_LABEL, "bug"))
+    fake_gh.fail_label_replace()
+    with pytest.raises(subprocess.CalledProcessError):
+        apply(fake_gh, EVENT_CLAIM)
+    assert labels(fake_gh) == {READY_LABEL, "bug"}
