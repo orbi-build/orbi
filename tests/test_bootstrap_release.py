@@ -1264,11 +1264,11 @@ def test_process_release_parse_failure_publishes_final_comment(
     assert edits == [
         ["gh", "issue", "edit", "467", "--repo", "orbi-build/orbi",
          "--add-label", "ai-in-progress"],
-        ["gh", "issue", "edit", "467", "--repo", "orbi-build/orbi",
-         "--add-label", "ai-blocked", "--remove-label", "ai-in-progress"],
-        # ALONE: the queue label the claim kept is cleared too (#1775).
+        # Issue #2357: every removal is written before the terminal add.
         ["gh", "issue", "edit", "467", "--repo", "orbi-build/orbi",
          "--remove-label", "ai-ready"],
+        ["gh", "issue", "edit", "467", "--repo", "orbi-build/orbi",
+         "--add-label", "ai-blocked"],
     ]
     # The concrete failure scene is on the Issue.
     comments = [c for c in gh_calls if c[:3] == ["gh", "issue", "comment"]]
@@ -2768,8 +2768,9 @@ def test_process_release_wait_timeout_uses_persisted_wait_start(monkeypatch):
         issue, config_domain.RunnerConfig(repo_dir=Path("/r"), base_branch="main", release_deliveries_wait_seconds=5), "o/r",
     )
     assert result == ""
-    assert state["edits"][-2][1]["add"] == "ai-blocked"
-    assert state["edits"][-1] == (99, {"repo": "o/r", "remove": "ai-ready"})
+    assert state["edits"][-2] == (99, {"repo": "o/r",
+                                       "remove": "ai-in-progress"})
+    assert state["edits"][-1] == (99, {"repo": "o/r", "add": "ai-blocked"})
 
 
 def test_process_release_uses_declared_package_version_file(monkeypatch):
@@ -2814,12 +2815,14 @@ def test_process_release_blocks_at_claim_when_default_version_file_missing(monke
     # scope verification, no version write.
     assert [c for c, _ in state["commands"]] == [
         ["git", "ls-tree", "--name-only", "abc123"],
+        # The terminal transition reads the real label set (Issue #2357).
+        ["gh", "issue", "view", "99", "--repo", "o/r", "--json", "labels"],
     ]
-    assert state["edits"][-2] == (99, {"repo": "o/r", "add": "ai-blocked",
+    assert state["edits"][-2] == (99, {"repo": "o/r",
                                        "remove": "ai-in-progress"})
     # The terminal state is ai-blocked ALONE: the queue label the
     # claim kept is cleared too (Issue #1775).
-    assert state["edits"][-1] == (99, {"repo": "o/r", "remove": "ai-ready"})
+    assert state["edits"][-1] == (99, {"repo": "o/r", "add": "ai-blocked"})
     failure = [k["body"] for n, k in state["comments"]
                if n == 99 and "ai-blocked" in k["body"]]
     assert failure and "pyproject.toml" in failure[0]
@@ -2840,11 +2843,11 @@ def test_process_release_blocks_when_declared_version_file_missing(monkeypatch):
         issue, config_domain.RunnerConfig(repo_dir=Path("/r"), base_branch="main"), "o/r",
     )
     assert result == ""
-    assert state["edits"][-2] == (99, {"repo": "o/r", "add": "ai-blocked",
+    assert state["edits"][-2] == (99, {"repo": "o/r",
                                        "remove": "ai-in-progress"})
     # The terminal state is ai-blocked ALONE: the queue label the
     # claim kept is cleared too (Issue #1775).
-    assert state["edits"][-1] == (99, {"repo": "o/r", "remove": "ai-ready"})
+    assert state["edits"][-1] == (99, {"repo": "o/r", "add": "ai-blocked"})
     failure = [k["body"] for n, k in state["comments"]
                if n == 99 and "ai-blocked" in k["body"]]
     assert failure and "package.json" in failure[0]
@@ -2916,11 +2919,11 @@ def test_process_release_blocks_when_version_push_rejected(monkeypatch, caplog):
             "o/r",
         )
     assert result == ""
-    assert state["edits"][-2] == (99, {"repo": "o/r", "add": "ai-blocked",
+    assert state["edits"][-2] == (99, {"repo": "o/r",
                                        "remove": "ai-in-progress"})
     # The terminal state is ai-blocked ALONE: the queue label the
     # claim kept is cleared too (Issue #1775).
-    assert state["edits"][-1] == (99, {"repo": "o/r", "remove": "ai-ready"})
+    assert state["edits"][-1] == (99, {"repo": "o/r", "add": "ai-blocked"})
     assert "claim_yield" not in caplog.text
     # Issue #2222: the rejected version push reports the version step.
     (_, comment_kwargs), = state["comments"]
@@ -2944,10 +2947,10 @@ def test_process_release_success_end_to_end(monkeypatch):
     assert state["edits"][0] == (99, {"repo": "o/r",
                                       "add": "ai-in-progress",
                                       "remove": "ai-ready"})
-    assert state["edits"][-2] == (99, {"repo": "o/r", "add": "ai-merged",
+    assert state["edits"][-2] == (99, {"repo": "o/r",
                                        "remove": "ai-in-progress"})
     # Issue #1526: the release merge also clears the ready queue entry.
-    assert state["edits"][-1] == (99, {"repo": "o/r", "remove": "ai-ready"})
+    assert state["edits"][-1] == (99, {"repo": "o/r", "add": "ai-merged"})
     # The tag was created at the release commit and pushed plainly.
     commands = [c for c, _ in state["commands"]]
     tag_calls = [item for item in state["commands"] if item[0][:3] == ["git", "tag", "-a"]]
@@ -3436,10 +3439,10 @@ def test_process_release_exempts_release_issue_from_open_evidence(monkeypatch):
     # The release still completes terminally, and the auditable scope
     # evidence (the same list the Release notes carry) carries the
     # derived delivery but NO self-referential NOT released line.
-    assert state["edits"][-2] == (99, {"repo": "o/r", "add": "ai-merged",
+    assert state["edits"][-2] == (99, {"repo": "o/r",
                                        "remove": "ai-in-progress"})
     # Issue #1526: the release merge also clears the ready queue entry.
-    assert state["edits"][-1] == (99, {"repo": "o/r", "remove": "ai-ready"})
+    assert state["edits"][-1] == (99, {"repo": "o/r", "add": "ai-merged"})
     (comment_number, comment_kwargs), = state["comments"]
     assert "NOT released" not in comment_kwargs["body"]
     assert "PR #123 merged (mergeCommit=aaa111)" in comment_kwargs["body"]
@@ -3472,10 +3475,10 @@ def test_process_release_proceeds_with_empty_derived_scope(monkeypatch):
     )
     assert url == "https://github.com/o/r/releases/tag/v0.3.0"
     # The release completes: terminal ai-merged, tag and Issue close.
-    assert state["edits"][-2] == (99, {"repo": "o/r", "add": "ai-merged",
+    assert state["edits"][-2] == (99, {"repo": "o/r",
                                        "remove": "ai-in-progress"})
     # Issue #1526: the release merge also clears the ready queue entry.
-    assert state["edits"][-1] == (99, {"repo": "o/r", "remove": "ai-ready"})
+    assert state["edits"][-1] == (99, {"repo": "o/r", "add": "ai-merged"})
     commands = [c for c, _ in state["commands"]]
     assert [c for c in commands if c[:2] == ["git", "tag"]]
     assert [c for c in commands if c[:3] == ["gh", "issue", "close"]]
@@ -3512,10 +3515,10 @@ def test_process_release_waits_for_pending_ci_and_succeeds(monkeypatch):
     )
     assert url == "https://github.com/o/r/releases/tag/v0.3.0"
     assert not any(k.get("add") == "ai-blocked" for _, k in state["edits"])
-    assert state["edits"][-2] == (99, {"repo": "o/r", "add": "ai-merged",
+    assert state["edits"][-2] == (99, {"repo": "o/r",
                                        "remove": "ai-in-progress"})
     # Issue #1526: the release merge also clears the ready queue entry.
-    assert state["edits"][-1] == (99, {"repo": "o/r", "remove": "ai-ready"})
+    assert state["edits"][-1] == (99, {"repo": "o/r", "add": "ai-merged"})
     publisher = release_run.ProgressPublisher.return_value
     patched = [c.args[0] for c in publisher.patch.call_args_list]
     assert any("waiting CI: check 'tests' is in_progress/None" in body
@@ -3545,9 +3548,9 @@ def test_process_release_failure_clears_the_repositorys_dispatch_label(
         "o/r",
     )
     assert result == ""
-    assert state["edits"][-2] == (99, {"repo": "o/r", "add": "ai-blocked",
+    assert state["edits"][-2] == (99, {"repo": "o/r",
                                        "remove": "ai-in-progress"})
-    assert state["edits"][-1] == (99, {"repo": "o/r", "remove": "ship"})
+    assert state["edits"][-1] == (99, {"repo": "o/r", "add": "ai-blocked"})
 
 
 def test_process_release_ci_wait_timeout_blocks_with_distinct_reason(
@@ -3569,11 +3572,11 @@ def test_process_release_ci_wait_timeout_blocks_with_distinct_reason(
         "o/r",
     )
     assert result == ""
-    assert state["edits"][-2] == (99, {"repo": "o/r", "add": "ai-blocked",
+    assert state["edits"][-2] == (99, {"repo": "o/r",
                                        "remove": "ai-in-progress"})
     # The terminal state is ai-blocked ALONE: the queue label the
     # claim kept is cleared too (Issue #1775).
-    assert state["edits"][-1] == (99, {"repo": "o/r", "remove": "ai-ready"})
+    assert state["edits"][-1] == (99, {"repo": "o/r", "add": "ai-blocked"})
     (comment_number, comment_kwargs), = [
         (n, k) for n, k in state["comments"]
         if "Orbi release failed (ai-blocked)" in k["body"]
@@ -3599,11 +3602,11 @@ def test_process_release_gate_failure_blocks_and_returns_cleanly(monkeypatch):
     )
 
     assert result == ""
-    assert state["edits"][-2] == (99, {"repo": "o/r", "add": "ai-blocked",
-                                        "remove": "ai-in-progress"})
+    assert state["edits"][-2] == (99, {"repo": "o/r",
+                                       "remove": "ai-in-progress"})
     # The terminal state is ai-blocked ALONE: the queue label the
     # claim kept is cleared too (Issue #1775).
-    assert state["edits"][-1] == (99, {"repo": "o/r", "remove": "ai-ready"})
+    assert state["edits"][-1] == (99, {"repo": "o/r", "add": "ai-blocked"})
     assert "CI check 'tests' is completed/failure" in (
         state["comments"][-1][1]["body"]
     )
@@ -3665,10 +3668,10 @@ def test_process_release_success_comment_failure_keeps_release_result(
     # The published release result stands; the failed evidence comment
     # never rewrote it as blocked.
     assert url == "https://github.com/o/r/releases/tag/v0.3.0"
-    assert state["edits"][-2] == (99, {"repo": "o/r", "add": "ai-merged",
+    assert state["edits"][-2] == (99, {"repo": "o/r",
                                        "remove": "ai-in-progress"})
     # Issue #1526: the release merge also clears the ready queue entry.
-    assert state["edits"][-1] == (99, {"repo": "o/r", "remove": "ai-ready"})
+    assert state["edits"][-1] == (99, {"repo": "o/r", "add": "ai-merged"})
     assert not any(k.get("add") == "ai-blocked" for _, k in state["edits"])
     # The success comment never landed and its failure is logged.
     assert not state["comments"]
@@ -3714,10 +3717,10 @@ def test_process_release_milestone_failure_keeps_release_successful(monkeypatch)
     # is retained as evidence in the success comment and does not rewrite
     # the terminal state.
     assert not [c for c in commands if "PATCH" in c]
-    assert state["edits"][-2] == (99, {"repo": "o/r", "add": "ai-merged",
+    assert state["edits"][-2] == (99, {"repo": "o/r",
                                        "remove": "ai-in-progress"})
     # Issue #1526: the release merge also clears the ready queue entry.
-    assert state["edits"][-1] == (99, {"repo": "o/r", "remove": "ai-ready"})
+    assert state["edits"][-1] == (99, {"repo": "o/r", "add": "ai-merged"})
     (comment_number, comment_kwargs), = state["comments"]
     assert "Orbi released" in comment_kwargs["body"]
     # Issue #808: the wording states the third criterion's miss plainly —
@@ -3761,10 +3764,10 @@ def test_process_release_closes_milestone_despite_stale_release_ticket(monkeypat
     commands = [c for c, _ in state["commands"]]
     assert ["gh", "api", "repos/o/r/milestones/5",
             "--method", "PATCH", "-f", "state=closed"] in commands
-    assert state["edits"][-2] == (99, {"repo": "o/r", "add": "ai-merged",
+    assert state["edits"][-2] == (99, {"repo": "o/r",
                                        "remove": "ai-in-progress"})
     # Issue #1526: the release merge also clears the ready queue entry.
-    assert state["edits"][-1] == (99, {"repo": "o/r", "remove": "ai-ready"})
+    assert state["edits"][-1] == (99, {"repo": "o/r", "add": "ai-merged"})
     (comment_number, comment_kwargs), = state["comments"]
     assert "closed after release v0.3.0" in comment_kwargs["body"]
     assert "release ticket #99 excluded" in comment_kwargs["body"]
@@ -3786,11 +3789,11 @@ def test_process_release_publish_failure_blocks_with_the_reason(monkeypatch):
         issue, config_domain.RunnerConfig(repo_dir=Path("/r"), base_branch="main"),
         "o/r",
     ) == ""
-    assert state["edits"][-2] == (99, {"repo": "o/r", "add": "ai-blocked",
+    assert state["edits"][-2] == (99, {"repo": "o/r",
                                        "remove": "ai-in-progress"})
     # The terminal state is ai-blocked ALONE: the queue label the
     # claim kept is cleared too (Issue #1775).
-    assert state["edits"][-1] == (99, {"repo": "o/r", "remove": "ai-ready"})
+    assert state["edits"][-1] == (99, {"repo": "o/r", "add": "ai-blocked"})
     assert not any(k.get("add") == "ai-merged" for _, k in state["edits"])
     (comment_number, comment_kwargs), = state["comments"]
     assert comment_number == 99
@@ -3811,11 +3814,11 @@ def test_process_release_tag_push_failure_blocks(monkeypatch):
         issue, config_domain.RunnerConfig(repo_dir=Path("/r"), base_branch="main"),
         "o/r",
     ) == ""
-    assert state["edits"][-2] == (99, {"repo": "o/r", "add": "ai-blocked",
+    assert state["edits"][-2] == (99, {"repo": "o/r",
                                        "remove": "ai-in-progress"})
     # The terminal state is ai-blocked ALONE: the queue label the
     # claim kept is cleared too (Issue #1775).
-    assert state["edits"][-1] == (99, {"repo": "o/r", "remove": "ai-ready"})
+    assert state["edits"][-1] == (99, {"repo": "o/r", "add": "ai-blocked"})
     (comment_number, comment_kwargs), = state["comments"]
     assert comment_number == 99
     assert "tag push down" in comment_kwargs["body"]
@@ -3848,11 +3851,11 @@ def test_process_release_fails_on_malformed_declaration(monkeypatch):
     )
     assert result == ""
     # Terminal failure: ai-blocked ALONE, no ai-merged, no close.
-    assert state["edits"][-2] == (99, {"repo": "o/r", "add": "ai-blocked",
+    assert state["edits"][-2] == (99, {"repo": "o/r",
                                        "remove": "ai-in-progress"})
     # The terminal state is ai-blocked ALONE: the queue label the
     # claim kept is cleared too (Issue #1775).
-    assert state["edits"][-1] == (99, {"repo": "o/r", "remove": "ai-ready"})
+    assert state["edits"][-1] == (99, {"repo": "o/r", "add": "ai-blocked"})
     assert not any(k.get("add") == "ai-merged" for _, k in state["edits"])
     commands = [c for c, _ in state["commands"]]
     assert not [c for c in commands if c[:3] == ["gh", "issue", "close"]]
@@ -3891,11 +3894,11 @@ def test_process_release_fails_on_tag_mismatch_without_moving_it(monkeypatch):
     commands = [c for c, _ in state["commands"]]
     assert not [c for c in commands if c[:2] == ["git", "tag"]]
     assert not [c for c in commands if c[:2] == ["git", "push"]]
-    assert state["edits"][-2] == (99, {"repo": "o/r", "add": "ai-blocked",
+    assert state["edits"][-2] == (99, {"repo": "o/r",
                                        "remove": "ai-in-progress"})
     # The terminal state is ai-blocked ALONE: the queue label the
     # claim kept is cleared too (Issue #1775).
-    assert state["edits"][-1] == (99, {"repo": "o/r", "remove": "ai-ready"})
+    assert state["edits"][-1] == (99, {"repo": "o/r", "add": "ai-blocked"})
     (comment_number, comment_kwargs), = state["comments"]
     assert "other123" in comment_kwargs["body"]
     assert "abc123" in comment_kwargs["body"]
@@ -3961,11 +3964,11 @@ def test_process_release_fails_on_scope_violation(monkeypatch):
         issue, config_domain.RunnerConfig(repo_dir=Path("/r"), base_branch="main"), "o/r",
     )
     assert result == ""
-    assert state["edits"][-2] == (99, {"repo": "o/r", "add": "ai-blocked",
+    assert state["edits"][-2] == (99, {"repo": "o/r",
                                        "remove": "ai-in-progress"})
     # The terminal state is ai-blocked ALONE: the queue label the
     # claim kept is cleared too (Issue #1775).
-    assert state["edits"][-1] == (99, {"repo": "o/r", "remove": "ai-ready"})
+    assert state["edits"][-1] == (99, {"repo": "o/r", "add": "ai-blocked"})
 
 
 def test_close_release_milestone_closes_an_open_empty_milestone(monkeypatch):
@@ -4912,11 +4915,11 @@ def test_process_release_fails_on_scope_item_that_is_neither(monkeypatch):
         issue, config_domain.RunnerConfig(repo_dir=Path("/r"), base_branch="main"), "o/r",
     )
     assert result == ""
-    assert state["edits"][-2] == (99, {"repo": "o/r", "add": "ai-blocked",
-                                        "remove": "ai-in-progress"})
+    assert state["edits"][-2] == (99, {"repo": "o/r",
+                                       "remove": "ai-in-progress"})
     # The terminal state is ai-blocked ALONE: the queue label the
     # claim kept is cleared too (Issue #1775).
-    assert state["edits"][-1] == (99, {"repo": "o/r", "remove": "ai-ready"})
+    assert state["edits"][-1] == (99, {"repo": "o/r", "add": "ai-blocked"})
 
 
 def test_scope_gh_fake_rejects_unexpected_command(monkeypatch):
@@ -4963,3 +4966,26 @@ def test_release_process_env_fake_answers_the_real_tag_probe(tmp_path,
     with pytest.raises(AssertionError, match="unexpected command"):
         fake(["git", "fetch", "origin"])
     assert release_closeout.release_tag_commit(tmp_path, "v0.3.0") == "abc123"
+
+
+def test_process_release_failed_merged_add_restores_the_in_progress_label(
+    monkeypatch,
+):
+    """Issue #2357 acceptance 2: when the release close-out's ai-merged add
+    fails, the labels it already removed are put back in the same tick —
+    the Issue carries ai-in-progress again and the synthetic ai-ready the
+    close-out passes (but the Issue never carried) is NOT invented. The
+    existing failed-write recovery (the restart scan reruns the close-out)
+    therefore keeps working."""
+    state = make_release_process_env(monkeypatch, fail_merged_add=True)
+    issue = {"number": 99, "title": "Release v0.3.0",
+             "body": RELEASE_DECLARATION_BODY,
+             "labels": [{"name": "ai-ready"}, {"name": "ai-release"}]}
+    assert release_run.process_release(
+        issue,
+        config_domain.RunnerConfig(repo_dir=Path("/r"), base_branch="main"),
+        "o/r",
+    ) == "https://github.com/o/r/releases/tag/v0.3.0"
+    assert "ai-in-progress" in state["labels"]
+    assert "ai-ready" not in state["labels"]
+    assert "ai-merged" not in state["labels"]

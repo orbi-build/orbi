@@ -400,10 +400,12 @@ def test_delivery_step_recoverable_failure_while_fix_needed_keeps_label(
     monkeypatch.setattr(review_merge, "review_and_merge_if_clean", failing_review)
     bind_run_id(RUN_ID)
     runner.delivery_step(PR_URL, _issue(), _config(tmp_path), "owner/repo")
-    # The current label set contains only ai-fix-needed, so the
-    # idempotent transition adds it without inventing a remove for the
-    # absent ai-pr-opened label.
+    # Issue #2357: the round-start repair moves the stale ai-fix-needed
+    # to ai-pr-opened; the failed review then sets ai-fix-needed again —
+    # the same end state as before.
     assert edits == [
+        ((39,), {"repo": "owner/repo", "add": "ai-pr-opened",
+                 "remove": "ai-fix-needed"}),
         ((39,), {"repo": "owner/repo", "add": "ai-fix-needed"}),
     ]
 
@@ -573,8 +575,8 @@ def test_delivery_step_unrecoverable_failure_marks_blocked_with_reason(
 
     # The terminal state is ai-blocked ALONE ...
     assert edits == [
-        ((39,), {"repo": "owner/repo", "add": "ai-blocked",
-                 "remove": "ai-pr-opened"}),
+        ((39,), {"repo": "owner/repo", "remove": "ai-pr-opened"}),
+        ((39,), {"repo": "owner/repo", "add": "ai-blocked"}),
     ]
     # ... with a failure comment that carries the run marker, the PR
     # and the EXPLICIT reason why automatic recovery is impossible.
@@ -680,8 +682,8 @@ def test_delivery_step_base_branch_mismatch_marks_blocked_with_reason(
     # No review was started (the mismatch is terminal before it).
     assert reviews == []
     assert edits == [
-        ((39,), {"repo": "owner/repo", "add": "ai-blocked",
-                 "remove": "ai-pr-opened"}),
+        ((39,), {"repo": "owner/repo", "remove": "ai-pr-opened"}),
+        ((39,), {"repo": "owner/repo", "add": "ai-blocked"}),
     ]
     body = issue_comments[0][1]["body"]
     assert "Orbi failed:" in body
@@ -830,13 +832,9 @@ def test_verify_resumed_pr_local_ahead_of_pr_head_continues_to_review(
         make_resume_scene(), issue, make_resume_config(tmp_path), "owner/repo",
     )
     assert url == "https://github.com/owner/repo/pull/9"
-    # Issue #178: the resume backfills the in-flight label and clears
-    # the stale fix-needed label before the review continues.
-    assert edits == [
-        ["gh", "issue", "edit", "9", "--repo", "owner/repo",
-         "--add-label", "ai-in-progress", "--remove-label",
-         "ai-fix-needed"],
-    ]
+    # Issue #2357: the resume writes no label; the review round owns
+    # the ai-fix-needed -> ai-pr-opened normalization.
+    assert edits == []
     # The journal carries the commit/push phase: the exact local head
     # and remote PR head.
     assert "local_head_ahead_of_pr_head" in caplog.text
@@ -875,8 +873,8 @@ def test_verify_resumed_pr_unrecoverable_failure_marks_blocked_with_reason(
             make_resume_config(tmp_path), "owner/repo",
         )
     assert captured["edits"] == [
-        ((9,), {"repo": "owner/repo", "add": "ai-blocked",
-                "remove": "ai-pr-opened"}),
+        ((9,), {"repo": "owner/repo", "remove": "ai-pr-opened"}),
+        ((9,), {"repo": "owner/repo", "add": "ai-blocked"}),
     ]
     body = captured["comments"][0][1]["body"]
     assert "Orbi failed:" in body
@@ -989,10 +987,10 @@ def test_verify_resumed_pr_unrecoverable_failure_removes_leftover_fix_needed_lab
         )
     # The blocked patch clears every delivery-state label that is
     # present — here only `ai-fix-needed` (the delivery was awaiting the
-    # next review session) — in one deterministic patch.
+    # next review session) — removal first, terminal add last (#2357).
     assert captured["edits"] == [
-        ((9,), {"repo": "owner/repo", "add": "ai-blocked",
-                "remove": "ai-fix-needed"}),
+        ((9,), {"repo": "owner/repo", "remove": "ai-fix-needed"}),
+        ((9,), {"repo": "owner/repo", "add": "ai-blocked"}),
     ]
 
 
@@ -1076,6 +1074,11 @@ def test_finish_progress_fix_needed_without_run_id_is_noop(monkeypatch):
 # ------------------------------------------------------------- block_scene_failure
 
 
+def _answer_blocked_labels(monkeypatch, labels):
+    """Answer the terminal transition's real-label read (Issue #2357)."""
+    monkeypatch.setattr(seam, "issue_labels", lambda *a, **k: list(labels))
+
+
 def test_block_scene_failure_states_why_not_auto_recoverable(
         monkeypatch, caplog,
 ):
@@ -1100,16 +1103,19 @@ def test_block_scene_failure_states_why_not_auto_recoverable(
     monkeypatch.setattr(seam, "comment_issue",
         lambda *args, **kwargs: posted.append(kwargs["body"]),
     )
+    # The claimed Issue carries the delivery state and the pre-upgrade
+    # queue residue; the terminal read sees both (Issue #2357).
+    _answer_blocked_labels(monkeypatch, ["ai-fix-needed", "ai-ready"])
     failure_report.block_scene_failure(
         issue, scene.SceneError("opened PR comment is missing run_id"),
         "owner/repo", comments, language_code="en",
     )
+    # Issue #2357: every removal is written before the terminal add, so
+    # the timeline ends on ai-blocked alone.
     assert edits == [
-        ((39,), {"repo": "owner/repo", "add": "ai-blocked",
-                 "remove": "ai-fix-needed"}),
-        # ai-blocked ALONE: the queue label the claim kept is cleared
-        # too (Issue #1775).
+        ((39,), {"repo": "owner/repo", "remove": "ai-fix-needed"}),
         ((39,), {"repo": "owner/repo", "remove": "ai-ready"}),
+        ((39,), {"repo": "owner/repo", "add": "ai-blocked"}),
     ]
     assert len(posted) == 1
     body = posted[0]
@@ -1136,15 +1142,16 @@ def test_block_scene_failure_clears_the_repositorys_dispatch_label(
         lambda *args, **kwargs: edits.append((args, kwargs)),
     )
     monkeypatch.setattr(seam, "comment_issue", lambda *args, **kwargs: None)
+    _answer_blocked_labels(monkeypatch, ["ai-fix-needed", "ship"])
     failure_report.block_scene_failure(
         issue, scene.SceneError("opened PR comment is missing run_id"),
         "owner/repo", [{"body": "public comment", "authorAssociation": "NONE"}],
         language_code="en", ready_label="ship",
     )
     assert edits == [
-        ((39,), {"repo": "owner/repo", "add": "ai-blocked",
-                 "remove": "ai-fix-needed"}),
+        ((39,), {"repo": "owner/repo", "remove": "ai-fix-needed"}),
         ((39,), {"repo": "owner/repo", "remove": "ship"}),
+        ((39,), {"repo": "owner/repo", "add": "ai-blocked"}),
     ]
 
 
@@ -1679,7 +1686,8 @@ def test_report_failure_three_identical_ticks_escalate_the_dead_loop(
     assert captured["edits"] == [
         ("ai-fix-needed", None),
         ("ai-fix-needed", None),
-        ("ai-blocked", "ai-fix-needed"),
+        (None, "ai-fix-needed"),
+        ("ai-blocked", None),
     ]
     # The PR thread only ever saw the first recoverable copy; terminal
     # comments are Issue-only.
@@ -1705,7 +1713,9 @@ def test_report_failure_third_identical_failure_blocks_the_dead_loop(
     )
     caplog.set_level("INFO")
     _report(exc)
-    assert captured["edits"] == [("ai-blocked", "ai-fix-needed")]
+    assert captured["edits"] == [
+        (None, "ai-fix-needed"), ("ai-blocked", None),
+    ]
     assert len(captured["comments"]) == 1
     body = captured["comments"][0]
     assert "3 consecutive times" in body
@@ -1732,7 +1742,9 @@ def test_report_failure_balance_stop_keeps_its_own_reason_when_escalated(
     )
     _report(exc)
 
-    assert captured["edits"] == [("ai-blocked", "ai-fix-needed")]
+    assert captured["edits"] == [
+        (None, "ai-fix-needed"), ("ai-blocked", None),
+    ]
     body = captured["comments"][0]
     assert failure.parse(body) == failure.Failure(
         reason_code="provider_balance", action_code="top_up_balance",
@@ -1854,7 +1866,9 @@ def test_human_decision_failure_is_terminal_with_decision_details(
         reason="The review requires a human decision.", diagnosis=decision, language_code="en",
     )
     assert outcome == "blocked"
-    assert captured["edits"] == [("ai-blocked", "ai-pr-opened")]
+    assert captured["edits"] == [
+        (None, "ai-pr-opened"), ("ai-blocked", None),
+    ]
     body = captured["comments"][0]
     assert body.index(action) < body.index("The review requires")
     assert body.index("The review requires") < body.index(

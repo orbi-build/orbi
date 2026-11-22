@@ -581,14 +581,19 @@ def test_the_label_patch_never_sends_the_blocked_alert(monkeypatch):
         monkeypatch.setattr(seam, "edit_issue", lambda *a, **k: None)
         monkeypatch.setattr(
             seam, "issue_view",
-            lambda *a, **k: reads.append(a) or {"title": "Fix the thing"},
+            lambda *a, **k: reads.append(a) or {
+                "title": "Fix the thing",
+                # The terminal transition reads the real labels (#2357).
+                "labels": [{"name": "ai-ready"}],
+            },
         )
         github.apply_label_patch(
             7, repo="o/r", event=EVENT_BLOCKED,
             current_labels={"ai-ready"},
         )
         assert endpoint.requests == []
-        assert reads == []
+        # Only the label presence read ran; no title read for a message.
+        assert all("title" not in read for read in reads)
 
 
 def test_a_blocked_stop_alert_quotes_and_links_the_comment_it_posted(

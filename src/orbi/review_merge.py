@@ -922,10 +922,10 @@ def _run_review_round(
     """Run ONE review round of an open-PR delivery.
 
     The delivery step's round body: read the delivery labels ONCE per
-    round, repair a lost `ai-in-progress` transition, gate on the
-    resumable opened-PR states, then recover the trusted scene,
-    validate the frozen base, derive the worktree/branch, run the
-    independent review and classify any failure.
+    round, repair a stale `ai-in-progress` / `ai-fix-needed` into
+    `ai-pr-opened`, gate on the resumable opened-PR states, then recover
+    the trusted scene, validate the frozen base, derive the
+    worktree/branch, run the independent review and classify any failure.
 
     Returns True when this round merged the PR (terminal success);
     False when the delivery stays open for a LATER TICK (`ai-fix-needed`
@@ -969,7 +969,10 @@ def _run_review_round(
         )
 
     labels = issue_labels(number, source_repo)
-    if delivery_labels.IN_PROGRESS_LABEL in labels:
+    stale = [l for l in (delivery_labels.IN_PROGRESS_LABEL,
+                         delivery_labels.FIX_NEEDED_LABEL) if l in labels]
+    if (stale and not needs_human_intervention(labels)
+            and delivery_labels.MERGED_LABEL not in labels):
         try:
             apply_label_patch(
                 number, repo=source_repo, event=EVENT_PR_OPENED,
@@ -982,13 +985,14 @@ def _run_review_round(
             )
             block_label_inconsistency(labels, str(exc))
             return None
-        # The repair also removed a pre-upgrade queue residue (#2309).
+        # The repair also removed a pre-upgrade queue residue (#2309);
+        # a resumed ai-fix-needed round ends on ai-pr-opened alone (#2357).
         labels = [label for label in labels
-                  if label not in (delivery_labels.IN_PROGRESS_LABEL, ready_label)]
+                  if label not in (*stale, ready_label)]
         labels.append(delivery_labels.PR_OPENED_LABEL)
         event(
             "delivery_label_repaired", issue=number, pr=pr_url,
-            **{"from": delivery_labels.IN_PROGRESS_LABEL, "to": delivery_labels.PR_OPENED_LABEL},
+            **{"from": ",".join(stale), "to": delivery_labels.PR_OPENED_LABEL},
         )
     if not (is_resumable(labels)
             and not needs_human_intervention(labels)
@@ -1053,14 +1057,10 @@ def _run_review_round(
     # unrecoverable scene, a base-branch config change,
     # exhausted rounds) is terminal: the Issue is marked
     # `ai-blocked` ALONE (the opened-PR state label,
-    # `ai-pr-opened` or `ai-fix-needed`, is removed) with the
-    # explicit reason why automatic recovery is impossible.
-    worktree = None
-    branch = None
-    scene = None
-    # The round-scoped values the failure report below needs from INSIDE
-    # the round: the round in progress and the refreeze's verdict-head
-    # counter. They are not part of the recovered scene (Issue #2053).
+    # `ai-pr-opened` or `ai-fix-needed`, is removed) with the reason.
+    worktree = branch = scene = None
+    # Round-scoped values the failure report needs from INSIDE the round
+    # (not part of the recovered scene, Issue #2053).
     report = RoundReport()
     try:
         try:

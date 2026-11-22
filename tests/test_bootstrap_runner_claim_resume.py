@@ -941,14 +941,13 @@ def test_process_issue_fails_fast_when_the_run_state_is_missing(
         )
     # No fresh run was started.
     assert run_pi_calls == []
-    # The terminal state is `ai-blocked` ALONE (the claim label removed).
+    # Issue #2357: the removal is written before the terminal add, so
+    # the timeline ends on ai-blocked alone.
     assert edits[-2] == ((4,), {
-        "repo": "xqliu/orbi-backlog", "add": "ai-blocked",
-        "remove": "ai-in-progress",
+        "repo": "xqliu/orbi-backlog", "remove": "ai-in-progress",
     })
-    # The queue label the claim kept is cleared last (Issue #1775).
     assert edits[-1] == ((4,), {
-        "repo": "xqliu/orbi-backlog", "remove": queue_label,
+        "repo": "xqliu/orbi-backlog", "add": "ai-blocked",
     })
     # The failure comment carries the reason and the run marker.
     failed = [

@@ -920,6 +920,15 @@ def make_pick_fake(list_payload: str, view_payload=None,
             if command[2] == "list":
                 return list_payload
             if command[2] == "view":
+                if command[-1] == "labels":
+                    # The terminal-transition presence read (Issue
+                    # #2357) answers from the listed Issue state.
+                    number = int(command[3])
+                    for item in json.loads(list_payload):
+                        if item.get("number") == number:
+                            return json.dumps(
+                                {"labels": item.get("labels", [])})
+                    return json.dumps({"labels": []})
                 if callable(view_payload):
                     return view_payload(command[3])
                 return view_payload
@@ -962,6 +971,23 @@ def test_pick_fake_rejects_unexpected_command(monkeypatch):
     # rejected too.
     with pytest.raises(AssertionError, match="unexpected command"):
         fake(["gh", "issue", "create", "--repo", "owner/repo"])
+
+
+def test_pick_fake_answers_the_terminal_label_read_from_the_listed_state():
+    """Issue #2357: the terminal transition's presence read is answered
+    from the listed Issue state; an Issue outside the page has no label."""
+    fake = make_pick_fake(
+        issue_payload(labels=["ai-pr-opened"]),
+        gh_comments_payload(["a human note"]),
+    )
+    assert json.loads(fake([
+        "gh", "issue", "view", "9", "--repo", "owner/repo",
+        "--json", "labels",
+    ])) == {"labels": [{"name": "ai-pr-opened"}]}
+    assert json.loads(fake([
+        "gh", "issue", "view", "10", "--repo", "owner/repo",
+        "--json", "labels",
+    ])) == {"labels": []}
 
 
 def test_pick_resumable_delivery_returns_issue_with_scene(
@@ -1594,14 +1620,13 @@ def test_pick_resumable_delivery_blocks_issue_without_scene_comment(
         hooks=resume_deps(), language_code=language_code,
         status_url=TASK_STATUS_URL,
     ) is None
+    # Issue #2357: the removal is written before the terminal add, so
+    # the timeline ends on the new state.
     assert edits == [
-        [
-            "gh", "issue", "edit", "9", "--repo", "owner/repo",
-            "--add-label", "ai-blocked", "--remove-label", "ai-fix-needed",
-        ],
-        # ai-blocked ALONE: the queue label the claim kept goes too (#1775).
         ["gh", "issue", "edit", "9", "--repo", "owner/repo",
-         "--remove-label", "ai-ready"],
+         "--remove-label", "ai-fix-needed"],
+        ["gh", "issue", "edit", "9", "--repo", "owner/repo",
+         "--add-label", "ai-blocked"],
     ]
     assert "'Orbi opened PR'" in comments[0]
     # Issue #1826: the blocked task message carries the readable summary
@@ -1643,14 +1668,12 @@ def test_pick_resumable_delivery_blocks_pr_opened_issue_without_scene(
         "owner/repo", tmp_path / "slots", 1,
         hooks=resume_deps(), language_code="en",
     ) is None
+    # Issue #2357: only labels actually on the Issue are removed, so the
+    # deliberately preserved ai-pr-opened label stays and the terminal
+    # add is the only write.
     assert edits == [
-        [
-            "gh", "issue", "edit", "9", "--repo", "owner/repo",
-            "--add-label", "ai-blocked", "--remove-label", "ai-fix-needed",
-        ],
-        # ai-blocked ALONE: the queue label the claim kept goes too (#1775).
         ["gh", "issue", "edit", "9", "--repo", "owner/repo",
-         "--remove-label", "ai-ready"],
+         "--add-label", "ai-blocked"],
     ]
     # The erroneous ai-pr-opened label is NOT auto-cleaned (Issue #672).
     assert "ai-pr-opened" not in edits[0]
@@ -1698,14 +1721,13 @@ def test_pick_resumable_delivery_blocks_issue_when_scene_is_malformed(
         hooks=resume_deps(), language_code="en",
     ) is None
     # The blocked transition: add ai-blocked, remove ai-fix-needed...
+    # Issue #2357: the removal is written before the terminal add, so
+    # the timeline ends on the new state.
     assert edits == [
-        [
-            "gh", "issue", "edit", "9", "--repo", "owner/repo",
-            "--add-label", "ai-blocked", "--remove-label", "ai-fix-needed",
-        ],
-        # ai-blocked ALONE: the queue label the claim kept goes too (#1775).
         ["gh", "issue", "edit", "9", "--repo", "owner/repo",
-         "--remove-label", "ai-ready"],
+         "--remove-label", "ai-fix-needed"],
+        ["gh", "issue", "edit", "9", "--repo", "owner/repo",
+         "--add-label", "ai-blocked"],
     ]
     # ...and a failure comment with the concrete reason...
     body = comments[0]
@@ -1902,14 +1924,13 @@ def test_pick_resumable_delivery_blocks_issue_when_no_trusted_scene(
         "owner/repo", tmp_path / "slots", 1,
         hooks=resume_deps(), language_code="en",
     ) is None
+    # Issue #2357: the removal is written before the terminal add, so
+    # the timeline ends on the new state.
     assert edits == [
-        [
-            "gh", "issue", "edit", "9", "--repo", "owner/repo",
-            "--add-label", "ai-blocked", "--remove-label", "ai-fix-needed",
-        ],
-        # ai-blocked ALONE: the queue label the claim kept goes too (#1775).
         ["gh", "issue", "edit", "9", "--repo", "owner/repo",
-         "--remove-label", "ai-ready"],
+         "--remove-label", "ai-fix-needed"],
+        ["gh", "issue", "edit", "9", "--repo", "owner/repo",
+         "--add-label", "ai-blocked"],
     ]
     assert "Orbi failed:" in comments[0]
     assert "issue=9 resume scene is missing" in caplog.text
@@ -1926,7 +1947,7 @@ def test_pick_resumable_delivery_scene_blocked_clears_the_dispatch_label(
     comments: list[str] = []
     monkeypatch.setattr(seam, "run_command",
         make_pick_fake(
-            issue_payload(),
+            issue_payload(labels=["ai-fix-needed", "ship"]),
             gh_comments_payload(["only a human comment here"]),
             edits=edits,
             comments=comments,
@@ -1938,12 +1959,12 @@ def test_pick_resumable_delivery_scene_blocked_clears_the_dispatch_label(
         hooks=resume_deps(), language_code="en", ready_label="ship",
     ) is None
     assert edits == [
-        [
-            "gh", "issue", "edit", "9", "--repo", "owner/repo",
-            "--add-label", "ai-blocked", "--remove-label", "ai-fix-needed",
-        ],
+        ["gh", "issue", "edit", "9", "--repo", "owner/repo",
+         "--remove-label", "ai-fix-needed"],
         ["gh", "issue", "edit", "9", "--repo", "owner/repo",
          "--remove-label", "ship"],
+        ["gh", "issue", "edit", "9", "--repo", "owner/repo",
+         "--add-label", "ai-blocked"],
     ]
 
 
@@ -2101,6 +2122,11 @@ def test_pick_next_delivery_continues_after_scene_failure(
                 return issue_payload(labels=["ai-pr-opened"])
             return "[]"
         if command[:3] == ["gh", "issue", "view"]:
+            if command[-1] == "labels":
+                # The Issue carries ai-pr-opened; the terminal add is
+                # the only label write (Issue #2357, #672).
+                return json.dumps(
+                    {"labels": [{"name": "ai-pr-opened"}]})
             return gh_comments_payload(["only a human comment here"])
         if command[:3] == ["gh", "issue", "edit"]:
             edits.append(command)
@@ -2125,14 +2151,11 @@ def test_pick_next_delivery_continues_after_scene_failure(
     # Issue was scoped to a single-ticket block, not a tick stop.
     assert result == ("owner/repo", ready, None)
     assert calls == [("ready", "owner/repo")]
+    # Issue #2357: ai-pr-opened is deliberately preserved (Issue #672),
+    # so the terminal add is the only label write.
     assert edits == [
-        [
-            "gh", "issue", "edit", "9", "--repo", "owner/repo",
-            "--add-label", "ai-blocked", "--remove-label", "ai-fix-needed",
-        ],
-        # ai-blocked ALONE: the queue label the claim kept goes too (#1775).
         ["gh", "issue", "edit", "9", "--repo", "owner/repo",
-         "--remove-label", "ai-ready"],
+         "--add-label", "ai-blocked"],
     ]
     assert len(comments) == 1
     assert "Orbi failed:" in comments[0]
@@ -2564,6 +2587,11 @@ def test_main_continues_to_ready_delivery_after_scene_failure(
                 return issue_payload(labels=["ai-pr-opened"])
             return "[]"
         if command[:3] == ["gh", "issue", "view"]:
+            if command[-1] == "labels":
+                # The Issue carries ai-pr-opened; the terminal add is
+                # the only label write (Issue #2357, #672).
+                return json.dumps(
+                    {"labels": [{"name": "ai-pr-opened"}]})
             return gh_comments_payload(["only a human comment here"])
         if command[:3] == ["gh", "issue", "edit"]:
             edits.append(command)
@@ -2596,14 +2624,11 @@ def test_main_continues_to_ready_delivery_after_scene_failure(
     monkeypatch.setattr(runner, "delivery_step", lambda *a, **k: None)
     assert runner.main(["--config", str(config)]) == 0
     # The corrupted Issue was scoped to a single-ticket block...
+    # Issue #2357: ai-pr-opened is deliberately preserved (Issue #672),
+    # so the terminal add is the only label write.
     assert edits == [
-        [
-            "gh", "issue", "edit", "9", "--repo", "owner/repo",
-            "--add-label", "ai-blocked", "--remove-label", "ai-fix-needed",
-        ],
-        # ai-blocked ALONE: the queue label the claim kept goes too (#1775).
         ["gh", "issue", "edit", "9", "--repo", "owner/repo",
-         "--remove-label", "ai-ready"],
+         "--add-label", "ai-blocked"],
     ]
     assert len(comments) == 1
     assert "Orbi failed:" in comments[0]
@@ -2908,9 +2933,9 @@ def test_verify_resumed_pr_verifies_scene_pr_and_returns_verified_url(
     # The verified URL is returned, not the comment string.
     assert url == verified_url
     assert len(calls) == 1
-    # Issue #178: the in-flight label is backfilled before the resumed
-    # delivery continues (idempotent, the state label untouched).
-    assert edits == [(9, "owner/repo", "ai-in-progress", None)]
+    # Issue #2357: a resumed round writes no ai-in-progress; the
+    # opened-PR state label carries the round.
+    assert edits == []
     call = calls[0]
     # Branch and worktree are DERIVED from config + Issue + run id.
     assert call["worktree"] == expected_resume_worktree(tmp_path)
@@ -3085,9 +3110,8 @@ def test_verify_resumed_pr_backfills_in_progress_label_before_continuing(
     )
     assert url == FAKE_PR_URL
     assert len(calls) == 1
-    # The in-flight label is backfilled after the PR is verified, with
-    # the state label (ai-pr-opened / ai-fix-needed) untouched.
-    assert edits == [(9, "owner/repo", "ai-in-progress", None)]
+    # Issue #2357: no ai-in-progress write; the opened-PR label stays.
+    assert edits == []
 
 
 def test_verify_resumed_pr_repeated_resume_backfill_is_idempotent(
@@ -3119,11 +3143,8 @@ def test_verify_resumed_pr_repeated_resume_backfill_is_idempotent(
             make_resume_config(tmp_path), "owner/repo",
         )
         assert url == FAKE_PR_URL
-    # Exactly one idempotent backfill edit per tick, nothing else.
-    assert edits == [
-        (9, "owner/repo", "ai-in-progress", None),
-        (9, "owner/repo", "ai-in-progress", None),
-    ]
+    # Issue #2357: neither tick writes a label.
+    assert edits == []
     # Nothing was recreated: both ticks verified the SAME derived
     # worktree, branch and run id of the scene — no new run, no new
     # worktree, no new PR.
@@ -3181,9 +3202,8 @@ def test_verify_resumed_pr_external_scene_reads_branch_from_worktree(
     assert expected_url == "https://github.com/xqliu/orbi/pull/592"
     assert require_latest_base is False
     assert external_pr is True
-    # The in-flight backfill still applies (the resumed delivery is in
-    # flight from the verified PR on).
-    assert edits == [(9, "owner/repo", "ai-in-progress", None)]
+    # Issue #2357: the external takeover resume writes no label either.
+    assert edits == []
 
 
 def test_verify_resumed_pr_recreates_missing_worktree_from_remote_branch(
@@ -3198,7 +3218,7 @@ def test_verify_resumed_pr_recreates_missing_worktree_from_remote_branch(
     advanced). The REAL verify_pr runs on the rebuilt worktree."""
     fake_git = FakeGit(tmp_path, base_branch="main")
     fake_gh = FakeGh("owner/repo")
-    fake_gh.add_issue(9, title="ship")
+    fake_gh.add_issue(9, title="ship", labels=("ai-pr-opened",))
     local_head = fake_git.commit([fake_git.base_sha])
     remote_head = fake_git.commit([local_head])
     # Reclamation removed the worktree but deliberately left the local
@@ -3230,8 +3250,9 @@ def test_verify_resumed_pr_recreates_missing_worktree_from_remote_branch(
     assert fake_git.local[FAKE_BRANCH] == remote_head
     # The REAL verify_pr compared this rebuilt HEAD to the PR head, so the
     # successful return proves the resumed user path no longer diverges.
-    assert "ai-in-progress" in fake_gh.issues[9]["labels"]
-    assert "ai-pr-opened" not in fake_gh.issues[9]["labels"]
+    # Issue #2357: the resumed round writes no ai-in-progress.
+    assert "ai-in-progress" not in fake_gh.issues[9]["labels"]
+    assert "ai-pr-opened" in fake_gh.issues[9]["labels"]
 
 
 def test_verify_resumed_pr_continues_from_a_diverged_local_branch(
@@ -3275,9 +3296,10 @@ def test_verify_resumed_pr_continues_from_a_diverged_local_branch(
     merged = fake_git.worktrees[str(worktree)]["head"]
     assert fake_git.parents[merged] == [local_head, remote_head]
     assert fake_git.local[FAKE_BRANCH] == merged
-    # The resumed delivery is in flight again (no ai-blocked, no failure
-    # comment for the maintainer to act on).
-    assert "ai-in-progress" in fake_gh.issues[9]["labels"]
+    # The resumed delivery stays on its opened-PR label (no ai-blocked,
+    # no failure comment for the maintainer to act on, Issue #2357).
+    assert "ai-in-progress" not in fake_gh.issues[9]["labels"]
+    assert "ai-pr-opened" in fake_gh.issues[9]["labels"]
 
 
 def test_verify_resumed_pr_branch_gone_from_origin_is_terminal(
@@ -3360,77 +3382,22 @@ def test_verify_resumed_pr_external_scene_recreates_worktree_from_scene_pr(
     assert fake_git.worktrees[str(worktree)]["head"] == external_head
 
 
-def test_verify_resumed_pr_backfill_label_api_failure_fails_fast(
-    monkeypatch, tmp_path, caplog, bind_run_id,
+def test_verify_resumed_pr_writes_no_label_after_verification(
+    monkeypatch, tmp_path,
 ):
-    """Issue #178: a label API failure during the resume backfill is a
-    RECOVERABLE resume failure (never `ai-blocked`): the Issue is
-    marked `ai-fix-needed`, the run-marked failure comment is posted to
-    the Issue AND the PR, the error is re-raised so the tick stops, and
-    the journal carries the concrete failure (fail fast, never
-    swallowed). No review Pi is started and nothing is merged."""
+    """Issue #2357: the resume verification writes NO label — the round
+    keeps its opened-PR state (ai-pr-opened, or ai-fix-needed until the
+    review round normalizes it) instead of a backfilled ai-in-progress."""
     captured, _ = make_resume_failure_fake(monkeypatch)
-
-    def failing_edit(number, *, repo, add=None, remove=None):
-        if add == "ai-in-progress":
-            raise subprocess.CalledProcessError(
-                1, ["gh", "issue", "edit", str(number), "--repo", repo,
-                    "--add-label", add],
-                output="gh: HTTP 429: rate limited",
-                stderr="gh: HTTP 429: rate limited",
-            )
-        captured["edits"].append(
-            ((number,), {"repo": repo, "add": add, "remove": remove}),
-        )
-
-    monkeypatch.setattr(pr_verification, "verify_pr", lambda *a, **kw: FAKE_PR_URL)
-    monkeypatch.setattr(seam, "edit_issue", failing_edit)
-    reviews: list = []
-    monkeypatch.setattr(
-        review_merge, "review_and_merge_if_clean",
-        lambda *args, **kwargs: reviews.append((args, kwargs)) or False,
-    )
+    monkeypatch.setattr(pr_verification, "verify_pr",
+                        lambda *a, **kw: FAKE_PR_URL)
     expected_resume_worktree(tmp_path).mkdir(parents=True)
-    bind_run_id(FAKE_RUN_ID)
-    caplog.set_level("INFO")
-    with pytest.raises(subprocess.CalledProcessError) as excinfo:
-        resume_verification.verify_resumed_pr(
-            make_resume_scene(), make_resume_issue(),
-            make_resume_config(tmp_path), "owner/repo",
-        )
-    # The label API failure itself is re-raised (tick stops) ...
-    assert "ai-in-progress" in str(excinfo.value)
-    assert "rate limited" in (excinfo.value.stderr or "")
-    # No review Pi was started and nothing was merged.
-    assert reviews == []
-    # The recoverable transition happened (ai-pr-opened removed) — the
-    # failed backfill edit itself is not a recorded edit, it raised.
-    assert captured["edits"] == [
-        ((9,), {"repo": "owner/repo", "add": "ai-fix-needed",
-                "remove": "ai-pr-opened"}),
-    ]
-    # The run-marked failure comment names the label API failure ...
-    assert len(captured["comments"]) == 1
-    body = captured["comments"][0][1]["body"]
-    assert "Orbi needs a fix:" in body
-    assert run_marker_body() in body
-    assert "rate limited" in body
-    # ... written to the Issue AND the PR (Issue #50); the PR copy is
-    # the same formatted comment and additionally carries the hidden
-    # runner fingerprint (Issue #526) ...
-    assert len(captured["pr_comments"]) == 1
-    assert captured["pr_comments"][0].startswith(run_marker_body())
-    assert captured["pr_comments"][0].endswith("<!-- runner=8a12fb1c -->")
-    # ... and the fix-needed milestone.
-    posted = [
-        command[command.index("--field") + 1][len("body="):]
-        for command in captured["api"]
-        if "--method" in command and "POST" in command
-    ]
-    assert any("Orbi: fix needed" in body for body in posted)
-    assert any("rate limited" in body for body in posted)
-    assert "resume_pr_verification_failed" in caplog.text
-
+    url = resume_verification.verify_resumed_pr(
+        make_resume_scene(), make_resume_issue(),
+        make_resume_config(tmp_path), "owner/repo",
+    )
+    assert url == FAKE_PR_URL
+    assert captured["edits"] == []
 
 def test_verify_resumed_pr_missing_fixes_stays_fix_needed(
     monkeypatch, tmp_path, caplog, bind_run_id,
@@ -3831,8 +3798,8 @@ def test_verify_resumed_pr_scene_pr_closed_between_ticks_still_blocks(
             make_resume_config(tmp_path), "owner/repo",
         )
     assert captured["edits"] == [
-        ((9,), {"repo": "owner/repo", "add": "ai-blocked",
-                "remove": "ai-pr-opened"}),
+        ((9,), {"repo": "owner/repo", "remove": "ai-pr-opened"}),
+        ((9,), {"repo": "owner/repo", "add": "ai-blocked"}),
     ]
     assert len(captured["comments"]) == 1
     assert "Orbi failed:" in captured["comments"][0][1]["body"]
@@ -3952,8 +3919,8 @@ def test_verify_resumed_pr_fails_fast_when_scene_base_differs(
         for command in commands
     )
     assert captured["edits"] == [
-        ((9,), {"repo": "owner/repo", "add": "ai-blocked",
-                "remove": "ai-pr-opened"}),
+        ((9,), {"repo": "owner/repo", "remove": "ai-pr-opened"}),
+        ((9,), {"repo": "owner/repo", "add": "ai-blocked"}),
     ]
     body = captured["comments"][0][1]["body"]
     assert "Orbi failed:" in body
@@ -4183,10 +4150,8 @@ def test_verify_resumed_pr_resume_under_a_new_run_id_continues(
         "owner/repo",
     )
     assert url == FAKE_PR_URL
-    # The in-flight backfill still lands after the verification.
-    assert edits == [
-        ((9,), {"repo": "owner/repo", "add": "ai-in-progress"}),
-    ]
+    # Issue #2357: the verification writes no label.
+    assert edits == []
 
 
 def test_verify_pr_resume_still_rejects_a_foreign_line_marker(

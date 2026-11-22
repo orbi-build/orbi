@@ -102,6 +102,9 @@ class FakeGh:
         # flag the answer does not otherwise change (a read scoped with
         # `--repo`, Issue #2234) reads the command line here.
         self.commands: list[list[str]] = []
+        # Label edits that fail server-side, keyed as (add|remove, label)
+        # — the terminal-transition restore tests (Issue #2357).
+        self.fail_label_edits: set[tuple[str, str]] = set()
         self._clock = 0
 
     # --- state arrangement (what a test does instead of patching) -------
@@ -255,6 +258,10 @@ class FakeGh:
     def set_permission_failure(self, login: str) -> None:
         """Make that user's permission read fail server-side (a 5xx)."""
         self.permission_failure = login
+
+    def fail_label_edit(self, verb: str, label: str) -> None:
+        """Make one `gh issue edit --add/--remove-label` write fail."""
+        self.fail_label_edits.add((verb, label))
 
     def set_repo_config(self, text: str) -> None:
         """Seed the repository's default `.github/orbi.toml` — the
@@ -509,6 +516,11 @@ class FakeGh:
         return issue
 
     def _issue_edit(self, issue: dict, flags: dict) -> None:
+        for verb, flag in (("add", "--add-label"),
+                           ("remove", "--remove-label")):
+            for label in flags.get(flag) or []:
+                if (verb, label) in self.fail_label_edits:
+                    self._fail(1, f"fake-gh: label edit failed: {label}")
         for label in flags.get("--add-label") or []:
             if label not in issue["labels"]:
                 issue["labels"].append(label)

@@ -448,7 +448,8 @@ def _blocked_review_body(monkeypatch, tmp_path, code, **env):
         "owner/repo",
     )
     assert outcome is None
-    assert edits[0][1]["add"] == "ai-blocked"
+    # Issue #2357: the terminal add is the last label write.
+    assert edits[-1][1]["add"] == "ai-blocked"
     return comments[0][1]["body"]
 
 
