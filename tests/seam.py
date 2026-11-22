@@ -36,6 +36,7 @@ import orbi.clarify_stop as clarify_stop
 import orbi.claim as claim
 import orbi.claim_race as claim_race
 import orbi.failure_report as failure_report
+import orbi.epic_reconciliation as epic_reconciliation
 import orbi.github as github
 import orbi.github_feedback as github_feedback
 import orbi.gitops as gitops
@@ -73,7 +74,8 @@ import orbi.resume_verification as resume_verification
 import orbi.runner as runner
 
 _MODULES = (
-    journal, github, github_feedback, gitops, milestone, milestone_command,
+    journal, github, github_feedback, epic_reconciliation, gitops, milestone,
+    milestone_command,
     ops_delivery, ticket_command,
     progress, cli_source, release, release_closeout, release_git,
     release_notes, release_run, pi_session, body_steering,

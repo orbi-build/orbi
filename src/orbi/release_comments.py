@@ -5,53 +5,15 @@ task. They live in their own sibling of `release.py` so the localized
 wording does not grow the frozen release module (Issue #1229); the release
 execution and the closeout import them unchanged (Issue #1859).
 
-It also owns the Epic reconciliation audit sentence and its either-language
-duplicate check (Issue #1705): the claim sweep and the Milestone sweep share
-one renderer here, so neither frozen module grows for the catalog text.
+The Epic reconciliation sentence and its either-language duplicate check
+(Issues #1705, #2356) live in `orbi.epic_reconciliation` since #2356: the
+wording now depends on how each child ended, which is that module's domain.
 """
 from __future__ import annotations
 
 from orbi import failure, language, terminal_stops
 from orbi.progress import field_block
 from orbi.run_fields import RunFields
-
-
-def _epic_audit(child_evidence: list[str], version: str | None,
-                language_code: str) -> str:
-    """The one Epic reconciliation sentence, in the bound language.
-
-    The child fragments ("PR #N merged", "Issue #N closed") are the
-    shared evidence `github._epic_child_evidence` builds; only the
-    sentence around them is translated (Issue #1705).
-    """
-    prefix = "" if not version else language.text(
-        language_code, "epic.reconciliation_version", version=version,
-    )
-    return language.text(
-        language_code, "epic.reconciliation",
-        prefix=prefix, children=", ".join(child_evidence),
-    )
-
-
-def epic_audit_posted(comments: list[dict], child_evidence: list[str],
-                      version: str | None = None) -> bool:
-    """True when a comment already carries the audit in EITHER language.
-
-    The audit sentence is its own duplicate check: both sweeps close the
-    Epic right after commenting, so a comment without a close means the
-    close failed and the retry may render in another language. Matching
-    every rendering keeps today's English audit from being duplicated by
-    a Chinese one (Issue #1705).
-    """
-    renderings = [
-        _epic_audit(child_evidence, version, language_code)
-        for language_code in language.LANGUAGES
-    ]
-    return any(
-        rendering in str(comment.get("body", ""))
-        for comment in comments
-        for rendering in renderings
-    )
 
 
 def release_success_comment_body(run_id: str, run_info: RunFields,

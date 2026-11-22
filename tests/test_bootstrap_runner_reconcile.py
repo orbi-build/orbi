@@ -23,6 +23,7 @@ import orbi.runner as runner
 import orbi.pi_session as pi_session
 import orbi.milestone as milestone
 
+import orbi.epic_reconciliation as epic_reconciliation
 import orbi.github as github
 from tests.test_progress_wiring import make_fake_gh
 
@@ -30,88 +31,188 @@ from seam import resume_deps, seam
 from tests.test_bootstrap_runner_outcome import _gh_api
 
 
-def test_reconcile_open_epics_closes_and_deduplicates_audit(monkeypatch, caplog):
-    caplog.set_level("INFO")
-    epic = {"number": 20}
-    commands = []
+EPIC_DETAILS = {"number": 20, "labels": [{"name": "ai-epic"}],
+                "blockedBy": {"nodes": []}}
+
+
+def _sweep_github(children, items, epic=None, history=None):
+    """A `gh` boundary fake for the per-tick Epic sweep (one Epic #20).
+
+    Answers the documented argv shapes the sweep emits — `gh issue list`
+    finds the Epic, `gh issue view ... --json ...` reads its details or its
+    comments, `gh api` reads the native sub-issues and each child — and
+    records the write verbs instead of executing them.
+    """
+    state = {"posted": [], "closed": [], "commands": [],
+             "comments": list(history or [])}
+
     def fake_run(command, **kwargs):
-        commands.append(command)
-        return json.dumps([epic]) if command[:3] == ["gh", "issue", "list"] else ""
+        state["commands"].append(command)
+        # Dispatch on the verb/action positions, never on a slice: the
+        # command-shape ratchet counts every `command[:N] ==` assertion
+        # (Issue #1230).
+        if command[1] == "api":
+            target = command[2]
+            if target == "repos/o/r/issues/20/sub_issues?per_page=100":
+                return json.dumps([children])
+            number = int(target.rsplit("/", 1)[1])
+            if target.startswith("repos/o/r/pulls/"):
+                return json.dumps({31: {"merged": True}}[number])
+            return json.dumps(items[number])
+        if command[1] == "issue" and command[2] == "list":
+            return json.dumps([{"number": 20}])
+        if command[1] == "issue" and command[2] == "view":
+            fields = command[command.index("--json") + 1]
+            if fields == "comments":
+                return json.dumps({"comments": state["comments"]})
+            if fields == "number,body,labels,blockedBy":
+                return json.dumps(epic if epic is not None else EPIC_DETAILS)
+            raise AssertionError(command)
+        if command[1] == "issue" and command[2] == "comment":
+            body = command[command.index("--body") + 1]
+            state["posted"].append(body)
+            state["comments"].append({"body": body})
+            return ""
+        if command[1] == "issue" and command[2] == "close":
+            state["closed"].append(command)
+            return ""
+        raise AssertionError(command)
+
+    return fake_run, state
+
+
+def _child(number, *, pr=False):
+    child = {"number": number, "repository": {"full_name": "o/r"},
+             "state": "closed"}
+    if pr:
+        child["pull_request"] = {}
+    return child
+
+
+DELIVERED_EPIC_CHILDREN = [_child(21)]
+DELIVERED_EPIC_ITEMS = {21: {"state": "closed",
+                             "labels": [{"name": "ai-merged"}]}}
+TODAYS_ENGLISH_AUDIT = (
+    "Epic reconciliation: complete; children: Issue #21 closed; "
+    "no open native blockers/dependencies."
+)
+
+
+def test_reconcile_open_epics_keeps_todays_sentence_for_a_delivered_epic(monkeypatch, caplog):
+    """Acceptance 1: every child delivered by Orbi keeps the pre-#2356
+    sentence byte for byte and the completed close."""
+    caplog.set_level("INFO")
+    fake_run, state = _sweep_github(DELIVERED_EPIC_CHILDREN, DELIVERED_EPIC_ITEMS)
     monkeypatch.setattr(seam, "run_command", fake_run)
-    monkeypatch.setattr(seam, "verify_epic_complete", lambda repo, item: ["Issue #21 closed"])
-    comments = []
-    monkeypatch.setattr(seam, "issue_comments", lambda number, repo: comments)
-    monkeypatch.setattr(seam, "comment_issue", lambda number, *, repo, body: comments.append({"body": body}))
     result = claim.reconcile_open_epics("o/r", "abc12345", "en")
-    assert result == ["Epic #20 closed after verification (Issue #21 closed)"]
-    assert len(comments) == 1 and "run_id=abc12345" in comments[0]["body"]
-    assert ["gh", "issue", "close", "20", "--repo", "o/r"] in commands
+    assert result == ["Epic #20 closed after verification (#21 delivered)"]
+    assert len(state["posted"]) == 1
+    assert TODAYS_ENGLISH_AUDIT in state["posted"][0]
+    assert "run_id=abc12345" in state["posted"][0]
+    assert state["closed"] == [["gh", "issue", "close", "20", "--repo", "o/r"]]
     # The same audit is idempotent on the next tick.
-    commands.clear()
     claim.reconcile_open_epics("o/r", "def67890", "en")
-    assert len(comments) == 1
+    assert len(state["posted"]) == 1
     assert "epic_closed issue=20 repo=o/r" in caplog.text
+    # The fake answers the documented read/write families and nothing else.
+    with pytest.raises(AssertionError):
+        fake_run(["gh", "issue", "view", "20", "--repo", "o/r",
+                  "--json", "title"])
+    with pytest.raises(AssertionError):
+        fake_run(["gh", "pr", "list"])
+
+
+def test_reconcile_open_epics_tells_a_person_closed_epic_from_a_delivery(monkeypatch):
+    """Acceptance 2: one child closed while blocked and one a person closed
+    as not planned never read as "Orbi finished it", and the Epic is closed
+    as not planned."""
+    children = [_child(21), _child(22)]
+    items = {21: {"state": "closed", "labels": [{"name": "ai-blocked"}]},
+             22: {"state": "closed", "state_reason": "not_planned"}}
+    fake_run, state = _sweep_github(children, items)
+    monkeypatch.setattr(seam, "run_command", fake_run)
+    result = claim.reconcile_open_epics("o/r", "abc12345", "en")
+    assert result == [
+        "Epic #20 closed after verification (#21 blocked; #22 not_planned)",
+    ]
+    assert len(state["posted"]) == 1
+    body = state["posted"][0]
+    assert "complete" not in body
+    assert "all children are closed, but not all of them were delivered" in body
+    assert "Issue #21 closed while blocked (ai-blocked)" in body
+    assert "Issue #22 closed by a person as not planned" in body
+    assert state["closed"] == [[
+        "gh", "issue", "close", "20", "--repo", "o/r",
+        "--reason", "not planned",
+    ]]
+
+
+def test_reconcile_open_epics_names_a_partly_delivered_epic_and_closes_completed(monkeypatch):
+    """Acceptance 3: a delivered child beside a person-closed one is listed,
+    the sentence does not claim completion, and the Epic closes completed."""
+    children = [_child(31, pr=True), _child(22)]
+    items = {31: {"pull_request": {}, "state": "closed"},
+             22: {"state": "closed", "state_reason": "not_planned"}}
+    fake_run, state = _sweep_github(children, items)
+    monkeypatch.setattr(seam, "run_command", fake_run)
+    claim.reconcile_open_epics("o/r", "abc12345", "en")
+    body = state["posted"][0]
+    assert "complete" not in body
+    assert "PR #31 merged by Orbi" in body
+    assert "Issue #22 closed by a person as not planned" in body
+    assert state["closed"] == [["gh", "issue", "close", "20", "--repo", "o/r"]]
 
 
 def test_reconcile_open_epics_posts_the_audit_in_the_bound_language(monkeypatch):
-    epic = {"number": 20}
-
-    def fake_run(command, **kwargs):
-        if command[1:3] == ["issue", "list"]:
-            return json.dumps([epic])
-        return ""
-
-    comments = []
+    fake_run, state = _sweep_github(DELIVERED_EPIC_CHILDREN, DELIVERED_EPIC_ITEMS)
     monkeypatch.setattr(seam, "run_command", fake_run)
-    monkeypatch.setattr(seam, "verify_epic_complete",
-                        lambda repo, item: ["Issue #21 closed"])
-    monkeypatch.setattr(seam, "issue_comments", lambda number, repo: comments)
-    monkeypatch.setattr(seam, "comment_issue",
-                        lambda number, *, repo, body: comments.append({"body": body}))
     claim.reconcile_open_epics("o/r", "abc12345", "zh")
-    assert len(comments) == 1
-    assert "Epic 对账：已完成" in comments[0]["body"]
-    assert "Issue #21 closed" in comments[0]["body"]
-    assert "run_id=abc12345" in comments[0]["body"]
+    assert len(state["posted"]) == 1
+    assert "Epic 对账：已完成" in state["posted"][0]
+    assert "Issue #21 closed" in state["posted"][0]
+    assert "run_id=abc12345" in state["posted"][0]
 
 
 def test_reconcile_open_epics_keeps_one_audit_across_languages(monkeypatch):
-    """A close that failed after today's English audit landed posts no
-    second comment when the next sweep renders Chinese; two Chinese
-    sweeps after a failed close post one comment in total."""
-    epic = {"number": 20}
-    commands = []
-
-    def fake_run(command, **kwargs):
-        commands.append(command)
-        if command[1:3] == ["issue", "list"]:
-            return json.dumps([epic])
-        return ""
-
-    english = ("Epic reconciliation: complete; children: Issue #21 closed; "
-               "no open native blockers/dependencies.")
-    comments = [{"body": f"<!-- orbi:run=old -->\n{english}\nrun_id=old"}]
+    """Acceptance 5: a close that failed after today's English audit landed
+    posts no second comment when the next sweep renders Chinese — for the
+    person-closed sentence too."""
+    children = [_child(21), _child(22)]
+    items = {21: {"state": "closed", "labels": [{"name": "ai-blocked"}]},
+             22: {"state": "closed", "state_reason": "not_planned"}}
+    english = epic_reconciliation.epic_audit(
+        [epic_reconciliation.EpicChild("issue", 21, "blocked"),
+         epic_reconciliation.EpicChild("issue", 22, "not_planned")], None, "en",
+    )
+    fake_run, state = _sweep_github(
+        children, items,
+        history=[{"body": f"<!-- orbi:run=old -->\n{english}\nrun_id=old"}],
+    )
     monkeypatch.setattr(seam, "run_command", fake_run)
-    monkeypatch.setattr(seam, "verify_epic_complete",
-                        lambda repo, item: ["Issue #21 closed"])
-    monkeypatch.setattr(seam, "issue_comments", lambda number, repo: comments)
-    monkeypatch.setattr(seam, "comment_issue",
-                        lambda number, *, repo, body: comments.append({"body": body}))
-    claim.reconcile_open_epics("o/r", "abc12345", "zh")
+    result = claim.reconcile_open_epics("o/r", "abc12345", "zh")
     claim.reconcile_open_epics("o/r", "def67890", "zh")
-    assert len(comments) == 1
-    assert ["gh", "issue", "close", "20", "--repo", "o/r"] in commands
+    assert len(state["posted"]) == 0
+    assert state["closed"] == [
+        ["gh", "issue", "close", "20", "--repo", "o/r",
+         "--reason", "not planned"],
+        ["gh", "issue", "close", "20", "--repo", "o/r",
+         "--reason", "not planned"],
+    ]
+    assert result == [
+        "Epic #20 closed after verification (#21 blocked; #22 not_planned)",
+    ]
 
 
 def test_reconcile_open_epics_keeps_incomplete_without_comment(monkeypatch, caplog):
     caplog.set_level("INFO")
-    epic = {"number": 20}
-    monkeypatch.setattr(seam, "run_command", lambda command, **kwargs: json.dumps([epic]))
-    monkeypatch.setattr(seam, "verify_epic_complete", lambda repo, item: (_ for _ in ()).throw(ValueError("open blockers: #3")))
-    comments = []
-    monkeypatch.setattr(seam, "comment_issue", lambda *args, **kwargs: comments.append(True))
-    claim.reconcile_open_epics("o/r", "abc12345", "en")
-    assert not comments
+    epic = dict(EPIC_DETAILS, blockedBy={"nodes": [{"number": 3, "state": "OPEN"}]})
+    fake_run, state = _sweep_github(
+        DELIVERED_EPIC_CHILDREN, DELIVERED_EPIC_ITEMS, epic=epic,
+    )
+    monkeypatch.setattr(seam, "run_command", fake_run)
+    result = claim.reconcile_open_epics("o/r", "abc12345", "en")
+    assert result == ["Epic #20 kept open: open blockers: #3"]
+    assert state["posted"] == [] and state["closed"] == []
     assert "epic_kept_open issue=20 repo=o/r reason=\"open blockers: #3\"" in caplog.text
 
 
