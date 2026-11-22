@@ -9,6 +9,7 @@ from __future__ import annotations
 import functools
 import json
 import logging
+import urllib.error
 from pathlib import Path
 
 import pytest
@@ -89,6 +90,46 @@ def test_an_attachments_section_image_is_downloaded_with_no_token(
     assert attached.files[0].source == "shot.png"
     assert downloads.urls() == [address]
     assert gh.markdown_calls == []
+
+
+def test_an_attachments_section_image_is_requested_as_orbi(
+    gh, downloads, worktree,
+):
+    """Acceptance 1: orbi.build answers urllib's default UA with HTTP 403.
+
+    Measured 2026-11-23 on beta.orbi.build: the same attachment address
+    answers 200 to `User-Agent: orbi` and 403 to `Python-urllib/3.x`, so
+    the download names this project instead of urllib.
+    """
+    address = "https://beta.orbi.build/api/attachments/key"
+    body = drafted(BODY, section=f"## Attachments\n\n![shot.png]({address})")
+    issue_images.for_session(
+        {"number": 1, "body": body}, config=image_input_config(), repo=REPO,
+        worktree=worktree,
+    )
+    headers = downloads.requests[0].headers
+    assert headers.get("User-agent") == "orbi"
+    assert not any("Python-urllib" in value for value in headers.values())
+
+
+def test_a_403_on_the_section_image_still_stops_the_delivery(
+    gh, downloads, worktree, caplog,
+):
+    """Acceptance 2: an address that still fails stops, exactly as today."""
+    address = "https://orbi.build/api/attachments/key"
+    downloads.failures[address] = urllib.error.HTTPError(
+        address, 403, "Forbidden", None, None,
+    )
+    body = drafted(BODY, section=f"## Attachments\n\n![shot.png]({address})")
+    with caplog.at_level(logging.WARNING), pytest.raises(
+        issue_images.Unreadable, match="shot.png",
+    ) as raised:
+        issue_images.for_session(
+            {"number": 1, "body": body}, config=image_input_config(),
+            repo=REPO, worktree=worktree,
+        )
+    assert raised.value.failure_record.reason_code == "attachment_unavailable"
+    assert "HTTPError" in caplog.text
 
 
 def test_a_native_image_in_the_body_is_read_through_the_markdown_render(

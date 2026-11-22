@@ -9,6 +9,7 @@ from __future__ import annotations
 import contextlib
 import json
 import subprocess
+import urllib.request
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -418,10 +419,18 @@ class FakeDownloads:
         self.failures: dict[str, Exception] = {}
 
     def urlopen(self, url, **kwargs):
-        self.requests.append(SimpleNamespace(url=url, kwargs=kwargs))
-        if url in self.failures:
-            raise self.failures[url]
-        return FakeResponse(self.answers.get(url, PNG_BYTES))
+        # A Request carries the url AND the headers the process really sends;
+        # a plain address is the no-header call (Issue #2377).
+        request = url if isinstance(url, urllib.request.Request) else None
+        address = request.full_url if request is not None else url
+        self.requests.append(SimpleNamespace(
+            url=address,
+            headers=dict(request.headers) if request is not None else {},
+            kwargs=kwargs,
+        ))
+        if address in self.failures:
+            raise self.failures[address]
+        return FakeResponse(self.answers.get(address, PNG_BYTES))
 
     def urls(self) -> list[str]:
         """Every URL asked for, in order."""
@@ -430,8 +439,6 @@ class FakeDownloads:
 
 def install_downloads(monkeypatch) -> FakeDownloads:
     """Answer every image download; nothing leaves the process."""
-    import urllib.request
-
     fake = FakeDownloads()
     monkeypatch.setattr(urllib.request, "urlopen", fake.urlopen)
     return fake
