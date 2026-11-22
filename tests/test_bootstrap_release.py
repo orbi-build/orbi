@@ -63,6 +63,7 @@ from tests.fakes.bootstrap_release import (
     mock_release_range_gh,
 )
 from tests.fakes.bootstrap_delivery import _git_output, make_local_remote_pair
+from tests.test_bootstrap_runner_reconcile import _sweep_github
 from tests.test_progress_wiring import make_fake_gh
 
 
@@ -4261,7 +4262,8 @@ def test_reconcile_release_epics_closes_verified_epic_with_audit(monkeypatch):
         if without_include(command) == ["gh", "api", "repos/o/r/issues/20/sub_issues?per_page=100", "--paginate", "--slurp"]:
             return json.dumps([[{"number": 21, "repository": {"full_name": "o/r"}, "state": "closed"}]])
         if without_include(command) == ["gh", "api", "repos/o/r/issues/21"]:
-            return json.dumps({"number": 21, "state": "closed"})
+            return json.dumps({"number": 21, "state": "closed",
+                                "labels": [{"name": "ai-merged"}]})
         if command == ["gh", "issue", "view", "20", "--repo", "o/r", "--json", "comments"]:
             return json.dumps({"comments": []})
         if command == ["gh", "issue", "close", "20", "--repo", "o/r"]:
@@ -4279,7 +4281,7 @@ def test_reconcile_release_epics_closes_verified_epic_with_audit(monkeypatch):
     result = release_closeout.reconcile_release_epics(
         "o/r", 4, "v0.4.0", "abc12345", "en",
     )
-    assert result == ["Epic #20 closed after verification (Issue #21 closed)"]
+    assert result == ["Epic #20 closed after verification (#21 delivered)"]
     assert ["gh", "issue", "close", "20", "--repo", "o/r"] in commands
     with pytest.raises(AssertionError):
         fake_run(["unexpected"])
@@ -4297,7 +4299,8 @@ def test_reconcile_release_epics_posts_the_audit_in_the_bound_language(monkeypat
         if "sub_issues" in command[2]:
             return json.dumps([[{"number": 21, "repository": {"full_name": "o/r"}, "state": "closed"}]])
         if without_include(command) == ["gh", "api", "repos/o/r/issues/21"]:
-            return json.dumps({"number": 21, "state": "closed"})
+            return json.dumps({"number": 21, "state": "closed",
+                                "labels": [{"name": "ai-merged"}]})
         if command == ["gh", "issue", "view", "20", "--repo", "o/r", "--json", "comments"]:
             return json.dumps({"comments": []})
         if command == ["gh", "issue", "close", "20", "--repo", "o/r"]:
@@ -4509,7 +4512,8 @@ def test_close_release_milestone_binds_the_language_to_the_epic_audit(monkeypatc
                                  "repository": {"full_name": "o/r"},
                                  "state": "closed"}]])
         if without_include(command) == ["gh", "api", "repos/o/r/issues/21"]:
-            return json.dumps({"number": 21, "state": "closed"})
+            return json.dumps({"number": 21, "state": "closed",
+                                "labels": [{"name": "ai-merged"}]})
         if command == ["gh", "issue", "view", "20", "--repo", "o/r",
                        "--json", "comments"]:
             return json.dumps({"comments": []})
@@ -4553,7 +4557,8 @@ def test_reconcile_release_epics_keeps_blocked_and_avoids_duplicate_audit(monkey
         if without_include(command) == ["gh", "api", "repos/o/r/issues/34/sub_issues?per_page=100", "--paginate", "--slurp"]:
             return json.dumps([[{"number": 35, "repository": {"full_name": "o/r"}, "state": "closed"}]])
         if without_include(command) == ["gh", "api", "repos/o/r/issues/35"]:
-            return json.dumps({"number": 35, "state": "closed"})
+            return json.dumps({"number": 35, "state": "closed",
+                               "labels": [{"name": "ai-merged"}]})
         if command == ["gh", "issue", "view", "30", "--repo", "o/r",
                        "--json", "number,body,labels,blockedBy"]:
             return json.dumps({"number": 30, "body": "## Children\n- #31",
@@ -4564,7 +4569,8 @@ def test_reconcile_release_epics_keeps_blocked_and_avoids_duplicate_audit(monkey
         if without_include(command) == ["gh", "api", "repos/o/r/issues/30/sub_issues?per_page=100", "--paginate", "--slurp"]:
             return json.dumps([[{"number": 31, "repository": {"full_name": "o/r"}, "state": "closed"}]])
         if without_include(command) == ["gh", "api", "repos/o/r/issues/31"]:
-            return json.dumps({"number": 31, "state": "closed"})
+            return json.dumps({"number": 31, "state": "closed",
+                               "labels": [{"name": "ai-merged"}]})
         if command[:4] == ["gh", "issue", "view", "34"]:
             return json.dumps({"comments": [{"body": audit}]})
         if tuple(command) in {
@@ -4574,17 +4580,124 @@ def test_reconcile_release_epics_keeps_blocked_and_avoids_duplicate_audit(monkey
             return ""
         raise AssertionError(command)
     monkeypatch.setattr(seam, "run_command", fake_run)
-    monkeypatch.setattr(seam, "comment_issue", lambda *args, **kwargs: calls.append(["comment"]))
+    monkeypatch.setattr(seam, "comment_issue",
+                        lambda number, **kwargs: calls.append(["comment", number]))
     result = release_closeout.reconcile_release_epics(
         "o/r", 4, "v0.4.0", "abc12345", "zh",
     )
     assert any("Epic #30 closed after verification" in item for item in result)
     assert any("open blockers: #9" in item for item in result)
+    # Epic #34 already carries its audit: a failed close posts no second one.
+    assert [call for call in calls if call[0] == "comment"] == [["comment", 30]]
     assert ["gh", "issue", "close", "34", "--repo", "o/r"] in calls
     assert ["gh", "issue", "close", "30", "--repo", "o/r"] in calls
     assert ["gh", "issue", "close", "32", "--repo", "o/r"] not in calls
     with pytest.raises(AssertionError):
         fake_run(["unexpected"])
+
+
+def _release_epic_sweep_fake(children, items, comments=None):
+    """A `gh` boundary fake for the release Epic sweep (one Epic #20).
+
+    Answers the Milestone read, the native sub-issues and each child's live
+    state, and records the comment/close commands instead of executing
+    them — the same shape the per-tick sweep test uses.
+    """
+    state = {"posted": [], "closed": [], "comments": list(comments or [])}
+
+    def fake_run(command, **kwargs):
+        if without_include(command) == [
+            "gh", "api",
+            "repos/o/r/issues?milestone=4&state=open&per_page=100",
+            "--paginate", "--slurp",
+        ]:
+            return json.dumps([[{
+                "number": 20, "labels": [{"name": "ai-epic"}],
+                "blockedBy": {"nodes": []},
+            }]])
+        if command[1] == "api":
+            target = command[2]
+            if target == "repos/o/r/issues/20/sub_issues?per_page=100":
+                return json.dumps([children])
+            return json.dumps(items[int(target.rsplit("/", 1)[1])])
+        if command == ["gh", "issue", "view", "20", "--repo", "o/r",
+                       "--json", "comments"]:
+            return json.dumps({"comments": state["comments"]})
+        if command[1] == "issue" and command[2] == "comment":
+            body = command[command.index("--body") + 1]
+            state["posted"].append(body)
+            state["comments"].append({"body": body})
+            return ""
+        if command[1] == "issue" and command[2] == "close":
+            state["closed"].append(command)
+            return ""
+        raise AssertionError(command)
+
+    return fake_run, state
+
+
+PERSON_CLOSED_EPIC_CHILDREN = [
+    {"number": 21, "repository": {"full_name": "o/r"}, "state": "closed"},
+    {"number": 22, "repository": {"full_name": "o/r"}, "state": "closed"},
+]
+PERSON_CLOSED_EPIC_ITEMS = {
+    21: {"state": "closed", "labels": [{"name": "ai-blocked"}]},
+    22: {"state": "closed", "state_reason": "not_planned"},
+}
+
+
+def test_reconcile_release_epics_tells_a_person_closed_epic_from_a_delivery(monkeypatch):
+    """Acceptance 2: the release sweep reads the same child outcomes and
+    closes the Epic as not planned instead of completed."""
+    fake_run, state = _release_epic_sweep_fake(
+        PERSON_CLOSED_EPIC_CHILDREN, PERSON_CLOSED_EPIC_ITEMS,
+    )
+    monkeypatch.setattr(seam, "run_command", fake_run)
+    result = release_closeout.reconcile_release_epics(
+        "o/r", 4, "v0.4.0", "abc12345", "zh",
+    )
+    assert result == [
+        "Epic #20 closed after verification (#21 blocked; #22 not_planned)",
+    ]
+    assert len(state["posted"]) == 1
+    body = state["posted"][0]
+    assert "已完成" not in body
+    assert "Epic 对账（v0.4.0）：所有子项均已关闭" in body
+    assert "Issue #21 在 ai-blocked 状态下关闭" in body
+    assert "Issue #22 由人关闭，标记为未计划" in body
+    assert state["closed"] == [[
+        "gh", "issue", "close", "20", "--repo", "o/r",
+        "--reason", "not planned",
+    ]]
+    # The fake answers the documented families and nothing else.
+    with pytest.raises(AssertionError):
+        fake_run(["gh", "pr", "list"])
+
+
+def test_both_epic_sweeps_report_the_same_comment_and_close_reason(monkeypatch):
+    """Acceptance 5: the per-tick sweep and the release sweep render ONE
+    sentence (only the version fragment differs) and ONE close reason for
+    the same children."""
+    tick_fake, tick_state = _sweep_github(
+        PERSON_CLOSED_EPIC_CHILDREN, PERSON_CLOSED_EPIC_ITEMS,
+    )
+    monkeypatch.setattr(seam, "run_command", tick_fake)
+    claim.reconcile_open_epics("o/r", "abc12345", "en")
+    release_fake, release_state = _release_epic_sweep_fake(
+        PERSON_CLOSED_EPIC_CHILDREN, PERSON_CLOSED_EPIC_ITEMS,
+    )
+    monkeypatch.setattr(seam, "run_command", release_fake)
+    release_closeout.reconcile_release_epics(
+        "o/r", 4, "v0.4.0", "abc12345", "en",
+    )
+    tick_body = tick_state["posted"][0]
+    assert release_state["posted"][0] == tick_body.replace(
+        "Epic reconciliation: ", "Epic reconciliation for v0.4.0: ",
+    )
+    assert tick_state["closed"] == release_state["closed"] == [[
+        "gh", "issue", "close", "20", "--repo", "o/r",
+        "--reason", "not planned",
+    ]]
 
 
 def test_git_out_helper_fails_fast_on_nonzero_exit(tmp_path):

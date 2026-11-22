@@ -25,6 +25,10 @@ from orbi import language
 from orbi.blocked_comment import post_blocked_comment
 from orbi.delivery_labels import EVENT_MERGED
 from orbi import delivery_labels
+from orbi.epic_reconciliation import (
+    epic_audit, epic_audit_posted, epic_close_reason,
+    epic_closed_evidence, verify_epic_complete,
+)
 from orbi.github import (
     apply_label_patch,
     close_issue,
@@ -33,16 +37,12 @@ from orbi.github import (
     issue_comments,
     list_milestones,
     milestone_open_issues,
-    verify_epic_complete,
 )
 from orbi.gitops import acquire_base_sync_lock, is_ancestor
 from orbi.journal import LOGGER, run_command, run_git_network_command
 from orbi.progress import run_marker
 from orbi.release_comments import (
-    _epic_audit,
-    epic_audit_posted,
-    release_failure_comment_body,
-    release_success_comment_body,
+    release_failure_comment_body, release_success_comment_body,
 )
 from orbi.release_git import (
     release_create,
@@ -448,15 +448,15 @@ def reconcile_release_epics(repo: str, milestone_number: int, version: str,
             continue
         number = listed_epic.get("number")
         try:
-            child_evidence = verify_epic_complete(repo, listed_epic)
+            children = verify_epic_complete(repo, listed_epic)
         except (ValueError, json.JSONDecodeError) as exc:
             evidence.append(f"Epic #{number} kept open: {exc}")
             continue
-        audit = _epic_audit(child_evidence, version, language_code)
+        audit = epic_audit(children, version, language_code)
         comments = issue_comments(int(number), repo=repo)
-        if not epic_audit_posted(comments, child_evidence, version):
+        if not epic_audit_posted(comments, children, version):
             comment_issue(int(number), repo=repo,
                          body=f"{run_marker(run_id)}\n{audit}\nrun_id={run_id}")
-        close_issue(int(number), repo=repo)
-        evidence.append(f"Epic #{number} closed after verification ({'; '.join(child_evidence)})")
+        close_issue(int(number), repo=repo, reason=epic_close_reason(children))
+        evidence.append(epic_closed_evidence(number, children))
     return evidence

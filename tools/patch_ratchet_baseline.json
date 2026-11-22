@@ -1,7 +1,7 @@
 {
-  "boundary_total": 1152,
-  "command_shape_asserts": 437,
-  "internal_total": 1622,
+  "boundary_total": 1158,
+  "command_shape_asserts": 436,
+  "internal_total": 1611,
   "monkeypatch_setattr_runner": 104,
   "monkeypatch_setattr_runner_string": 3,
   "per_target": {
@@ -45,7 +45,7 @@
     "runner_source": 6,
     "scheduler": 17,
     "script": 6,
-    "seam": 1765,
+    "seam": 1760,
     "session_command": 3,
     "setup_checks": 5,
     "setup_config": 2,

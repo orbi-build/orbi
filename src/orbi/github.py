@@ -439,9 +439,18 @@ def close_milestone(repo: str, number: int) -> None:
     ], timeout=30)
 
 
-def close_issue(number: int, *, repo: str) -> None:
-    """Close one Issue by number (the reconciliation/cleanup step)."""
-    run_command(["gh", "issue", "close", str(number), "--repo", repo])
+def close_issue(number: int, *, repo: str,
+               reason: str | None = None) -> None:
+    """Close one Issue by number (the reconciliation/cleanup step).
+
+    `reason` is `gh issue close --reason`'s documented value set
+    (`completed`, `not planned`, `duplicate` — verified with
+    `gh issue close --help`); `None` keeps GitHub's own default, completed.
+    """
+    command = ["gh", "issue", "close", str(number), "--repo", repo]
+    if reason is not None:
+        command += ["--reason", reason]
+    run_command(command)
 
 
 def issue_view(number: int, fields: str, *, repo: str | None = None,
@@ -572,82 +581,6 @@ def open_blocker_numbers(issue: dict) -> list[int]:
             continue
         numbers.append(number)
     return numbers
-
-
-def verify_epic_complete(repo: str, listed_epic: dict) -> list[str]:
-    """Verify native sub-issues and blockers; otherwise fail closed.
-
-    Live API shape (measured 2026-09-09 against #305):
-    ``GET /repos/{owner}/{repo}/issues/{number}/sub_issues`` returns a JSON
-    array (``[]`` for no children), paginates with the standard ``--paginate``
-    contract, and Issue items include ``repository.full_name`` and no
-    ``pull_request`` key.  The endpoint is paginated with ``per_page=100``;
-    a cross-repository item is identified by its ``repository.full_name`` and
-    is rejected.  A PR-shaped item is identified by a non-null
-    ``pull_request`` field and is checked through the PR endpoint.
-    """
-    epic = epic_issue_with_blockers(repo, listed_epic)
-    number = epic.get("number")
-    if not isinstance(number, int) or isinstance(number, bool):
-        raise ValueError("Epic number is missing or invalid")
-    blockers = epic.get("blockedBy")
-    # Live API check: `gh issue view --json blockedBy` returns
-    # {"blockedBy":{"nodes":[],"totalCount":0}} for zero dependencies.
-    # Missing/malformed blockedBy is not equivalent to that empty set.
-    if not isinstance(blockers, dict) or not isinstance(blockers.get("nodes"), list):
-        raise ValueError("native blocker/dependency state is unavailable")
-    for node in blockers["nodes"]:
-        if (not isinstance(node, dict)
-                or not isinstance(node.get("number"), int)
-                or isinstance(node.get("number"), bool)
-                or ("state" in node and node["state"] not in {"OPEN", "CLOSED"})):
-            raise ValueError("native blocker/dependency state is malformed")
-    open_blockers = open_blocker_numbers(epic)
-    if open_blockers:
-        raise ValueError("open blockers: " + ", ".join(f"#{n}" for n in open_blockers))
-    raw = run_gh_read_command([
-        "gh", "api", f"repos/{repo}/issues/{number}/sub_issues?per_page=100",
-        "--paginate", "--slurp",
-    ])
-    children = parse_paginated_issue_array(raw)
-    if not children:
-        raise ValueError("Epic child scope is missing or empty")
-    child_evidence: list[str] = []
-    for child in children:
-        child_number = child.get("number")
-        if not isinstance(child_number, int) or isinstance(child_number, bool):
-            raise ValueError("Epic child scope contains an invalid number")
-        child_repo = child.get("repository")
-        if not isinstance(child_repo, dict) or not isinstance(child_repo.get("full_name"), str):
-            raise ValueError(f"child #{child_number} repository state is malformed")
-        if child_repo["full_name"].lower() != repo.lower():
-            raise ValueError(f"cross-repository child #{child_number}")
-        if child.get("state") not in {"open", "closed"}:
-            raise ValueError(f"child #{child_number} state is malformed")
-        kind = "pr" if child.get("pull_request") is not None else "issue"
-        child_evidence.append(_epic_child_evidence(repo, kind, child_number))
-    return child_evidence
-
-
-def _epic_child_evidence(repo: str, kind: str, number: int) -> str:
-    """Verify one child against GitHub's live Issue/PR state."""
-    raw = run_gh_read_command(["gh", "api", f"repos/{repo}/issues/{number}"])
-    item = json.loads(raw)
-    if not isinstance(item, dict):
-        raise ValueError(f"child #{number} response is not an object")
-    is_pr = "pull_request" in item
-    if kind == "issue" and is_pr:
-        raise ValueError(f"child #{number} declared as Issue but is a PR")
-    if kind == "pr" and not is_pr:
-        raise ValueError(f"child #{number} declared as PR but is an Issue")
-    if is_pr:
-        pr = json.loads(run_gh_read_command(["gh", "api", f"repos/{repo}/pulls/{number}"]))
-        if not isinstance(pr, dict) or pr.get("merged") is not True:
-            raise ValueError(f"child PR #{number} is not merged")
-        return f"PR #{number} merged"
-    if item.get("state") != "closed":
-        raise ValueError(f"child Issue #{number} is not closed")
-    return f"Issue #{number} closed"
 
 
 # The repository permissions that mean "this author can write here"
