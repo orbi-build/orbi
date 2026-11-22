@@ -37,6 +37,13 @@ FAILURE_MESSAGES: dict[str, tuple[str, str]] = {
         "the run produced no commit and this Issue needs a change",
         "本次运行没有产生提交，这个 Issue 需要修改",
     ),
+    # Issue #2358: the empty-tree stop names what happened instead of asking
+    # for a ticket change: the commits changed no file, and the Issue may
+    # already be satisfied — its action below gives the reader both paths.
+    "failure.disposition_no_file_change": (
+        "the run changed no file, so nothing was delivered",
+        "本次运行没有改动任何文件，因此没有交付内容",
+    ),
     "failure.disposition_ticket_change": (
         "this Issue needs a change before Orbi can deliver it",
         "这个 Issue 需要修改，Orbi 才能继续交付",
@@ -113,6 +120,18 @@ FAILURE_MESSAGES: dict[str, tuple[str, str]] = {
         "请把答案或缺少的信息写进 Issue 正文，然后去掉 `ai-blocked`、"
         "重新加上 `ai-ready`（你们仓库的排队标签）——Orbi 会按更新后的"
         "正文重新交付这个 Issue。",
+    ),
+    "failure.terminal_no_file_change": (
+        "If the session's explanation in the failure evidence below shows "
+        "this Issue is already satisfied, close the Issue — nothing else is "
+        "needed. If something is still missing, write it into the Issue "
+        "body, then replace `ai-blocked` with `ai-ready` (your repository's "
+        "queue label) — Orbi delivers this Issue again from the updated "
+        "body.",
+        "如果下面失败证据里的会话说明表明这个 Issue 已经达成，请直接关闭它"
+        "——无需其他操作。如果还缺少信息，请写进 Issue 正文，然后去掉 "
+        "`ai-blocked`、重新加上 `ai-ready`（你们仓库的排队标签）——Orbi "
+        "会按更新后的正文重新交付这个 Issue。",
     ),
     "failure.terminal_check_credentials": (
         "Verify the GitHub/provider credential this run needed — it must be "

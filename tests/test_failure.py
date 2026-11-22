@@ -536,13 +536,53 @@ def test_the_twelve_retry_unsafe_codes_are_covered():
 def test_two_reasons_with_the_same_action_get_the_same_wording():
     """The wording reads the recorded action and retry_safe, not the reason
     code alone: two `fix_ticket` stops say the same thing."""
-    ticket_change = failure.stop_wording(record_of("no_file_change"), "en")
-    assert failure.stop_wording(record_of("tests_failed"), "en") == ticket_change
+    ticket_change = failure.stop_wording(record_of("tests_failed"), "en")
     assert failure.stop_wording(record_of("release_failed"), "en") == ticket_change
+    assert failure.stop_wording(record_of("base_ci_red"), "en") == ticket_change
     for code in ("review_budget_exhausted", "human_decision_required"):
         assert failure.stop_wording(record_of(code), "en")[0] == (
             failure.stop_wording(record_of("review_budget_exhausted"), "en")[0]
         )
+
+
+@pytest.mark.parametrize("language_code", ["en", "zh"])
+def test_a_no_file_change_stop_says_the_run_changed_no_file(language_code):
+    """Issue #2358: the empty-tree stop names what happened (the run changed
+    no file) and gives the TWO steps that fit it — close an already satisfied
+    Issue, or add the missing detail and re-queue. Never the generic
+    `fix_ticket` headline/action, which asks for a change nobody may need."""
+    headline, action = failure.stop_wording(
+        record_of("no_file_change"), language_code,
+    )
+    assert language.text(
+        language_code, "failure.disposition_no_file_change") in headline
+    assert language.text(
+        language_code, "failure.disposition_ticket_change") not in headline
+    assert action == language.text(
+        language_code, "failure.terminal_no_file_change")
+    assert language.text(
+        language_code, "failure.terminal_ticket_change") not in action
+    assert "`ai-blocked`" in action and "`ai-ready`" in action
+    if language_code == "en":
+        assert "changed no file" in headline
+        assert "close the Issue" in action
+        assert "already satisfied" in action
+        assert "still missing" in action
+        assert "the Issue body" in action
+
+
+def test_a_no_file_change_stop_keeps_the_no_commit_wording_unchanged():
+    """Issue #2358 acceptance 3: the no-commit stop and the other
+    `fix_ticket` codes render exactly as before."""
+    no_commit = failure.stop_wording(record_of("no_commit_delivered"), "en")
+    assert no_commit == (
+        language.text(
+            "en", "failure.headline_blocked",
+            disposition=language.text("en", "failure.disposition_no_commit"),
+        ),
+        language.text("en", "failure.terminal_ticket_change"),
+    )
+    assert failure.stop_wording(record_of("no_file_change"), "en") != no_commit
 
 
 def test_a_no_commit_stop_says_the_run_produced_no_commit():
