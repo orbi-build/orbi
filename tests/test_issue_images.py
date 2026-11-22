@@ -14,6 +14,7 @@ from pathlib import Path
 import pytest
 
 import orbi.attachments as attachments
+import orbi.clarify_proposal as clarify_proposal
 import orbi.failure as failure
 import orbi.failure_report as failure_report
 import orbi.language as language
@@ -21,6 +22,7 @@ import orbi.issue_images as issue_images
 import orbi.model_catalog as model_catalog
 import orbi.pi_session as pi_session
 import orbi.draft_marker as draft_marker
+import orbi.split_apply as split_apply
 from orbi.config import RunnerConfig
 from orbi.delivery_scene import RunContext
 
@@ -158,6 +160,44 @@ def test_a_body_without_a_marker_still_offers_its_images(
     )
     assert len(attached.files) == 1
     assert gh.markdown_calls == [NATIVE]
+
+
+def test_a_split_child_receives_the_parents_attachments(
+    gh, downloads, worktree,
+):
+    """#2373 decision: the folded parent text delivers every parent image.
+
+    `/orbi split` folds the parent body — its draft marker and the
+    Attachments section below it — into each child. What the child's session
+    receives is therefore the parent's own section: the native image through
+    the signed render, the Cloud address downloaded, with the HTML block in
+    the body.
+    """
+    cloud = "https://cdn.example.test/shot.png"
+    parent_body = drafted(BODY, section=(
+        "## Attachments\n\n"
+        f"![native.png]({NATIVE})\n\n"
+        f"![cloud.png]({cloud})\n\n"
+        "<details><summary>spec.html</summary>\n\n"
+        "```html\n<h1>spec</h1>\n```\n\n"
+        "</details>"
+    ))
+    child = split_apply.render_child_body(
+        clarify_proposal.SuggestionItem(
+            text="A user can tag a note", acceptance="it works",
+        ),
+        parent=7, item_number=1, parent_body=parent_body,
+    )
+    assert "<details><summary>spec.html</summary>" in child
+    attached = issue_images.for_session(
+        {"number": 8, "body": child}, config=image_input_config(), repo=REPO,
+        worktree=worktree,
+    )
+    assert [file.source for file in attached.files] == [
+        "native.png", "cloud.png",
+    ]
+    assert gh.markdown_calls == [NATIVE]
+    assert downloads.urls() == [SIGNED, cloud]
 
 
 def test_a_downloaded_image_keeps_its_own_suffix(gh, downloads, worktree):

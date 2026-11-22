@@ -13,6 +13,7 @@ import subprocess
 
 import pytest
 
+import orbi.draft_marker as draft_marker
 import orbi.split_apply as split_apply
 import orbi.split_command as split_command
 from orbi import claim, clarify, journal, language, ticket_command
@@ -221,6 +222,51 @@ def test_a_body_without_the_child_shape_is_not_a_child(body):
 # --------------------------------------------------------------------------
 # acceptance 1: a two-item proposal becomes two linked, queued children
 # --------------------------------------------------------------------------
+
+def test_a_split_child_carries_the_parents_attachments_in_its_folded_text(
+    monkeypatch, tmp_path,
+):
+    """#2373 decision: the folded parent text is the child's attachment source.
+
+    The parent was created with an Attachments section below its draft
+    marker, so every child folds that marker and the section into its own
+    body and its delivery reads the images after the last marker. All of the
+    parent's attachments reach each child; per-item selection was deferred
+    (maintainer decision on #2373, 2026-11-22).
+    """
+    gh = _gh(monkeypatch)
+    stopped_ticket(gh)
+    native = "https://github.com/user-attachments/assets/native-1"
+    cloud = "https://cdn.example.test/shot.png"
+    gh.issues[PARENT]["body"] = draft_marker.with_marker(
+        "## Outcome\nUsers keep notes.", key="parent", position=1,
+        section=(
+            "## Attachments\n\n"
+            f"![native.png]({native})\n\n"
+            f"![cloud.png]({cloud})\n\n"
+            "<details><summary>spec.html</summary>\n\n"
+            "```html\n<h1>spec</h1>\n```\n\n"
+            "</details>"
+        ),
+    )
+    reply(gh)
+
+    assert tick(monkeypatch, tmp_path, gh) is not None
+
+    kids = children(gh)
+    assert len(kids) == 2
+    for kid in kids:
+        body = kid["body"]
+        assert f"![native.png]({native})" in body
+        assert f"![cloud.png]({cloud})" in body
+        assert "<details><summary>spec.html</summary>" in body
+        # The folded parent text is the ONE source: no second Attachments
+        # section is appended after the child marker.
+        assert body.count("## Attachments") == 1
+        assert body.index("## Attachments") < body.index(
+            f"<!-- orbi:split-child:{PARENT}:"
+        )
+
 
 def test_a_two_item_proposal_creates_two_linked_queued_children(
     monkeypatch, tmp_path,
