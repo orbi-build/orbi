@@ -6,7 +6,8 @@ a human decision") while the record beside it could carry the action
 take. `stop_wording` decides BOTH strings from ONE record, reading its
 `action_code` and `retry_safe` (plus the reason codes that already own a better
 sentence than their action family can give: an undetermined cause, a missing
-base branch and the provider balance refusal). The failure comment and the
+base branch, an empty-tree stop whose Issue may already be satisfied and the
+provider balance refusal). The failure comment and the
 terminal progress comment both read it, so the two cannot drift apart.
 
 It lives in its own module because `orbi.failure` is at its size-ratchet
