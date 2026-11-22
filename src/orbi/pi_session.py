@@ -58,6 +58,7 @@ from orbi.pi_process import (
     stream_pi,
 )
 from orbi.pi_stream_log import log_provider_config_loaded
+from orbi import attachments, issue_images, model_catalog
 from orbi.repo_config import validate_context_file
 from orbi.ticket_command import carries_run_marker
 
@@ -300,10 +301,9 @@ def prepare_pi_agent_dir(worktree: Path, config: config_domain.RunnerConfig,
     agent dir). Otherwise creates `<worktree>/.orbi/pi-agent/`
     (gitignored, per-run) and returns it:
 
-    - `models.json`: the user agent dir's providers merged with the
-      configured file's providers (the file wins on id collision) —
-      the user's existing providers keep working, the file adds or
-      overrides; the merged catalog is what Pi loads via
+    - `models.json`: the merged catalog `orbi.model_catalog` owns — the
+      user agent dir's providers plus the configured file's (the file
+      wins on id collision), which is what Pi loads via
       `PI_CODING_AGENT_DIR` (verified against real Pi 0.84.3);
     - `auth.json`: a SYMLINK to the user agent dir's file when it
       exists, so Pi's stored auth is unchanged; a regular file or
@@ -360,23 +360,9 @@ def prepare_pi_agent_dir(worktree: Path, config: config_domain.RunnerConfig,
     agent_dir = worktree / ".orbi" / "pi-agent"
     agent_dir.mkdir(parents=True, exist_ok=True)
     user_agent = Path(os.path.expanduser("~")) / ".pi" / "agent"
-    merged_providers: dict = {}
-    user_models = user_agent / "models.json"
-    if user_models.is_file():
-        try:
-            user_data = json.loads(user_models.read_text(encoding="utf-8"))
-        except json.JSONDecodeError as exc:
-            raise ValueError(
-                f"user agent dir models.json {user_models} is not valid "
-                f"JSON: {exc}"
-            ) from None
-        user_providers = user_data.get("providers") if isinstance(
-            user_data, dict
-        ) else None
-        if not isinstance(user_providers, dict):
-            user_providers = {}
-        merged_providers.update(user_providers)
-    merged_providers.update(providers_data["providers"])
+    # The merge lives in orbi.model_catalog, so the image-input question
+    # reads the same catalog this file writes (the file wins on a collision).
+    merged_providers = model_catalog.merged_providers(config)
     # The per-run catalog is written verbatim: an `apiKey` env-var
     # reference stays a reference, so no plaintext credential is ever
     # written into the worktree. Pi 1.0 interpolates `$NAME` /
@@ -535,10 +521,15 @@ def run_pi(issue: dict, ctx: RunContext, config: config_domain.RunnerConfig, *,
     system_prompt = language.with_model_instruction(
         render_prompt(template, prompt_values), language.of(config),
     )
+    # Issue #2364: the Issue's images, staged before the session starts.
+    images = issue_images.for_session_or_stop(
+        issue, config=config, repo=source_repo, worktree=worktree,
+    )
     context = (
         f"Issue #{issue['number']}: {issue['title']}\n\n"
         f"Issue body:\n{issue.get('body', '')}\n\n"
-        f"Worktree: {worktree}\n"
+        + (f"{images.naming()}\n" if images.files else "")
+        + f"Worktree: {worktree}\n"
     )
     context += "Complete the delivery process in the system prompt."
     if resume_context:
@@ -674,6 +665,8 @@ def run_pi(issue: dict, ctx: RunContext, config: config_domain.RunnerConfig, *,
         context_placeholder="<issue-context-redacted>",
         tools=True, extensions=True,
     )
+    # Issue #2364: the images go before the context file, which stays last.
+    command = attachments.with_arguments(command, images.arguments())
     # The provider file (baseUrl / api / apiKey / models)
     # reaches Pi through the materialized per-run agent dir, never
     # through the command line or the log (the redacted command keeps
@@ -750,6 +743,30 @@ def rendered_issue_body_sha256(prompt_review: Path, issue_body: str) -> str:
     return issue_body_sha256(issue_body)
 
 
+def _review_timeline(issue: int, pr: dict, config: config_domain.RunnerConfig,
+                     source_repo: str) -> str:
+    """The review session's ONE bounded trusted timeline (Issue #1626).
+
+    The Issue's comments plus the PR's feedback, oldest first. A failed
+    feedback read is logged and leaves the Issue's own timeline in place.
+    """
+    comments = issue_comments(issue, repo=source_repo)
+    try:
+        feedback = pr_comments(pr["number"], repo=source_repo)
+        feedback += pr_reviews(pr["number"], repo=source_repo)
+        feedback += pr_review_comments(pr["number"], repo=source_repo)
+        comments += normalize_pr_feedback(feedback)
+        comments.sort(key=lambda item: str(item.get("createdAt") or ""))
+    except Exception:
+        LOGGER.exception(
+            "pr_review_feedback_read_failed repo=%s pr=%s",
+            source_repo, pr["number"],
+        )
+    return trusted_issue_comments_block(
+        comments, config.issue_comments_limit, repo=source_repo,
+    )
+
+
 def run_review(ctx: RunContext, pr: dict, config: config_domain.RunnerConfig, round: int,
                timeout: int | None = None,
                progress: Callable[[dict], None] | None = None) -> ReviewSessionResult:
@@ -804,20 +821,8 @@ def run_review(ctx: RunContext, pr: dict, config: config_domain.RunnerConfig, ro
     # only: delivery state remains on the Issue and the current PR is the sole
     # PR source selected by this call.
     if "{{ISSUE_COMMENTS}}" in review_template:
-        comments = issue_comments(issue, repo=source_repo)
-        try:
-            feedback = pr_comments(pr["number"], repo=source_repo)
-            feedback += pr_reviews(pr["number"], repo=source_repo)
-            feedback += pr_review_comments(pr["number"], repo=source_repo)
-            comments += normalize_pr_feedback(feedback)
-            comments.sort(key=lambda item: str(item.get("createdAt") or ""))
-        except Exception:
-            LOGGER.exception(
-                "pr_review_feedback_read_failed repo=%s pr=%s",
-                source_repo, pr["number"],
-            )
-        review_values["ISSUE_COMMENTS"] = trusted_issue_comments_block(
-            comments, config.issue_comments_limit, repo=source_repo,
+        review_values["ISSUE_COMMENTS"] = _review_timeline(
+            issue, pr, config, source_repo,
         )
     # Substitute the body last so placeholder-shaped text in the body remains
     # verbatim instead of being recursively interpreted as a prompt variable.
@@ -829,6 +834,11 @@ def run_review(ctx: RunContext, pr: dict, config: config_domain.RunnerConfig, ro
         render_prompt(review_template, review_values),
         language.of(config),
     )
+    # Every review round reads the Issue's images again (Issue #2364).
+    images = issue_images.for_session_or_stop(
+        {"number": issue, "body": issue_body}, config=config,
+        repo=source_repo, worktree=worktree, review=True,
+    )
     context = (
         f"Independently review PR #{pr['number']} ({pr['url']}) of "
         f"{source_repo} against base {config.base_branch}@{pr['base_oid']} "
@@ -837,12 +847,14 @@ def run_review(ctx: RunContext, pr: dict, config: config_domain.RunnerConfig, ro
         "task branch) and end with a single REVIEW_VERDICT line carrying "
         "the head it covers."
     )
+    context = issue_images.with_context(context, images)
     command, log_command = build_pi_command(
         config, ROLE_REVIEW, REVIEW_EXCLUDED_SKILLS,
         worktree / ".pi-session", system_prompt, context,
         context_placeholder="<review-context-redacted>",
         tools=True, extensions=True,
     )
+    command = attachments.with_arguments(command, images.arguments())
     # The review session uses its role-specific provider selection,
     # falling back to the implementer selection when no override exists.
     agent_dir = prepare_pi_agent_dir(worktree, config, role=ROLE_REVIEW)

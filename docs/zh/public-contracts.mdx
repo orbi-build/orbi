@@ -30,7 +30,7 @@ description: "使用者可以依赖什么，status 与进度文档又如何报�
 | Run 现场 | 可信的 `Orbi opened PR` 评论中的隐藏版本化块 `<!-- orbi:scene:v1 {json} -->`，由 `src/orbi/scene.py` 渲染与解析；接续已有 PR 交付的机器可读记录（旁边的可读文字仅供展示） |
 | 需求 skill | 目录 `integrations/claude-plugin/skills/write-ai-ready-issue/`——`SKILL.md`（agent 如何把一句话想法变成可交付 Issue）与 `fidelity-pass.md`（独立检查草稿是否恰好问了提问者想问的） |
 | Suggestions | `orbi suggest --json` 打印的文档——`{"repo", "base_sha", "session_dir", "suggestions": [{"kind": "existing" 或 "new", "issue": existing 为 Issue 号、new 为 null, "title", "why", "body": new 为 Issue body、existing 为 null, "size": 预计改动的文件数（整数，未知时为 null）}]}`——该 `size` 键仅当调用方传入 `--size <n>` 时才出现——最多三条、按优先级排序；`--size <n>`（正整数）还要求答案的第一条恰好是一个扎根于仓库自身文件、改动不超过 n 个文件的任务（仓库没有这样的任务时就不给，绝不凑数），非正整数的取值是参数错误；`base_sha` 是该 run 开始时抓取的 `origin/<base_branch>` 提交，两个 session 读的都是它（部署 checkout 本身从不被移动或推进）；`session_dir` 是 `<deploy_home>/.orbi/suggest/<run_id>/.pi-session/`，存放与交付 session 文件同格式的 suggestions session Pi JSONL；同一运行目录还存放并行 understanding session 的 Pi JSONL，位于 `<deploy_home>/.orbi/suggest/<run_id>/.understanding/.pi-session/`，格式相同，因此核算该 run 模型用量的调用方读取这两个目录。运行目录 `<deploy_home>/.orbi/suggest/<run_id>/` 在命令退出后（无论成功还是失败）都保留——以及产出它的 skill 目录 `integrations/claude-plugin/skills/suggest-ai-ready-issues/` |
-| 起草 | `orbi draft` 的单轮文档（输入 `{"message","conversation","draft"}`，输出 `{"reply","questions","issues","check","warning"}`）、创建文档（输入 `{"key","issues","header","issue"}`，输出 `{"created"}`）、失败文档（stderr 上的 `{"code","step","detail"}`）、session 目录布局以及 `<!-- orbi:draft:v1:... -->` Issue 标记；见[起草命令契约](#起草命令契约) |
+| 起草 | `orbi draft` 的单轮文档（输入 `{"message","conversation","draft","attachments"}`，输出 `{"reply","questions","issues","check","warning"}`）、创建文档（输入 `{"key","issues","header","issue","attachments"}`，输出 `{"created"}`）、失败文档（stderr 上的 `{"code","step","detail"}`）、草稿级的 `attachments` 列表与单轮存放它的位置、session 目录布局以及 `<!-- orbi:draft:v1:... -->` Issue 标记；见[起草命令契约](#起草命令契约) |
 | 澄清提案 | 澄清停止评论中隐藏的 `<!-- orbi:suggestion:v1 kind=split -->` / `kind=criteria` 区块、其行语法、权威停止评论规则，以及公开的回执标记（`orbi-<name>-command`、`orbi-<name>-command-rejected`、`orbi-<name>-command-failed step=...` 及其 `comment=...` 键）；见[澄清提案与命令回执](#澄清提案与命令回执) |
 | 停止问题 | 需要决定的停止中隐藏的 `<!-- orbi:question:v1 {json} -->` 块、其形状（起草问题的超集）、封闭的 `action` 集合与 `decision_class` 取值，以及回答记录 `<!-- orbi:answer:v1 {json} -->`（包括引擎自行做出的自动回答）；见[停止问题](#停止问题) |
 
@@ -569,8 +569,8 @@ Issue 已关闭或已合并，或正在等待已确认的手动动作。该 GitH
 单轮输入与输出：
 
 ```json
-{"message": "one sentence", "conversation": [{"role": "person", "text": "..."}], "draft": {"issues": []}}
-{"reply": "what will change", "questions": [{"question": "What should the other person get?", "header": "Sharing", "options": [{"label": "A read-only link (Recommended)", "description": "Opens the list, cannot change it."}, {"label": "An editable link", "description": "Lets whoever holds it change the list."}]}], "issues": [{"title": "...", "body": "...", "after": 1}], "check": "passed", "warning": "..."}
+{"message": "one sentence", "conversation": [{"role": "person", "text": "..."}], "draft": {"issues": []}, "attachments": [{"name": "screen.png", "src": "./screen.png"}]}
+{"reply": "what will change", "questions": [{"question": "What should the other person get?", "header": "Sharing", "options": [{"label": "A read-only link (Recommended)", "description": "Opens the list, cannot change it."}, {"label": "An editable link", "description": "Lets whoever holds it change the list."}]}], "issues": [{"title": "...", "body": "...", "after": 1, "attachments": [1, 2]}], "check": "passed", "warning": "..."}
 ```
 
 `questions` 一轮最多三个。一个问题形如 `{"question", "header"?, "options"?}`：
@@ -597,7 +597,7 @@ options 的问题同样是合法问题。存在推荐选项时其 `label` 以 `(
 创建输入，以及 stdout 上的已创建编号：
 
 ```json
-{"key": "the caller's draft id", "issues": [{"title": "...", "body": "...", "after": 1}], "header": "optional text above every body", "issue": 12}
+{"key": "the caller's draft id", "issues": [{"title": "...", "body": "...", "after": 1, "attachments": [1]}], "header": "optional text above every body", "issue": 12, "attachments": [{"name": "screen.png", "src": "./screen.png"}]}
 {"created": [41, 42, 43]}
 ```
 
@@ -606,6 +606,51 @@ Issue 时，把它的正文追加一次，并把 `ai-needs-detail` 换成派发�
 该 Issue 成为父 Issue（原生子 Issue、`after` 用 `blockedBy`、派发标签最后、
 父 Issue 打 `ai-epic`）。用同样的输入再次 `--create` 不会再创建：每个已创建
 Issue 都带有下面的标记，且只认本 runner 自己创建的 Issue。
+
+### 附件
+
+两个文档都用同一个列表携带草稿的文件，`attachments: [{name, src}]`：`src` 是本地
+路径或 `http(s)` 地址，类型由扩展名决定。`orbi draft --attach <path>`（可重复）在
+两种模式里都追加一个文件，排在文档自带列表之后；交互模式把这个列表交给每一轮，也交给
+它的创建。允许的类型：图片（`png`、`jpg`、`jpeg`、`gif`、`webp`）、HTML
+（`html`、`htm`）和纯文本（`txt`、`md`、`csv`、`tsv`、`json`、`log`）：
+最多 10 个文件、每个 10 MB、一份草稿的 HTML 与文本合计最多 50,000 字符。其余情况
+——第 11 个文件、更大的文件、其他扩展名、更长的文本——在 `read the attachments`
+步骤以 `invalid_input` 失败，`detail` 就是原因。
+
+每个文件都被复制或下载到 `<session-dir>/.pi-session/attachments/<n>.<ext>`，
+绝不使用它自己的名字，所以带 `../` 的名字离不开该目录；context 用一行列出全部文件
+（`The person attached: 1.png = screen.png, 2.html = spec.html`）并给出目录。
+只有当本次运行的模型在其 catalog 条目里声明了 `"input": ["text", "image"]` 时
+（`orbi.model_catalog`；仓库自带的 DeepSeek 模板已声明），图片才作为 Pi 的
+`@<path>` 参数放在 context 文件之前进入第一次请求；否则会被标注为不可查看。起草
+session 用 `read` 读取 HTML 与文本，而无工具的保真检查同样以 `@<path>` 参数收到
+它们。
+
+草稿输出里的每个 Issue 都携带 `attachments`：该 Issue 用到的草稿文件之 1 起始
+编号；字段缺失表示它用到全部文件，空列表表示一个都不用。创建文档携带同样的逐 Issue
+编号与整份列表，所以拆成多个新 Issue 的草稿只把每个 Issue 用到的文件写进去。
+本地起草展示草稿时，每个 Issue 以 `<n>.<ext>  <name>  <src>` 列出它用到的文件
+——创建后的 Issue 引用的编号、人给它的名字以及文件所在位置
+（`1.png  checkout-error.png  ./screens/checkout-error.png`）。
+
+创建**新** Issue 的 `--create` 会在同一次创建里，于草稿标记之后写入一个
+`## Attachments` 小节：`src` 为本地路径的图片由 `gh issue create --attach` 上传，
+并写成 `![name](./<n>.<ext>)`；`src` 为 `http(s)` 的图片写成 `![name](src)`；
+每个 HTML 或文本文件是一个折叠块（`<details><summary>name</summary>` 加围栏代码块，
+围栏按扩展名标注语言：`html`、`csv`、`json`……）。对已有 Issue 的 amend 不携带
+附件；对已有 Issue 的 `/orbi split` 会把每个子 Issue 用到的附件链接从原正文复制到
+子 Issue，而不是再次上传文件。gh 拒绝某次上传时仍会创建 Issue 并以非零退出：这次创建
+算作已创建，命令会打印未上传的图片以及修复方式（把它们贴进 Issue，或以你自己的身份
+运行 `gh auth login`）。
+
+交付与审查 session（审查每一轮都重新读取）会收到 Attachment 小节里的图片，以及正文
+或可信评论中任何原生 GitHub 图片
+（`github.com/user-attachments/assets/...`，经 GitHub 的 Markdown 渲染读出、下载时
+不带任何 token），并使用同一行说明。读不出来即停止：读不到附件的起草轮会失败并指出
+文件名；交付或审查 session 不会启动，引擎会在 Issue 上发一条评论，指出读不出的图片
+与修复方式（重新上传它，或把它从 Issue 中删除，然后把工单放回队列）。绝不静默跳过；
+journal 的 `issue_images_unreadable` 记录原因，但不含签名地址。
 
 失败时向 stderr 输出一个 JSON 对象并返回退出码 1：
 
@@ -635,8 +680,9 @@ session，并在这一轮结束时删除；checkout 与任何交付 worktree 都
 一轮失败——`{"code": "draft_failed", "step": "read the repository at
 origin/<base_branch>", ...}`——绝不回退到过期的 checkout。
 
-Issue 标记：`orbi draft` 创建的每个 Issue 末尾是
+Issue 标记：`orbi draft` 创建的每个 Issue 都带有
 `<!-- orbi:draft:v1:<key>:<position>:<sha256> -->`——调用方的 `key`、该 Issue 在草稿中的
-1 起始序号，以及创建时正文（不含标记行）的 sha256。pre-work 检查在领取时读取它
+1 起始序号，以及标记行之前那段草稿正文的 sha256（创建时写在标记之后的 Attachment 小节，
+以及 gh 上传时改写在其中的资源地址，都不在指纹范围内）。pre-work 检查在领取时读取它
 （`clarify.enforce`）：本 runner 创建、正文仍与指纹一致的 Issue 不再被判定，因为起草
 时已由同一个检查判定过。正文被编辑过，或标记落在别的账号创建的 Issue 上，仍照旧判定。

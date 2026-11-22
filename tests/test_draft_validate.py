@@ -124,6 +124,30 @@ def test_a_self_referenced_after_is_rejected_with_the_engine_reason(
     assert "EARLIER" in out
 
 
+def test_attachment_numbers_are_the_engines_own_rule(monkeypatch, capsys):
+    """Issue #2364: an Issue's attachments are 1-based numbers."""
+    valid = {
+        "kind": "draft", "reply": "x",
+        "issues": [{
+            "title": "Tag a note", "body": "## Outcome\n\nA user can tag.",
+            "attachments": [1, 2],
+        }],
+    }
+    code, out = run_entry(monkeypatch, capsys, json.dumps(valid))
+    assert code == 0, out
+    invalid = {
+        "kind": "draft", "reply": "x",
+        "issues": [{
+            "title": "Tag a note", "body": "## Outcome\n\nA user can tag.",
+            "attachments": [0],
+        }],
+    }
+    code, out = run_entry(monkeypatch, capsys, json.dumps(invalid))
+    assert code == 1
+    assert out.strip() == parse_reason(invalid)
+    assert "attachments" in out
+
+
 def test_two_recommended_options_are_rejected_with_the_engine_reason(
     monkeypatch, capsys,
 ):

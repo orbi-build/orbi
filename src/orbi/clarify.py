@@ -76,7 +76,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from orbi import acceptance_section, draft_marker, language, notify
+from orbi import acceptance_section, draft_author, language, notify
 from orbi import split_apply, user_summary
 # The proposal domain moved to its own leaf module (Issue #2207) because this
 # one sits at its recorded size ceiling; the names stay importable HERE, the
@@ -628,7 +628,7 @@ def enforce(issue: dict, config: RunnerConfig, source_repo: str,
     # ticket claimable, and the next tick would judge it again — the gate
     # would repeat instead of stopping.
     ready_label = delivery_labels.queue_label(config.dispatch_label)
-    if draft_marker.own_draft_unchanged(issue):
+    if draft_author.own_draft_unchanged(issue):
         # Issue #2041: `orbi draft` already judged this exact body with
         # THIS function before the person ever saw it, and nobody has
         # edited it since (the marker's fingerprint still matches). Orbi

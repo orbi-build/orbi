@@ -27,6 +27,7 @@ import orbi.draft as draft
 import orbi.draft_cli as draft_cli
 import orbi.draft_document as draft_document
 import orbi.draft_marker as draft_marker
+import orbi.draft_prompt as draft_prompt
 import orbi.question as question
 from orbi import provider_balance
 from orbi.config import RunnerConfig
@@ -903,9 +904,16 @@ def test_the_marker_fingerprint_tracks_the_created_body():
     assert draft_marker.draft_fingerprint(created) == (
         draft_marker.draft_fingerprint(body)
     )
+    # The fingerprint is the drafted text BEFORE the marker (Issue #2364):
+    # the Attachments section a creation appends below the marker, and the
+    # asset addresses a gh upload rewrites inside it, never change it.
     assert draft_marker.draft_fingerprint(
-        created + "\nmore",
-    ) != mark.fingerprint
+        created + "\n\n## Attachments\n\n![x](./1.png)",
+    ) == mark.fingerprint
+    edited = draft_marker.with_marker(
+        body + "\n\nA person added a line.", key=KEY, position=2,
+    )
+    assert draft_marker.draft_fingerprint(edited) != mark.fingerprint
 
 
 # --- 10c: the claim-time skip --------------------------------------------
@@ -929,10 +937,11 @@ def test_an_edited_draft_is_checked(config, monkeypatch):
     draft_fakes.stub_login(monkeypatch)
     judged = draft_fakes.judge_sequence(monkeypatch)
     body = draft_marker.with_marker(TWO_ISSUES[0]["body"], key=KEY, position=1)
-    assert clarify.enforce(
-        _draft_issue(body + "\n\nA person added a line."), config, REPO,
-        RUN_ID,
-    ) is True
+    edited = body.replace(
+        "A user can tag a note.", "A user can tag a note and share it.",
+    )
+    assert edited != body
+    assert clarify.enforce(_draft_issue(edited), config, REPO, RUN_ID) is True
     assert len(judged) == 1
 
 
@@ -1514,13 +1523,13 @@ def recommended_options(fixture: dict) -> list[dict]:
         option
         for question in fixture["questions"]
         for option in question["options"]
-        if option["label"].endswith(draft.RECOMMENDED_MARK)
+        if option["label"].endswith(draft_prompt.RECOMMENDED_MARK)
     ]
 
 
 def option_text(option: dict) -> str:
     """The option's own words, without the recommended mark."""
-    return option["label"].replace(draft.RECOMMENDED_MARK, "").strip()
+    return option["label"].replace(draft_prompt.RECOMMENDED_MARK, "").strip()
 
 
 def test_a_real_answer_whose_questions_all_recommend_is_drafted(
@@ -1677,7 +1686,7 @@ def test_one_recommendation_rule_and_one_mark_in_the_source():
     sources = sorted(package.glob("*.py"))
     holds_the_mark = [
         source.name for source in sources
-        if '"' + draft.RECOMMENDED_MARK + '"' in source.read_text(
+        if '"' + question.RECOMMENDED_MARK + '"' in source.read_text(
             encoding="utf-8")
     ]
     deciders = [
@@ -1687,7 +1696,7 @@ def test_one_recommendation_rule_and_one_mark_in_the_source():
     assert holds_the_mark == ["question.py"]
     assert deciders == ["question.py"]
     # Both documents read that one constant, never a copy of the string.
-    assert draft.RECOMMENDED_MARK is question.RECOMMENDED_MARK
+    assert draft_prompt.RECOMMENDED_MARK is question.RECOMMENDED_MARK
     assert draft_document.RECOMMENDED_MARK is question.RECOMMENDED_MARK
 
 
@@ -1699,7 +1708,7 @@ def test_the_drafting_rules_teach_the_question_shape():
     answer) is replaced; its "when" stays, with every other disagreement
     recorded under Assumptions."""
     prompt = draft.draft_system_prompt()
-    assert draft.RECOMMENDED_MARK in prompt
+    assert question.RECOMMENDED_MARK in prompt
     # The engine reads the marker literally, so the prompt says it is never
     # translated: a Chinese answer that wrote "(推荐)" reached the person
     # instead of being taken (Issue #2198).
@@ -2045,6 +2054,7 @@ def test_the_cli_handler_dispatches_to_the_command(
 
     args = SimpleNamespace(
         request=None, session_dir=tmp_path / "s", create=False, repo=None,
+        attach=[],
     )
     code = cli_commands.command_draft(
         config, args, argparse.ArgumentParser(),

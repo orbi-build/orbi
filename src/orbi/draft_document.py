@@ -25,7 +25,9 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+from typing import Sequence
 
+from orbi import attachments
 from orbi.question import (
     RECOMMENDED_MARK,
     Option,
@@ -67,17 +69,38 @@ class DraftError(RuntimeError):
 
 @dataclass(frozen=True)
 class DraftIssue:
-    """One drafted Issue: its title, its body and its place in the order."""
+    """One drafted Issue: its title, its body, its place in the order and
+    the attached files it uses (Issue #2364).
+
+    'attachments' is the 1-based numbers of the draft's files this Issue
+    uses; None means all of them, and an empty tuple means none.
+    """
 
     title: str
     body: str
     after: int | None = None
+    attachments: tuple[int, ...] | None = None
 
     def as_json(self) -> dict:
         data: dict = {"title": self.title, "body": self.body}
         if self.after is not None:
             data["after"] = self.after
+        if self.attachments is not None:
+            data["attachments"] = list(self.attachments)
         return data
+
+
+@dataclass(frozen=True)
+class Creation:
+    """What one creation did: the numbers, and the images gh did not upload.
+
+    `unuploaded` names the attached images a gh upload refused (Issue
+    #2364): the Issue counts as created either way, and the caller prints the
+    names with the repair instead of failing a creation that happened.
+    """
+
+    numbers: list[int]
+    unuploaded: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -136,15 +159,27 @@ class DraftRound:
         return data
 
 
-def render_round(round_: DraftRound) -> str:
+def render_round(
+    round_: DraftRound, *, attached: Sequence[attachments.Attachment] = (),
+) -> str:
     """One round as the terminal text a caller prints: every Issue, the
-    check it still fails and the fidelity warning."""
+    files it carries, the check it still fails and the fidelity warning.
+
+    An Issue's attached files are listed with the number a created Issue
+    references, the person's own name and where the file sits (Issue #2364);
+    the numbers are the draft-level list's, so a person can tell which file
+    goes into which Issue before anything is created.
+    """
     lines: list[str] = []
     for position, issue in enumerate(round_.issues, start=1):
         lines.append(f"{position}. {issue.title}")
         lines.append(issue.body)
         if issue.after is not None:
             lines.append(f"   after: {issue.after}")
+        files = attachments.display(attached, issue.attachments)
+        if files:
+            lines.append("   attachments:")
+            lines.extend(f"   {line}" for line in files)
         lines.append("")
     if round_.check is not None and round_.check != "passed":
         lines.append(f"check: {round_.check}")
@@ -221,10 +256,34 @@ def parse_issues(value: object) -> tuple[DraftIssue, ...]:
                     f"Issue {position}: after must name an EARLIER Issue "
                     f"(1..{position - 1})",
                 )
+        attachments = _attachment_numbers(entry.get("attachments"), position)
         issues.append(
-            DraftIssue(title=title.strip(), body=body.strip(), after=after)
+            DraftIssue(
+                title=title.strip(), body=body.strip(), after=after,
+                attachments=attachments,
+            )
         )
     return tuple(issues)
+
+
+def _attachment_numbers(
+    value: object, position: int,
+) -> tuple[int, ...] | None:
+    """One Issue's 'attachments: [n]', or None when all files are used."""
+    if value is None:
+        return None
+    if not isinstance(value, list) or any(
+        isinstance(number, bool)
+        or not isinstance(number, int)
+        or number < 1
+        for number in value
+    ):
+        raise DraftError(
+            "invalid_draft", "read the draft",
+            f"Issue {position}: attachments must be a list of 1-based "
+            "numbers",
+        )
+    return tuple(value)
 
 
 def parse_questions(value: object) -> tuple[Question, ...]:

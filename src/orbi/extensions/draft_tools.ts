@@ -75,6 +75,12 @@ const draftIssue = Type.Object(
 					"The 1-based number of an EARLIER Issue in this same draft this one waits for; omit when nothing comes first",
 			}),
 		),
+		attachments: Type.Optional(
+			Type.Array(Type.Integer({ minimum: 1 }), {
+				description:
+					"The 1-based numbers of the attached files this Issue uses (from the 'The person attached' line); omit to use all of them, an empty list to use none",
+			}),
+		),
 	},
 	{ additionalProperties: false },
 );

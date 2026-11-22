@@ -29,7 +29,7 @@ Want just the CLI? It's on PyPI as [`orbi-cli`](https://pypi.org/project/orbi-cl
 ### Ready check (before setup)
 
 - `uv`: `uv --version`; Pi and its provider: `pi --version`, then `pi --print "reply with the single word: ok"`
-- GitHub CLI ≥ 2.94 ([official repository](https://github.com/cli/cli/blob/trunk/docs/install_linux.md) — Ubuntu 24.04's package 2.45.0 is too old): run `gh auth login` once, then verify `gh auth status`
+- GitHub CLI ≥ 2.99 ([official repository](https://github.com/cli/cli/blob/trunk/docs/install_linux.md) — Ubuntu 24.04's package 2.45.0 is too old): run `gh auth login` once, then verify `gh auth status`
 - Linux — systemd user session: `systemctl --user status`
 - macOS — launchd GUI session: `launchctl print gui/$(id -u)` (not yet verified on real hardware; reports welcome)
 

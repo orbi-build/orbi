@@ -27,6 +27,7 @@ import orbi.answer as answer
 import orbi.comment_trust as comment_trust
 import orbi.delivery_push as delivery_push
 import orbi.draft as draft
+import orbi.draft_author as draft_author
 import orbi.draft_marker as draft_marker
 import orbi.suggest as suggest
 import orbi.split_apply as split_apply
@@ -87,7 +88,8 @@ _MODULES = (
     delivery_push,
     repo_config, clarify, claim_race, comment_trust, requeue, question,
     split_apply,
-    draft, draft_marker, branch_reclaim, failure_report, suggest, cli,
+    draft, draft_marker, draft_author, branch_reclaim, failure_report,
+    suggest, cli,
     blocked_comment, stop_comment,
     base_ci_red, base_ci_fix, cli_commands, cli_doctor, check_permission,
     split_command, amend_command, acceptance_section, clarify_stop,

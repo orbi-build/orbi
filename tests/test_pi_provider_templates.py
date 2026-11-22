@@ -69,6 +69,18 @@ def test_deepseek_uses_the_models_full_context_window():
     assert model["maxTokens"] == 16384
 
 
+def test_deepseek_declares_image_input():
+    """Issue #2364: the default template's model reads an attached image.
+
+    Pi sends an image only when the catalog entry declares it (the default
+    is text only), and `orbi draft --attach` relies on this template being
+    the one a local install starts from.
+    """
+    _path, data = load_template("deepseek")
+    model = data["providers"]["deepseek"]["models"][0]
+    assert model["input"] == ["text", "image"]
+
+
 def test_gemini_uses_model_default_thinking_mapping():
     _path, data = load_template("gemini")
     model = data["providers"]["google"]["models"][0]

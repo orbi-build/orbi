@@ -41,11 +41,12 @@ non-zero exit code.
    and a reachable scheduler user session (`systemctl --user` on
    Linux, `launchctl print gui/<uid>` on macOS — a container or
    headless session without one fails with the session error). `gh`
-   must be ≥ 2.94.0 — the queue scans need `gh api --paginate --slurp` and the
-   `blockedBy` field, so an older distribution package (Ubuntu 24.04
-   ships 2.45.0) passes this check but fails every tick; [Getting
-   started](/getting-started) carries the official install source and
-   the repair.
+   must be ≥ 2.99.0 — the queue scans need `gh api --paginate --slurp`
+   and the `blockedBy` field, and `orbi draft --create` uploads attached
+   images with `gh issue create --attach`, so an older distribution
+   package (Ubuntu 24.04 ships 2.45.0) passes this check but fails every
+   tick; [Getting started](/getting-started) carries the official install
+   source and the repair.
 2. **CLI editable install** (Issue #152) — the official local
    deployment is the EDITABLE `uv tool` install (the why — the
    `ExecStartPre` checkout sync — is defined in [Getting

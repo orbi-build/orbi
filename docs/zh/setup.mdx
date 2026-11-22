@@ -32,9 +32,10 @@ setup 是 **fail-fast**：核心前提失败会在任何后续变更之前停下
    https://astral.sh/uv/install.sh | sh`），且调度器用户会话可达
    （Linux 为 `systemctl --user`，macOS 为 `launchctl print gui/<uid>`——
    没有用户会话的容器或 headless session 会以会话错误失败）。`gh`
-   必须 ≥ 2.94.0——队列扫描用到 `gh api --paginate
-   --slurp` 和 `blockedBy` 字段，过旧的发行版包（Ubuntu 24.04 自带
-   2.45.0）能通过本检查，但每个 tick 都会失败；[快速开始](/zh/getting-started)
+   必须 ≥ 2.99.0——队列扫描用到 `gh api --paginate
+   --slurp` 和 `blockedBy` 字段，且 `orbi draft --create` 用
+   `gh issue create --attach` 上传附件图片，过旧的发行版包（Ubuntu 24.04
+   自带 2.45.0）能通过本检查，但每个 tick 都会失败；[快速开始](/zh/getting-started)
    给出官方安装来源和修复命令。
 2. **CLI editable 安装**（Issue #152）——官方本地部署是 **editable**
    `uv tool` 安装（为什么——`ExecStartPre` checkout 同步——定义在

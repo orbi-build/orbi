@@ -94,7 +94,8 @@ options:
                     files edited) on every suggestion (default: neither)
 $ orbi draft --help
 usage: python3 -m orbi.cli draft [-h] [--config CONFIG] [--repo REPO]
-                                 [--session-dir SESSION_DIR] [--create]
+                                 [--session-dir SESSION_DIR] [--attach PATH]
+                                 [--create]
                                  [request]
 
 positional arguments:
@@ -109,6 +110,8 @@ options:
                         run ONE drafting round: stdin
                         {"message","conversation","draft"}, stdout
                         {"reply","questions","issues"}
+  --attach PATH         attach an image, HTML or text file to the draft
+                        (repeatable)
   --create              create the confirmed draft from stdin
                         {"key","issues","header","issue"} and print the
                         created numbers

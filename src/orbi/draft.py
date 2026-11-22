@@ -36,8 +36,8 @@ from contextlib import contextmanager
 from pathlib import Path
 
 from orbi import (
-    clarify, draft_marker, failure, gitops, journal, provider_balance,
-    split_command,
+    attachments, clarify, draft_marker, failure, gitops, journal,
+    model_catalog, provider_balance, split_command,
 )
 from orbi.acceptance_section import appended_body, write_body
 from orbi.claim import _repo_scan_keys
@@ -47,6 +47,7 @@ from orbi import delivery_labels
 from orbi.delivery_scene import RunContext
 from orbi.draft_document import (
     TAKEN_ROUNDS,
+    Creation,
     DraftAnswer,
     DraftError,
     DraftIssue,
@@ -59,6 +60,17 @@ from orbi.draft_document import (
     taken_message,
     taken_options,
 )
+# The prompt text and the three tool names live in their own module (Issue
+# #2364): this module's recorded size may only shrink (size ratchet).
+from orbi.draft_prompt import (
+    ASK_USER_TOOL,
+    FIDELITY_PROTOCOL,
+    FIDELITY_REL,
+    REPLY_TOOL,
+    REWRITE_INSTRUCTION,
+    WRITE_DRAFT_TOOL,
+    draft_system_prompt,
+)
 from orbi.failure import failure_detail
 from orbi.github import edit_issue, issue_view, list_issues, list_milestones
 from orbi.journal import LOGGER, event, run_command
@@ -70,15 +82,9 @@ from orbi.pi_command import (
 )
 from orbi.pi_process import PiWatchOptions, stream_pi
 from orbi.pi_session import pi_extension_env, prepare_pi_agent_dir
-from orbi.question import RECOMMENDED_MARK, Option
+from orbi.question import Option
 from orbi.ticket_command import author_login_key, runner_login
 
-# The three tools the shipped extension registers; the prompt names them and
-# the tool allowlist below must carry them (one spelling, two places).
-WRITE_DRAFT_TOOL = "write_draft"
-ASK_USER_TOOL = "ask_user"
-# Issue #2201: the answer to a request that must not change any code.
-REPLY_TOOL = "reply"
 # The drafting session reads the checkout and writes ONLY through the
 # shipped tools: no shell, no edit, no commit (the same read-only boundary
 # `orbi suggest` keeps).
@@ -119,9 +125,6 @@ DRAFT_REJECTION_SUFFIX = ".rejected"
 # files under the caller's directory.
 DRAFT_SESSION_DIR = ".pi-session"
 FIDELITY_DIR = ".fidelity"
-FIDELITY_REL = Path(
-    "integrations/claude-plugin/skills/write-ai-ready-issue/fidelity-pass.md"
-)
 # A small fixed bound: a hung model request must not hold the command.
 DRAFT_TIMEOUT_SECONDS = 900
 FIDELITY_TIMEOUT_SECONDS = 180
@@ -137,84 +140,6 @@ DECLINE = frozenset({"n", "no", "cancel", "q", "quit"})
 # A termination guard for the interactive loop (Issue #95): a drafter that
 # never converges must fail fast instead of spinning forever.
 MAX_ROUNDS = 12
-
-# The one rule that replaced the skill's "draft only the first slice": the
-# check reports single_outcome for a request that bundles independent
-# deliverables, so the drafter splits it BEFORE the check ever sees it.
-SINGLE_OUTCOME_RULE = (
-    "A request that fails the single_outcome check becomes SEVERAL Issues "
-    "in one draft: one Issue per outcome, in delivery order, never one "
-    "Issue whose acceptance list covers independent deliverables. A draft "
-    "may therefore hold one Issue or many."
-)
-
-# The drafting rules are the engine's own (Issues #2041, #2147).
-DRAFTING_RULES = (
-    "Rules for every draft:\n"
-    "- Write in the person's language: the Issue titles, the Issue bodies, "
-    "your reply and your questions.\n"
-    "- A request that explicitly asks for NO code change (\"just review it "
-    "and tell me\", \"only explain\", \"don't touch the code\") takes the "
-    "no-repository-change route: call " + REPLY_TOOL + " and return a reply "
-    "alone, never a draft. In the person's language, list in one line each "
-    "what your reading found worth fixing and say that Orbi delivers by "
-    "opening a pull request, so the person can name one item for Orbi to "
-    "fix.\n"
-    "- The nearest-deliverable rule applies only to a request that asks "
-    "for a change: when the code cannot deliver such a request as asked, "
-    "draft the nearest version it can deliver and record the change under "
-    "Assumptions. A request not to change any code is never such a "
-    "draft.\n"
-    "- Refer to files by their repository-relative path.\n"
-    "- Do not write the commit SHA.\n"
-    "- Open a draft's reply with one plain-language sentence of what "
-    "will change; an answer with no code change opens with the first thing "
-    "worth fixing.\n"
-    "- An Assumptions section appears only when you took at least one "
-    "decision: one line per decision you took instead of asking, saying "
-    "what you chose and why. With no decision taken, the Issue body "
-    "carries no Assumptions section.\n"
-    "- Ask a question only when, after reading the repository, the request "
-    "itself still does not say what to build — it is empty or contradicts "
-    "itself — and no deliverable default version can be written. Then ask "
-    "at most three questions in one call. A question is one sentence in "
-    "the person's language, with an OPTIONAL header of one to three words "
-    "naming the decision, and OPTIONAL 2 to 4 options when the person has "
-    "to pick: every option a label of one to five words plus one sentence "
-    "of what it means or its trade-off. When one option is the reasonable "
-    "default, its label ends with \"" + RECOMMENDED_MARK + "\", and that "
-    "marker is never translated: it is the engine's, not the person's. "
-    "Never add an \"Other\" option and never say the person chose the "
-    "recommended option: the person always answers in their own words.\n"
-    "- Every other disagreement — which library, font or place to use, "
-    "what to leave out, how to word a deliverable version of a change "
-    "request that cannot be done as asked — is a decision: take the most "
-    "reasonable default and record it under Assumptions instead of "
-    "asking.\n"
-    "- Do not repeat the draft or the questions in the reply.\n"
-    "- Never tell the person to create the Issue themselves, and never "
-    "give a new-Issue link.\n"
-    "- Each Issue body carries its own outcome and its own acceptance "
-    "condition, so the pre-work check accepts it as it stands.\n"
-    "- The after field is the 1-based number of an EARLIER Issue in this "
-    "same draft that this one waits for; omit it when nothing comes "
-    "first."
-)
-
-FIDELITY_PROTOCOL = (
-    "Input: one JSON object {\"request\": <the person's words verbatim>, "
-    "\"issues\": [{\"title\", \"body\", \"after\"}]}.\n"
-    "Return ONLY a JSON object {\"issues\": [{\"title\", \"body\", "
-    "\"after\"}]} holding the complete revised draft, never a diff and "
-    "never a comment. Keep the same Issues the input has: this pass "
-    "removes what the person did not ask for, it never drops an outcome."
-)
-
-REWRITE_INSTRUCTION = (
-    "The pre-work check judged the current draft and these checks failed: "
-    "{reasons}. Rewrite the WHOLE draft so every Issue passes them, keep "
-    "exactly what the request asks for, and call write_draft again."
-)
 
 
 def _round_payload(payload: dict) -> dict:
@@ -308,12 +233,16 @@ def draft_repo_view(config: RunnerConfig, *, run_id: str):
             )
 
 
-def render_context(payload: dict, *, repo_dir: Path) -> str:
+def render_context(
+    payload: dict, *, repo_dir: Path,
+    attached: "attachments.Attached | None" = None,
+) -> str:
     """The one context a round hands the session.
 
     The conversation and the current draft are REPLAYED here, not read back
     from Pi's session file: a round with no session file at all still works,
-    and the same context shape is what a second round resumes with.
+    and the same context shape is what a second round resumes with. The
+    draft's attached files are named in one line (Issue #2364).
     """
     message = str(payload["message"]).strip()
     lines = ["Request:", message, ""]
@@ -333,6 +262,9 @@ def render_context(payload: dict, *, repo_dir: Path) -> str:
         lines.append("The current draft, as JSON:")
         lines.append(json.dumps(draft, ensure_ascii=False, indent=2))
         lines.append("")
+    naming = attached.naming() if attached is not None else ""
+    if naming:
+        lines.extend([naming, ""])
     lines.append(
         f"Repository checkout: {repo_dir} (read-only; refer to files by "
         "their repository-relative path)."
@@ -342,26 +274,12 @@ def render_context(payload: dict, *, repo_dir: Path) -> str:
 
 # --- the drafting session ------------------------------------------------
 
-def draft_system_prompt() -> str:
-    """The drafting prompt: the check's OWN criteria plus the draft rules."""
-    return "\n\n".join((
-        "You are Orbi's drafting session: read-only, no shell. Turn one "
-        "request into GitHub Issues that Orbi's pre-work check accepts. "
-        "Answer only by calling exactly one tool: " + WRITE_DRAFT_TOOL
-        + " when you have a draft, " + ASK_USER_TOOL + " when you need "
-        "the person to answer something first, " + REPLY_TOOL + " when "
-        "the person asked for no code change and the answer is a reply "
-        "alone. Never more than one in a turn.",
-        clarify.TICKET_CHECK_CRITERIA,
-        SINGLE_OUTCOME_RULE,
-        DRAFTING_RULES,
-    ))
 
 
 def run_draft_session(
     config: RunnerConfig, repo: str, *, session_root: Path,
     system_prompt: str, context: str, run_id: str, out_path: Path,
-    resume: bool = False,
+    resume: bool = False, attached: "attachments.Attached | None" = None,
 ) -> None:
     """Run ONE drafting session; its answer lands in `out_path`.
 
@@ -381,6 +299,9 @@ def run_draft_session(
         only_extension=str(DRAFT_EXTENSION),
         no_skills=True, no_context_files=True, skills=[],
         resume=resume,
+    )
+    command = attachments.with_arguments(
+        command, attached.arguments() if attached else [],
     )
     agent_dir = prepare_pi_agent_dir(session_root, config, role=ROLE_SUGGEST)
     pi_env = pi_extension_env(config)
@@ -411,6 +332,7 @@ def run_draft_session(
 def run_fidelity_session(
     config: RunnerConfig, repo: str, *, session_root: Path,
     system_prompt: str, context: str, run_id: str,
+    attached: "attachments.Attached | None" = None,
 ) -> str:
     """Run the independent fidelity pass: no tools, no conversation.
 
@@ -427,6 +349,11 @@ def run_fidelity_session(
         context_placeholder="<fidelity-context-redacted>",
         tools=False, extensions=False, no_extensions=True,
         no_skills=True, no_context_files=True, skills=[],
+    )
+    # The pass reads the draft's files as arguments: it has no tool to read
+    # one, and it must not remove what came from an attachment.
+    command = attachments.with_arguments(
+        command, attached.arguments(text=True) if attached else [],
     )
     agent_dir = prepare_pi_agent_dir(session_root, config, role=ROLE_TICKET)
     pi_env = pi_extension_env(config)
@@ -453,6 +380,7 @@ def run_fidelity_session(
 def _run_answer_session(
     config: RunnerConfig, repo: str, *, session_root: Path, context: str,
     out_path: Path, run_id: str, resume: bool,
+    attached: "attachments.Attached | None" = None,
 ) -> None:
     """Run the session and keep a draft that a timeout left behind.
 
@@ -476,6 +404,7 @@ def _run_answer_session(
             config, repo, session_root=session_root,
             system_prompt=draft_system_prompt(), context=context,
             run_id=run_id, out_path=out_path, resume=resume,
+            attached=attached,
         )
     except Exception as exc:
         if not out_path.is_file():
@@ -610,6 +539,7 @@ def _parse_revised(output: str) -> tuple[DraftIssue, ...] | None:
 def fidelity_pass(
     config: RunnerConfig, repo: str, *, session_root: Path, run_id: str,
     request: str, issues: tuple[DraftIssue, ...],
+    attached: "attachments.Attached | None" = None,
 ) -> tuple[tuple[DraftIssue, ...], str | None]:
     """Run the independent fidelity pass; never fails the round.
 
@@ -634,7 +564,7 @@ def fidelity_pass(
         output = run_fidelity_session(
             config, repo, session_root=session_root / FIDELITY_DIR,
             system_prompt=f"{rules}\n\n{FIDELITY_PROTOCOL}",
-            context=context, run_id=run_id,
+            context=context, run_id=run_id, attached=attached,
         )
     except Exception as exc:
         return issues, f"fidelity_pass_failed: {type(exc).__name__}"
@@ -642,7 +572,10 @@ def fidelity_pass(
     if revised is None or len(revised) != len(issues):
         return issues, "fidelity_pass_empty"
     return tuple(
-        DraftIssue(title=entry.title, body=entry.body, after=drafted.after)
+        DraftIssue(
+            title=entry.title, body=entry.body, after=drafted.after,
+            attachments=drafted.attachments,
+        )
         for entry, drafted in zip(revised, issues)
     ), None
 
@@ -696,10 +629,21 @@ def run_round(
     session_root = Path(session_dir).resolve()
     session_root.mkdir(parents=True, exist_ok=True)
     out_path = session_root / DRAFT_ANSWER_FILE
+    try:
+        attached = attachments.stage(
+            payload.get("attachments"),
+            session_root / DRAFT_SESSION_DIR / attachments.DIRECTORY,
+            viewable=model_catalog.declares_image_input(config),
+        )
+    except attachments.AttachmentError as exc:
+        raise DraftError(
+            "invalid_input", "read the attachments", str(exc),
+        ) from None
     with draft_repo_view(config, run_id=run_id) as repo_view:
         payload, answer, taken = _answered_round(
             config, repo, session_root=session_root, payload=payload,
             out_path=out_path, run_id=run_id, repo_view=repo_view,
+            attached=attached,
         )
         if answer.questions:
             return DraftRound(
@@ -713,11 +657,12 @@ def run_round(
         issues, warning = fidelity_pass(
             config, repo, session_root=session_root, run_id=run_id,
             request=_fidelity_request(payload), issues=answer.issues,
+            attached=attached,
         )
         issues, check, warning, reply = _apply_check(
             config, repo, session_root=session_root, payload=payload,
             run_id=run_id, issues=issues, warning=warning, reply=answer.reply,
-            repo_view=repo_view,
+            repo_view=repo_view, attached=attached,
         )
         return DraftRound(
             reply=named_in_reply(reply, taken), issues=issues,
@@ -728,6 +673,7 @@ def run_round(
 def _answered_round(
     config: RunnerConfig, repo: str, *, session_root: Path, payload: dict,
     out_path: Path, run_id: str, repo_view: Path,
+    attached: "attachments.Attached | None" = None,
 ) -> tuple[dict, DraftAnswer, tuple[Option, ...]]:
     """Run the session until it drafts or asks what only the person can answer.
 
@@ -745,8 +691,10 @@ def _answered_round(
         round_payload = {**payload, "message": message, "conversation": turns}
         _run_answer_session(
             config, repo, session_root=session_root,
-            context=render_context(round_payload, repo_dir=repo_view),
-            out_path=out_path, run_id=run_id,
+            context=render_context(
+                round_payload, repo_dir=repo_view, attached=attached,
+            ),
+            out_path=out_path, run_id=run_id, attached=attached,
             resume=any((session_root / DRAFT_SESSION_DIR).glob("*.jsonl")),
         )
         answer = read_answer(out_path)
@@ -774,6 +722,7 @@ def _apply_check(
     config: RunnerConfig, repo: str, *, session_root: Path, payload: dict,
     run_id: str, issues: tuple[DraftIssue, ...], warning: str | None,
     reply: str, repo_view: Path,
+    attached: "attachments.Attached | None" = None,
 ) -> tuple[tuple[DraftIssue, ...], str, str | None, str]:
     """Judge the draft; on a failure rewrite it ONCE and judge again.
 
@@ -796,9 +745,11 @@ def _apply_check(
     try:
         _run_answer_session(
             config, repo, session_root=session_root,
-            context=render_context(rewrite_payload, repo_dir=repo_view),
+            context=render_context(
+                rewrite_payload, repo_dir=repo_view, attached=attached,
+            ),
             out_path=session_root / DRAFT_ANSWER_FILE, run_id=run_id,
-            resume=True,
+            resume=True, attached=attached,
         )
         answer = read_answer(session_root / DRAFT_ANSWER_FILE)
     except DraftError as exc:
@@ -860,28 +811,43 @@ def _labels(issue: dict) -> list[str]:
 def _queue_positions(
     repo: str, *, key: str, items: tuple[DraftIssue, ...], header: str,
     milestone: str | None, parent: int | None, dispatch_label: str,
-) -> list[int]:
+    filed: "attachments.Filing | None" = None,
+    copied: "attachments.Copied | None" = None,
+) -> Creation:
     """Create (or adopt) each Issue, then attach, edge and label it.
 
     The three steps per Issue are the split command's own helpers, in the
     same order: create WITHOUT the dispatch label, add the `blockedBy`
     edge, then the label — so an interrupted run is finished by the next
     one and a created Issue never sits in the claim queue without its
-    dependency.
+    dependency. The Attachments section is written in the SAME create, below
+    the draft marker (Issue #2364), restricted to the files the Issue uses:
+    an upload of the draft's own files for a new ticket, or the links copied
+    from the original Issue's body for the '/orbi split' outcome.
     """
     existing = _existing_positions(repo, key)
     numbers: dict[int, int] = {}
     created: list[int] = []
+    unuploaded: list[str] = []
     for position, item in enumerate(items, start=1):
+        source = attachments.source(
+            item.attachments, position, filed=filed, copied=copied,
+        )
         number = existing.get(position)
         if number is None:
             number = split_command.create_ticket(
                 repo, title=item.title,
                 body=draft_marker.with_marker(
                     _drafted_body(item, header), key=key, position=position,
+                    section=attachments.section(source),
                 ),
                 milestone=milestone, step="create the drafted Issue",
+                filed=source if isinstance(source, attachments.Filing) else None,
             )
+            if isinstance(source, attachments.Filing):
+                unuploaded.extend(source.unuploaded(
+                    issue_view(number, "body", repo=repo).get("body"),
+                ))
         state = split_command.child_state(repo, number)
         blocker = (
             numbers.get(item.after) if item.after is not None else None
@@ -892,22 +858,25 @@ def _queue_positions(
         )
         numbers[position] = number
         created.append(number)
-    return created
+    return Creation(numbers=created, unuploaded=tuple(unuploaded))
 
 
 def create_issues(
     config: RunnerConfig, repo: str, payload: dict,
-) -> list[int]:
-    """Create the confirmed draft; return the Issue numbers in draft order.
+) -> Creation:
+    """Create the confirmed draft; the numbers in draft order.
 
     Three shapes, all idempotent through the draft marker:
 
-    * no `issue`: every drafted Issue is a new ticket;
+    * no `issue`: every drafted Issue is a new ticket, carrying the draft's
+      attachments in its Attachments section (Issue #2364);
     * `issue` with ONE drafted Issue: the body is appended to that ticket
       once, then `ai-needs-detail` becomes the dispatch label — the
-      `/orbi amend` outcome;
+      `/orbi amend` outcome, which carries no attachments;
     * `issue` with SEVERAL drafted Issues: that ticket becomes the parent
-      and the drafted Issues its children — the `/orbi split` outcome.
+      and the drafted Issues its children — the `/orbi split` outcome,
+      where each child copies the links of the attachments it uses from
+      the parent's body instead of uploading files again.
     """
     key = payload.get("key")
     if not isinstance(key, str) or not DRAFT_KEY_RE.match(key):
@@ -922,28 +891,39 @@ def create_issues(
         raise invalid_input("issue must be an Issue number")
     dispatch_label, milestone = policy_keys(config, repo)
     if target is not None and len(items) == 1:
-        return [
-            _append_to_issue(
-                repo, target=target, item=items[0], header=header, key=key,
-                dispatch_label=dispatch_label,
-            )
-        ]
+        return Creation([_append_to_issue(
+            repo, target=target, item=items[0], header=header, key=key,
+            dispatch_label=dispatch_label,
+        )])
     if target is not None:
         parent = issue_view(target, ISSUE_FIELDS, repo=repo)
-        children = _queue_positions(
-            repo, key=key, items=items, header=header,
-            milestone=split_command.milestone_title(parent), parent=target,
-            dispatch_label=dispatch_label,
-        )
+        try:
+            children = _queue_positions(
+                repo, key=key, items=items, header=header,
+                milestone=split_command.milestone_title(parent), parent=target,
+                dispatch_label=dispatch_label,
+                copied=attachments.copied(parent.get("body")),
+            )
+        except attachments.AttachmentError as exc:
+            raise DraftError(
+                "invalid_input", "read the attachments", str(exc),
+            ) from None
         _close_the_parent(
             repo, target, parent_issue=parent,
             dispatch_label=dispatch_label,
         )
         return children
-    return _queue_positions(
-        repo, key=key, items=items, header=header,
-        milestone=milestone, parent=None, dispatch_label=dispatch_label,
-    )
+    try:
+        with attachments.filing(payload.get("attachments")) as filed:
+            return _queue_positions(
+                repo, key=key, items=items, header=header,
+                milestone=milestone, parent=None,
+                dispatch_label=dispatch_label, filed=filed,
+            )
+    except attachments.AttachmentError as exc:
+        raise DraftError(
+            "invalid_input", "read the attachments", str(exc),
+        ) from None
 
 
 def policy_keys(config: RunnerConfig, repo: str) -> tuple[str, str | None]:

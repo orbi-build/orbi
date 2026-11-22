@@ -10,19 +10,15 @@ body hashes differently and is judged exactly as before.
 
 The module is deliberately tiny and dependency-light: `clarify.enforce`
 reads the marker at every claim and `orbi.draft` writes it when it creates
-an Issue, and neither may import the other. The author rule is the split
-child's own rule (only an Issue THIS runner authored counts): the marker is
-public text on a public Issue, so anyone could paste one.
+an Issue, and neither may import the other. Who authored the Issue is
+`orbi.draft_author`'s rule, and the marker is public text, so anyone could
+paste one.
 """
 from __future__ import annotations
 
 import hashlib
-import logging
 import re
 from dataclasses import dataclass
-
-from orbi.github import authenticated_github_login, strip_bot_suffix
-from orbi.journal import event
 
 DRAFT_MARKER = "orbi:draft:v1"
 _DRAFT_MARKER_RE = re.compile(
@@ -47,16 +43,21 @@ class DraftMark:
 
 
 def draft_body_text(body: object) -> str:
-    """The body with every draft marker line removed.
+    """The drafted text: everything BEFORE the newest draft marker line.
 
-    The marker carries its body's fingerprint, so it must be out of the
-    hashed text or the digest would depend on itself.
+    The fingerprint covers the body as the drafter wrote it, so it has to end
+    where the marker starts: `orbi draft` appends the Attachments section
+    AFTER the marker (Issue #2364) and a gh upload rewrites the image
+    addresses inside that section, so counting it would re-check a submitted
+    draft at claim. A body without a marker hashes whole, as before.
     """
     text = body if isinstance(body, str) else ""
-    return "\n".join(
-        line for line in text.splitlines()
-        if _DRAFT_MARKER_RE.search(line) is None
-    ).strip()
+    lines = text.splitlines()
+    markers = [
+        index for index, line in enumerate(lines)
+        if _DRAFT_MARKER_RE.search(line) is not None
+    ]
+    return "\n".join(lines if not markers else lines[:markers[-1]]).strip()
 
 
 def draft_fingerprint(body: object) -> str:
@@ -74,10 +75,19 @@ def draft_marker(key: str, position: int, body: object) -> str:
     )
 
 
-def with_marker(body: str, *, key: str, position: int) -> str:
-    """One created body: the text as drafted, then its hidden marker."""
+def with_marker(
+    body: str, *, key: str, position: int, section: str = "",
+) -> str:
+    """One created body: the text as drafted, its hidden marker, then the
+    Attachments section a creation writes below it (Issue #2364).
+
+    The marker sits between the drafted text and the section, so the
+    fingerprint covers the drafted text alone: what a creation appends below
+    the marker — and what gh rewrites there — never changes it.
+    """
     text = (body or "").strip()
-    return f"{text}\n\n{draft_marker(key, position, text)}"
+    created = f"{text}\n\n{draft_marker(key, position, text)}"
+    return f"{created}\n\n{section}" if section else created
 
 
 def parse_draft_marker(body: object) -> DraftMark | None:
@@ -92,46 +102,3 @@ def parse_draft_marker(body: object) -> DraftMark | None:
         key=match.group("key"), position=int(match.group("position")),
         fingerprint=match.group("fingerprint"),
     )
-
-
-def _account_key(login: object) -> str | None:
-    """The comparable login of one account, or None when unreadable."""
-    if not isinstance(login, str) or not login:
-        return None
-    if login.startswith(_API_LOGIN_PREFIX):
-        login = login[len(_API_LOGIN_PREFIX):]
-    return strip_bot_suffix(login)
-
-
-def own_draft_unchanged(issue: dict) -> bool:
-    """True when this runner drafted the body and nobody edited it.
-
-    Every failure — no marker, an edited body, an unreadable login, a
-    marker on another account's Issue — returns False, so the gate judges
-    the ticket exactly as it did before Issue #2041. The check never fails
-    OPEN into delivering an unjudged body; it fails toward the judgment.
-    """
-    mark = parse_draft_marker(issue.get("body"))
-    if mark is None:
-        return False
-    if mark.fingerprint != draft_fingerprint(issue.get("body")):
-        return False
-    try:
-        own = _account_key(authenticated_github_login())
-    except Exception as exc:
-        event(
-            "clarify_draft_untrusted", level=logging.WARNING,
-            issue=issue.get("number"), reason=type(exc).__name__,
-        )
-        return False
-    if own is None:
-        return False
-    author = issue.get("author")
-    login = author.get("login") if isinstance(author, dict) else None
-    if _account_key(login) != own:
-        event(
-            "clarify_draft_untrusted", level=logging.WARNING,
-            issue=issue.get("number"),
-        )
-        return False
-    return True
