@@ -257,10 +257,10 @@ Rules of the chain:
   [`base_ci_red` recovery](#a-delivery-paused-on-a-red-base-branch-base_ci_red)
   and the v0.7.18
   [`checks_permission_missing` recovery](#a-delivery-paused-on-an-unapproved-app-permission-checks_permission_missing)
-  are the explicit exceptions. A delivery that carries the backfilled
-  `ai-in-progress` label is still picked up (Issue #178: a runner killed
-  during review leaves it behind — the positive opened-PR qualifier
-  already keeps implement-phase Issues out of the scan).
+  are the explicit exceptions. A delivery that still carries
+  `ai-in-progress` (left by a runner of an older version killed during
+  review) is still picked up — the positive opened-PR qualifier already
+  keeps implement-phase Issues out of the scan.
 - `ai-awaiting-merge` waits for a maintainer, so it never competes with
   the work the runner can move (Issue #1745): it is re-checked — the same
   merge-only path — only on a tick where the opened-PR review, the
@@ -434,10 +434,10 @@ commits — initialize them per repository (see
 | Label | Meaning |
 |---|---|
 | `ai-ready` | The queue: explicitly dispatched to Orbi and NOT started. The claim removes it in the same write that adds `ai-in-progress`, and every later non-terminal stage event removes it too (Issue #2309), so `is:open label:ai-ready` lists only work that has not begun |
-| `ai-in-progress` | Claimed and running. The Runner idempotently backfills it before continuing a resumed opened-PR delivery (Issue #178); a leftover after a kill is resumed by the next tick when this deployment still holds its task worktree and run state file (an Issue it did not start belongs to another deployment and is skipped, Issue #2256). An implement-phase run is found by this label ALONE (Issue #2309) |
+| `ai-in-progress` | Claimed and running. A resumed opened-PR delivery does not get it back: its opened-PR label stays, and a round resumed from `ai-fix-needed` ends on `ai-pr-opened` (Issue #2357); a leftover after a kill is resumed by the next tick when this deployment still holds its task worktree and run state file (an Issue it did not start belongs to another deployment and is skipped, Issue #2256). An implement-phase run is found by this label ALONE (Issue #2309) |
 | `ai-pr-opened` | PR created and verified; awaiting the independent review |
 | `ai-fix-needed` | The PR head is not mergeable yet, or an AI-recoverable failure of the run/PR (Issue #50); the next tick resumes the same run, branch, worktree and PR |
-| `ai-merged` | Success terminal state; the Runner merged the PR and confirmed the merge commit on the protected branch. The merge also clears an `ai-ready` residue, so a merged Issue is `ai-merged` alone (Issue #1526; existing merged Issues are not backfilled) |
+| `ai-merged` | Success terminal state; the Runner merged the PR and confirmed the merge commit on the protected branch. The merge also clears an `ai-ready` residue, so a merged Issue is `ai-merged` alone (Issue #1526; existing merged Issues are not backfilled). The old state labels are removed before `ai-merged` is added, so it is the last label event on the Issue; if adding it fails, the removed labels are put back (Issue #2357) |
 | `ai-awaiting-merge` | Review and checks passed, but a known repository policy blocker remains; the comment names the maintainer action. Re-checked only on a tick whose queue is otherwise empty (Issue #1745), then Orbi merges the named PR head |
 | `ai-blocked` | The delivery stopped and cannot recover on its own: an external precondition the AI cannot safely judge or fix (Issue #50), or a failure whose action is `fix_ticket` or `decide` (for example `no_commit_delivered`, `release_failed`, `review_budget_exhausted`; see the reason table under "Failure record" below). The blocked comment states the reason and the action; a human must decide the next step |
 | `ai-human-review` | The human acceptance gate (Issue #763): a person confirmed the delivery's acceptance checklist. Only a human applies or removes it — the Runner never touches it |
@@ -522,9 +522,8 @@ While column 2 is non-empty, it is a GATE: the review round
 short-circuits before any Pi session — `ai-in-progress` and the queue label
 are cleared, NOTHING is added (a waiting ticket is not queued, Issue #2309),
 the opened-PR label stays as the resume anchor, the slot is released, and
-every later tick leaves the final label set unchanged and starts no review session
-(the PR resume still adds `ai-in-progress` and the PR-opened repair removes it
-again in the same tick). The wait does
+every later tick leaves the label set unchanged, writes no label and starts no
+review session. The wait does
 NOT consume the review-round budget and never touches
 `ai-fix-needed`. A person who confirms the checklist applies
 `ai-human-review`, and the next tick reviews and merges the delivery
@@ -797,7 +796,9 @@ beside the block for a human reader: ONE function of the record
 (`orbi.failure_stop.stop_wording`) decides the headline and the action
 together, so only a `decide` stop says "waiting on a human decision" — a
 no-commit stop says the run produced no commit and the ticket needs a
-change, an undetermined cause says so instead of blaming the Issue text
+change, a no-file-change stop says the run changed no file and that an
+Issue the session found already satisfied can simply be closed
+(Issue #2358), an undetermined cause says so instead of blaming the Issue text
 (Issue #1651), and a configured base branch that does not exist says that
 (Issue #1749) — and the terminal progress comment repeats that same
 sentence. The
@@ -1029,7 +1030,12 @@ DAG, no priority numbers, no separate queues:
   in the Epic body, including `Children`/`Child Issues` sections, are not
   declarations. An Epic with no native sub-issues, or malformed child or
   dependency state, fails closed. The Runner reconciles open Epics on every
-  tick and leaves an idempotent audit comment. Any prose describing extra
+  tick and leaves an idempotent audit comment. The comment lists how each
+  child ended (merged by Orbi, closed while blocked, closed by a person as
+  completed or as not planned); only when every child was delivered by Orbi
+  does it say the Epic is complete. When no child was delivered by Orbi and
+  none was closed as completed, the Epic is closed as not planned
+  (Issue #2356). Any prose describing extra
   acceptance conditions is an Epic definition error: make that condition a
   final child Issue instead (for example, a browser acceptance ticket). The
   same tick then reconciles open Milestones: an exact-title published Release
