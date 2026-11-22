@@ -22,8 +22,12 @@ from orbi import delivery_labels
 from orbi.delivery_scene import (
     EXTERNAL_PR_MARKER, body_markers, classify,
 )
+from orbi.epic_reconciliation import (
+    epic_audit, epic_audit_posted, epic_close_reason, epic_closed_evidence,
+    verify_epic_complete,
+)
 from orbi.github import (
-    verify_epic_complete, close_issue,
+    close_issue,
     comment_issue, issue_comments, issue_priority, issue_view,
     list_issues, milestone_open_issue_count,
     open_blocker_numbers, pr_comments,
@@ -40,7 +44,6 @@ from orbi.resume_scan import (
 from orbi import language, review_wait, user_summary
 from orbi.progress import run_marker
 from orbi.release import release_target_milestone
-from orbi.release_comments import _epic_audit, epic_audit_posted
 from orbi.repo_config import (
     RepoConfigError, RepoPolicy, load_repo_policy, merged_repo_language,
 )
@@ -208,20 +211,20 @@ def reconcile_open_epics(repo: str, run_id: str, language_code: str) -> list[str
     for listed_epic in epics:
         number = listed_epic.get("number")
         try:
-            child_evidence = verify_epic_complete(repo, listed_epic)
+            children = verify_epic_complete(repo, listed_epic)
         except (ValueError, json.JSONDecodeError) as exc:
             reason = str(exc)
             event("epic_kept_open", issue=number, repo=repo, reason=reason)
             evidence.append(f"Epic #{number} kept open: {reason}")
             continue
-        audit = _epic_audit(child_evidence, None, language_code)
+        audit = epic_audit(children, None, language_code)
         comments = issue_comments(int(number), repo=repo)
-        if not epic_audit_posted(comments, child_evidence):
+        if not epic_audit_posted(comments, children):
             comment_issue(int(number), repo=repo,
                          body=f"{run_marker(run_id)}\n{audit}\nrun_id={run_id}")
-        close_issue(int(number), repo=repo)
+        close_issue(int(number), repo=repo, reason=epic_close_reason(children))
         event("epic_closed", issue=number, repo=repo)
-        evidence.append(f"Epic #{number} closed after verification ({'; '.join(child_evidence)})")
+        evidence.append(epic_closed_evidence(number, children))
     return evidence
 
 

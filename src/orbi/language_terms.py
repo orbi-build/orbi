@@ -8,6 +8,7 @@ machine row (run marker, `run_id=`, `repo_config:`, `failure:`, receipt
 rows) has an entry here.
 """
 from orbi.language_terms_criteria import CRITERIA_MESSAGES
+from orbi.language_terms_epic import EPIC_MESSAGES
 from orbi.language_terms_fix import BASE_CI_FIX_MESSAGES
 
 DISPLAY_TERMS: dict[str, tuple[str, str]] = {
@@ -347,7 +348,7 @@ SPLIT_MESSAGES: dict[str, tuple[str, str]] = {
 EXTRA_MESSAGES: dict[str, tuple[str, str]] = {
     **DISPLAY_TERMS, **BASE_CI_RED_MESSAGES, **CHECK_PERMISSION_MESSAGES,
     **CLARIFY_SUGGESTION_MESSAGES, **SPLIT_MESSAGES,
-    **CRITERIA_MESSAGES, **BASE_CI_FIX_MESSAGES,
+    **CRITERIA_MESSAGES, **BASE_CI_FIX_MESSAGES, **EPIC_MESSAGES,
     # The rejection a NO-ARGUMENT in-ticket command owes its author
     # (Issue #1922): the shared "write exactly one {label}" wording would
     # contradict the usage line printed beside it for an arity-0 command

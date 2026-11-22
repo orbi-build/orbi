@@ -204,11 +204,11 @@ from orbi.merge_handoff import (
 )
 from orbi.cli_source import CliInstallError, refresh_cli_install
 from orbi.comment_trust import trusted_comments
+from orbi.epic_reconciliation import verify_epic_complete
 from orbi.github import (
     RESUME_PR_STATE_TIMEOUT_SECONDS,
     run_gh_read_command,
     run_gh_write_command,
-    verify_epic_complete,
     apply_label_patch,
     close_issue,
     close_milestone,

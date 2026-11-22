@@ -45,9 +45,17 @@ PUBLIC_HELPERS = {
     "checks": {"render_check"},
     "github": {
         "pr_number",
-        "verify_epic_complete",
         "authenticated_github_login",
         "strip_bot_suffix",
+    },
+    # The Epic child outcomes moved with the verification (Issue #2356):
+    # both sweeps and the runner read them from this one owner.
+    "epic_reconciliation": {
+        "verify_epic_complete",
+        "epic_audit",
+        "epic_audit_posted",
+        "epic_close_reason",
+        "epic_closed_evidence",
     },
     "github_feedback": {"check_summaries"},
     "gitops": {"is_ancestor"},
