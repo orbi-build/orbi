@@ -20,12 +20,15 @@ Orbi merged PR: u
 [
   {
     "repo": "owner/repo",
-    "add": "ai-merged",
     "remove": "ai-pr-opened"
   },
   {
     "repo": "owner/repo",
     "remove": "ai-ready"
+  },
+  {
+    "repo": "owner/repo",
+    "add": "ai-merged"
   }
 ]
 <<<golden:blocked-comment>>>

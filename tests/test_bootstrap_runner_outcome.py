@@ -212,10 +212,9 @@ def test_process_issue_failure_marks_blocked_and_ends_cleanly(monkeypatch, tmp_p
     # The failure is terminal: `process_issue` returns `None` (no PR) and
     # does NOT re-raise — the service must not crash on it (Issue #239).
     assert runner.process_issue({"number": 8, "title": "Fail", "body": ""}, config_domain.RunnerConfig(repo_dir=tmp_path, prompt=tmp_path / "prompt.md", base_branch="main"), "xqliu/orbi-backlog").kind == "failed"
-    assert calls[1][2] == {"repo": "xqliu/orbi-backlog", "add": "ai-blocked", "remove": "ai-in-progress"}
-    # The terminal state is ai-blocked ALONE: the queue label the claim
-    # kept is cleared too.
-    assert calls[2][2] == {"repo": "xqliu/orbi-backlog", "remove": "ai-ready"}
+    # Issue #2357: the removal is written before the terminal add.
+    assert calls[1][2] == {"repo": "xqliu/orbi-backlog", "remove": "ai-ready"}
+    assert calls[2][2] == {"repo": "xqliu/orbi-backlog", "add": "ai-blocked"}
     assert calls[3][0] == "comment"
     failure_body = calls[3][2]["body"]
     # The failure is also published as the blocked milestone (Issue
@@ -273,13 +272,12 @@ def test_process_issue_terminal_failure_clears_the_repositorys_dispatch_label(
         "xqliu/orbi-backlog",
     )
     assert result.kind == "failed"
-    # The claim keeps ship and adds the in-flight label; the terminal
-    # blocked patch clears both and leaves ai-blocked alone.
+    # The claim adds the in-flight label; the terminal blocked patch
+    # removes the queue label first and ends on ai-blocked (Issue #2357).
     assert edits == [
         {"repo": "xqliu/orbi-backlog", "add": "ai-in-progress"},
-        {"repo": "xqliu/orbi-backlog", "add": "ai-blocked",
-         "remove": "ai-in-progress"},
         {"repo": "xqliu/orbi-backlog", "remove": "ship"},
+        {"repo": "xqliu/orbi-backlog", "add": "ai-blocked"},
     ]
 
 
@@ -422,9 +420,9 @@ def test_process_issue_delivery_no_commit_marks_blocked_without_crashing(
     edits = [entry for entry in calls if isinstance(entry, dict)]
     assert edits == [
         {"repo": "xqliu/orbi", "add": "ai-in-progress"},
-        {"repo": "xqliu/orbi", "add": "ai-blocked",
-         "remove": "ai-in-progress"},
+        # Issue #2357: removals first, the terminal add last.
         {"repo": "xqliu/orbi", "remove": "ai-ready"},
+        {"repo": "xqliu/orbi", "add": "ai-blocked"},
     ]
     comment_bodies = [
         entry[2]["body"] for entry in calls
@@ -560,8 +558,8 @@ def test_process_issue_empty_commit_marks_blocked_without_crashing(
             "xqliu/orbi",
         )
     assert result.kind == "failed"
-    assert {"repo": "xqliu/orbi", "add": "ai-blocked",
-            "remove": "ai-in-progress"} in edits
+    # Issue #2357: the terminal add is the last label write.
+    assert edits[-1] == {"repo": "xqliu/orbi", "add": "ai-blocked"}
     blocked = [body for body in comments if "Orbi: blocked" in body]
     assert len(blocked) == 1
     assert "no file change" in blocked[0]
@@ -1052,9 +1050,9 @@ def test_process_issue_idle_recovery_failure_marks_blocked(
     edits = [entry for entry in calls if isinstance(entry, dict)]
     assert edits == [
         {"repo": "xqliu/orbi", "add": "ai-in-progress"},
-        {"repo": "xqliu/orbi", "add": "ai-blocked",
-         "remove": "ai-in-progress"},
+        # Issue #2357: removals first, the terminal add last.
         {"repo": "xqliu/orbi", "remove": "ai-ready"},
+        {"repo": "xqliu/orbi", "add": "ai-blocked"},
     ]
     comment_bodies = [
         entry[2]["body"] for entry in calls
@@ -1134,7 +1132,7 @@ def test_process_issue_ends_cleanly_when_reporting_fails(monkeypatch, tmp_path, 
     # test_progress_wiring pins the other branch).
     assert edit_calls == [
         {"repo": "xqliu/orbi-backlog", "add": "ai-in-progress"},
-        {"repo": "xqliu/orbi-backlog", "add": "ai-blocked",
-         "remove": "ai-in-progress"},
+        # Issue #2357: removals first, the terminal add last.
         {"repo": "xqliu/orbi-backlog", "remove": "ai-ready"},
+        {"repo": "xqliu/orbi-backlog", "add": "ai-blocked"},
     ]

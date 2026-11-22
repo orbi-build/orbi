@@ -414,9 +414,12 @@ def test_process_issue_p0_failure_enters_ai_blocked_terminal_state(
     assert edit.call_args_list[0] == mock_call(
         18, repo="xqliu/orbi", add="ai-in-progress", remove="ai-ready",
     )
+    # Issue #2357: the removal is written before the terminal add.
     assert edit.call_args_list[1] == mock_call(
+        18, repo="xqliu/orbi", remove="ai-ready",
+    )
+    assert edit.call_args_list[2] == mock_call(
         18, repo="xqliu/orbi", add="ai-blocked",
-        remove="ai-in-progress",
     )
     # The failure comment carries the run marker and the reason.
     failure_comments = [
@@ -966,22 +969,15 @@ def test_recoverable_401_stops_after_three_identical_ticks(monkeypatch, tmp_path
     assert runner.process_issue(
         make_issue(), make_config(tmp_path), "xqliu/orbi",
     ).kind == "failed"
-    blocked_edits = [
-        call.kwargs for call in runner.edit_issue.call_args_list
-        if "ai-blocked" in str(call.kwargs)
-    ]
-    assert len(blocked_edits) == 1, runner.edit_issue.call_args_list
+    edits = [call.kwargs for call in runner.edit_issue.call_args_list]
     blockers = [
         body for body in (comment["body"] for comment in comments)
         if "Orbi failed:" in body
     ]
     assert len(blockers) == 1, comments
-    assert any(
-        edit.get("add") == "ai-blocked" for edit in blocked_edits
-    ), blocked_edits
-    assert any(
-        edit.get("remove") == "ai-in-progress" for edit in blocked_edits
-    ), blocked_edits
+    # Issue #2357: the terminal add is the last label write.
+    assert edits[-1].get("add") == "ai-blocked", edits
+    assert any(edit.get("remove") for edit in edits[:-1]), edits
     # The recovery comment keeps the two prior occurrences.
     assert len(_recoverable_scenes(comments)) == 1
     assert "<!-- orbi:fail=" in _recoverable_scenes(comments)[0]["body"]
@@ -2486,10 +2482,9 @@ def test_delivery_step_closed_unmerged_progress_failure_still_releases(
     # The `ai-blocked` transition (the blocked patch clears every
     # delivery-state label that is present — here only `ai-fix-needed`)
     # completed even though the progress publishing 404'd...
-    assert {
-        "repo": "owner/repo", "add": "ai-blocked",
-        "remove": "ai-fix-needed",
-    } in edits
+    # Issue #2357: the removal lands first, the terminal add last.
+    assert {"repo": "owner/repo", "remove": "ai-fix-needed"} in edits
+    assert edits[-1] == {"repo": "owner/repo", "add": "ai-blocked"}
     # ...the failure comment was posted...
     assert any(
         "closed without a merge" in kwargs.get("body", "")
@@ -2564,10 +2559,9 @@ def test_delivery_step_review_failure_progress_failure_still_releases(
 
     # The `ai-blocked` transition completed even though the progress
     # publishing 404'd...
-    assert {
-        "repo": "owner/repo", "add": "ai-blocked",
-        "remove": "ai-pr-opened",
-    } in edits
+    # Issue #2357: the removal lands first, the terminal add last.
+    assert {"repo": "owner/repo", "remove": "ai-pr-opened"} in edits
+    assert edits[-1] == {"repo": "owner/repo", "add": "ai-blocked"}
     # ...the failure comment was posted...
     assert any(
         "independent review" in kwargs.get("body", "")

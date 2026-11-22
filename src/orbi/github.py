@@ -24,7 +24,7 @@ from collections.abc import Callable
 from pathlib import Path
 from urllib.parse import quote
 
-from orbi import checks, gh_response, notify
+from orbi import checks, gh_response, notify, terminal_labels
 from orbi.delivery_labels import label_name_set, label_patch
 from orbi import delivery_labels
 from orbi.journal import LOGGER, event, run_command, single_line
@@ -633,30 +633,34 @@ def apply_label_patch(number: int, *, repo: str, event: str,
                       ready_label: str | None = None) -> None:
     """Compute the deterministic label patch for `event` and apply it.
 
-    `current_labels` is the Issue's current label names (read once by the
-    caller). The patch comes from `delivery_labels.label_patch` — the
-    single source of truth for the transition rules — so the
-    same current labels and event always produce the same idempotent
-    patch. `ready_label` is the repository's resolved claim label (Issue
-    #1775), passed through to that one decision. The patch is applied
-    through `edit_issue`: one call for the add plus the first remove, then
-    one call per extra remove (the pre-#175 kwargs). A no-op patch applies
-    nothing; after the last write `notify.patch_applied` (Issues #1673,
+    `current_labels` (read once by the caller) and `ready_label` (the
+    resolved claim label, Issue #1775) feed `delivery_labels.label_patch`,
+    the one transition decision. A TERMINAL patch (merged / blocked)
+    removes every old state label first and adds the terminal label LAST,
+    so the timeline ends on the new state (Issue #2357); a failed write
+    restores what it removed. Other events keep the pre-#2357 writes. A
+    no-op patch applies nothing; `notify.patch_applied` (Issues #1673,
     #2287) sends an ordinary handoff's message, never a stop's.
     """
     ready_label = delivery_labels.queue_label(ready_label)
     to_add, to_remove = label_patch(event, current_labels, ready_label)
     if not to_add and not to_remove:
         return
-    first_remove = to_remove[0] if to_remove else None
-    kwargs: dict = {"repo": repo}
-    if to_add:
-        kwargs["add"] = to_add[0]
-    if first_remove is not None:
-        kwargs["remove"] = first_remove
-    edit_issue(number, **kwargs)
-    for label in to_remove[1:]:
-        edit_issue(number, repo=repo, remove=label)
+    if event in (delivery_labels.EVENT_MERGED, delivery_labels.EVENT_BLOCKED):
+        terminal_labels.apply_terminal_patch(
+            number, repo=repo, to_add=to_add, to_remove=to_remove,
+            edit_issue=edit_issue, read_labels=issue_labels,
+        )
+    else:
+        first_remove = to_remove[0] if to_remove else None
+        kwargs: dict = {"repo": repo}
+        if to_add:
+            kwargs["add"] = to_add[0]
+        if first_remove is not None:
+            kwargs["remove"] = first_remove
+        edit_issue(number, **kwargs)
+        for label in to_remove[1:]:
+            edit_issue(number, repo=repo, remove=label)
     # Notifying the person is a pure bypass owned by `notify` (Issues
     # #1673/#1691): it decides from the event, the added labels and the
     # current labels, and reads the title lazily through the callable --

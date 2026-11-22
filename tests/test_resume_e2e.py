@@ -670,8 +670,8 @@ def test_e2e_pr_opened_without_fix_needed_never_starts_a_fixer(
     covers `ai-pr-opened`) and sends it straight to the delivery wait
     (independent review) — no fixer, no fresh claim, no second Pi.
     Issue #178: the resumed delivery is in flight from the verified PR
-    on, so the tick idempotently backfills `ai-in-progress` before the
-    wait takes over — exactly one label edit, no comment."""
+    on, so the tick writes no label at all (Issue #2357) and starts no
+    comment — the round keeps `ai-pr-opened`."""
     comments: list[str] = []
     edits: list[list[str]] = []
     install_fake_pi(monkeypatch, tmp_path, FAKE_PI)
@@ -700,11 +700,10 @@ def test_e2e_pr_opened_without_fix_needed_never_starts_a_fixer(
     # from the comment history, the Issue #1473 CI read answers the
     # candidate's PR state + rollup (completed/success — the resumed
     # candidate is not CI-pending), the resume verification reads the
-    # open PR of the derived branch, and the Issue #178 backfill
-    # re-adds `ai-in-progress` (the PR-opened transition removed it) —
-    # then the wait (stubbed below) takes over. The in-flight and ready
-    # scans never run (the delivery is resumed, so nothing is
-    # claimed), and the fake rejects anything else.
+    # open PR of the derived branch and writes NO label (the round keeps
+    # `ai-pr-opened`, Issue #2357) — then the wait (stubbed below) takes
+    # over. The in-flight and ready scans never run (the delivery is
+    # resumed, so nothing is claimed), and the fake rejects anything else.
     def fake_run(command, **kwargs):
         if command[:1] == ["git"]:
             # The resume verification reads the derived worktree's
@@ -752,8 +751,7 @@ def test_e2e_pr_opened_without_fix_needed_never_starts_a_fixer(
                     ],
                 })
             if command[2] == "edit":
-                # Issue #178: the idempotent `ai-in-progress`
-                # backfill of the resumed delivery.
+                # Issue #2357: a resumed round writes no label.
                 edits.append(command)
                 return ""
         if command[1] == "pr" and command[2] == "view":
@@ -826,16 +824,12 @@ def test_e2e_pr_opened_without_fix_needed_never_starts_a_fixer(
     # the URL that the resume verification (Issue #89) verified.
     assert waits[0][0][0] == PR_URL
     assert waits[0][0][1]["number"] == ISSUE_NUMBER
-    # No fixer ran: the delivery HEAD is unchanged and no comment
-    # touched the delivery Issue during the awaiting-review tick. The
-    # ONLY label edit is the Issue #178 idempotent `ai-in-progress`
-    # backfill (the PR-opened transition had removed it; the resumed
-    # delivery is in flight again) — the state label stays put.
+    # No fixer ran: the delivery HEAD is unchanged, no comment touched
+    # the delivery Issue and NO label was written during the
+    # awaiting-review tick — the resumed round keeps `ai-pr-opened`
+    # (no ai-in-progress backfill, Issue #2357).
     assert git(worktree, "rev-parse", "HEAD") == head_before
-    assert edits[edits_before:] == [[
-        "gh", "issue", "edit", str(ISSUE_NUMBER), "--repo", REPO,
-        "--add-label", "ai-in-progress",
-    ]]
+    assert edits[edits_before:] == []
     assert len(comments) == comments_before
     assert not any("fixed PR" in c for c in comments)
     # The awaiting-review fake rejects anything but the issue scans.
@@ -886,11 +880,12 @@ def test_e2e_public_comment_scene_is_never_resumed(
         REPO, tmp_path / "slots", 1,
         hooks=resume_deps(), language_code="en",
     ) is None
-    # The blocked transition happened (add ai-blocked, remove
-    # ai-fix-needed) and the failure comment names the reason...
+    # The blocked transition happened (the terminal add; the erroneous
+    # ai-pr-opened label is deliberately preserved, Issue #672) and the
+    # failure comment names the reason...
     assert [
         "gh", "issue", "edit", str(ISSUE_NUMBER), "--repo", REPO,
-        "--add-label", "ai-blocked", "--remove-label", "ai-fix-needed",
+        "--add-label", "ai-blocked",
     ] in edits
     assert len(comments) == 1
     assert "Orbi failed:" in comments[0]
@@ -993,12 +988,21 @@ def test_e2e_pr_closed_while_fix_needed_removes_leftover_label(
 
     # The Issue is marked ai-blocked; the blocked patch clears every
     # delivery-state label that is present — here only `ai-fix-needed`
-    # (the delivery was awaiting the next review session) — in one
-    # deterministic patch, leaving the terminal state ai-blocked alone.
+    # (the delivery was awaiting the next review session) — REMOVAL
+    # FIRST and the terminal add last (Issue #2357), so the timeline ends
+    # on the new state.
     assert [
         "gh", "issue", "edit", str(ISSUE_NUMBER), "--repo", REPO,
-        "--add-label", "ai-blocked", "--remove-label", "ai-fix-needed",
+        "--remove-label", "ai-fix-needed",
     ] in edits
+    assert [
+        "gh", "issue", "edit", str(ISSUE_NUMBER), "--repo", REPO,
+        "--add-label", "ai-blocked",
+    ] in edits
+    assert edits[-1] == [
+        "gh", "issue", "edit", str(ISSUE_NUMBER), "--repo", REPO,
+        "--add-label", "ai-blocked",
+    ]
     # The terminal state is ai-blocked alone.
     assert labels == ["ai-blocked"]
     # The failure comment carries the run marker.

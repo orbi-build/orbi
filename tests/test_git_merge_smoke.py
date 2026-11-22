@@ -615,8 +615,9 @@ def test_round_uses_the_gates_landed_verdict_after_a_failed_merge_call(
 
     assert merged is True
     assert landing_reads == [_LANDING_FIELDS]
-    assert {"repo": "owner/repo", "add": "ai-merged",
-            "remove": "ai-pr-opened"} in labels
+    # Issue #2357: the removal is written before the terminal add.
+    assert {"repo": "owner/repo", "remove": "ai-pr-opened"} in labels
+    assert labels[-1] == {"repo": "owner/repo", "add": "ai-merged"}
     merge_commit = git(clone, "rev-parse", "origin/main")
     assert f"merge_commit={merge_commit}" in comments[0]
     # Every later landing read is the 5xx that used to escape the round
@@ -640,5 +641,6 @@ def test_round_reads_the_landing_once_when_the_merge_call_succeeds(
 
     assert merged is True
     assert landing_reads == [_LANDING_FIELDS]
-    assert {"repo": "owner/repo", "add": "ai-merged",
-            "remove": "ai-pr-opened"} in labels
+    # Issue #2357: the removal is written before the terminal add.
+    assert {"repo": "owner/repo", "remove": "ai-pr-opened"} in labels
+    assert labels[-1] == {"repo": "owner/repo", "add": "ai-merged"}

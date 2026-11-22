@@ -428,7 +428,8 @@ def make_release_process_env(monkeypatch, *, body=RELEASE_DECLARATION_BODY,
                              leftover_labels=None, leftover_milestones=None,
                              release_tree_files=("pyproject.toml", "package.json"),
                              prepare_release_version_error=None,
-                             range_prs=None, range_commit_sink=None):
+                             range_prs=None, range_commit_sink=None,
+                             fail_merged_add=False):
     """Full fake environment for `process_release`.
 
     Returns a dict of captured state: edit_issue / comment_issue calls,
@@ -452,6 +453,10 @@ def make_release_process_env(monkeypatch, *, body=RELEASE_DECLARATION_BODY,
         "edits": [], "comments": [], "commands": [],
         "run_ids": [], "active_runs": [],
         "published": [],
+        # Issue #2357: the release Issue's real labels, so the terminal
+        # transition reads what is actually on it (the claim removed the
+        # queue label; `ai-release` is a type marker).
+        "labels": {"ai-ready", "ai-release"},
     }
 
     def fake_run_command(command, **kwargs):
@@ -491,6 +496,9 @@ def make_release_process_env(monkeypatch, *, body=RELEASE_DECLARATION_BODY,
             )
         if command[:3] == ["gh", "issue", "view"]:
             fields = command[command.index("--json") + 1]
+            if fields == "labels":
+                return json.dumps({"labels": [
+                    {"name": name} for name in sorted(state["labels"])]})
             if fields == "comments":
                 return json.dumps({"comments": []})
             number = int(command[3])
@@ -608,8 +616,17 @@ def make_release_process_env(monkeypatch, *, body=RELEASE_DECLARATION_BODY,
     monkeypatch.setattr(seam, "latest_run_id",
                         lambda r, s, n: existing_run_id)
     monkeypatch.setattr(seam, "freeze_base", lambda r, b: "abc123")
-    monkeypatch.setattr(seam, "edit_issue",
-                        lambda n, **k: state["edits"].append((n, k)))
+    def fake_edit_issue(n, **k):
+        if fail_merged_add and k.get("add") == "ai-merged":
+            # Issue #2357: the terminal add fails after the removals.
+            raise RuntimeError("GitHub unavailable")
+        state["edits"].append((n, k))
+        if k.get("add"):
+            state["labels"].add(k["add"])
+        if k.get("remove"):
+            state["labels"].discard(k["remove"])
+
+    monkeypatch.setattr(seam, "edit_issue", fake_edit_issue)
     monkeypatch.setattr(seam, "comment_issue",
                         lambda n, **k: state["comments"].append((n, k)))
     monkeypatch.setattr(seam, "create_worktree",

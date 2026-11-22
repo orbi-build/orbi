@@ -4249,10 +4249,14 @@ def test_delivery_step_marks_blocked_when_review_fails(
         PR_URL, issue, config_domain.RunnerConfig(repo_dir=tmp_path, base_branch="main"),
         "owner/repo",
     )
+    # Issue #2357: every removal is written before the terminal add.
     assert edits[0][1] == {
         "repo": "owner/repo",
-        "add": "ai-blocked",
         "remove": "ai-pr-opened",
+    }
+    assert edits[1][1] == {
+        "repo": "owner/repo",
+        "add": "ai-blocked",
     }
     body = comments[0][1]["body"]
     assert "the independent review of" in body
@@ -4358,17 +4362,16 @@ def test_delivery_step_marks_blocked_when_review_fails_while_fix_needed(
         PR_URL, issue, config_domain.RunnerConfig(repo_dir=tmp_path, base_branch="main"),
         "owner/repo",
     )
-    # The Issue is marked ai-blocked; the blocked patch clears every
-    # delivery-state label that is present — here only `ai-fix-needed`
-    # (the delivery was awaiting the next review session) — so the
-    # terminal state is ai-blocked alone (never ai-blocked + ai-fix-needed).
-    # One deterministic patch, not two hardcoded removes.
-    assert edits[0][1] == {
-        "repo": "owner/repo",
-        "add": "ai-blocked",
-        "remove": "ai-fix-needed",
-    }
-    assert len(edits) == 1
+    # Issue #2357: the round-start repair normalizes the stale
+    # ai-fix-needed to ai-pr-opened; the blocked terminal then removes the
+    # delivery-state label and adds ai-blocked LAST, so the timeline ends
+    # on the terminal state.
+    assert edits == [
+        ((39,), {"repo": "owner/repo", "add": "ai-pr-opened",
+                 "remove": "ai-fix-needed"}),
+        ((39,), {"repo": "owner/repo", "remove": "ai-fix-needed"}),
+        ((39,), {"repo": "owner/repo", "add": "ai-blocked"}),
+    ]
     body = comments[0][1]["body"]
     assert "the independent review of" in body
     assert f"<!-- orbi:run=a1b2c3d4 -->" in body
@@ -4483,10 +4486,14 @@ def test_delivery_step_blocks_when_scene_base_differs_from_config(
     # instead of re-checking the PR state.
     assert pr_calls["n"] == 1
     # The Issue is marked ai-blocked (removing ai-pr-opened) ...
+    # Issue #2357: every removal is written before the terminal add.
     assert edits[0][1] == {
         "repo": "owner/repo",
-        "add": "ai-blocked",
         "remove": "ai-pr-opened",
+    }
+    assert edits[1][1] == {
+        "repo": "owner/repo",
+        "add": "ai-blocked",
     }
     # ... with a failure comment that names BOTH base values and carries
     # the run marker.
@@ -4758,13 +4765,14 @@ def test_delivery_step_worktree_missing_while_fix_needed_keeps_label(
     )
     # No review was started.
     assert reviews == []
-    # The Issue already carries only ai-fix-needed, so no absent label is
-    # removed; the state remains in the automatic fix loop.
-    assert edits[0][1] == {
-        "repo": "owner/repo",
-        "add": "ai-fix-needed",
-    }
-    assert len(edits) == 1
+    # Issue #2357: the round-start repair normalizes the stale
+    # ai-fix-needed to ai-pr-opened; the recoverable failure then sets
+    # ai-fix-needed again, the same end state as before.
+    assert edits == [
+        ((39,), {"repo": "owner/repo", "add": "ai-pr-opened",
+                 "remove": "ai-fix-needed"}),
+        ((39,), {"repo": "owner/repo", "add": "ai-fix-needed"}),
+    ]
     body = comments[0][1]["body"]
     assert "Orbi needs a fix:" in body
     assert "branch: `orbi/owner-repo-issue-39`" in body
@@ -4776,7 +4784,10 @@ def test_delivery_step_runs_review_when_fix_needed(
     """A fix-needed delivery runs the SAME independent review as an
     awaiting-review delivery (Issue #82: the review session fixes
     findings in the same session — no cold-start fixer). Issue #788: the
-    step runs the round ONCE and returns; the next tick resumes."""
+    step runs the round ONCE and returns; the next tick resumes.
+    Issue #2357: the resumed round writes no ai-in-progress; its stale
+    ai-fix-needed is normalized to ai-pr-opened alone."""
+    edits = []
 
     def fake_run(command, **kwargs):
         if command[:2] == ["gh", "pr"] and command[2] == "view":
@@ -4800,6 +4811,9 @@ def test_delivery_step_runs_review_when_fix_needed(
                     "author": {"login": "maintainer"},
                 },
             ]})
+        if command[1] == "issue" and command[2] == "edit":
+            edits.append(command)
+            return ""
         if command == ["git", "branch", "--show-current"]:
             return "orbi/owner-repo-issue-39"
         raise AssertionError(f"unexpected command: {command}")
@@ -4824,6 +4838,13 @@ def test_delivery_step_runs_review_when_fix_needed(
     caplog.set_level("INFO")
     config = config_domain.RunnerConfig(repo_dir=tmp_path, base_branch="main")
     runner.delivery_step(PR_URL, issue, config, "owner/repo")
+    # Issue #2357: no ai-in-progress is written; the stale ai-fix-needed
+    # is normalized to ai-pr-opened alone before the review.
+    assert not any("ai-in-progress" in command for command in edits)
+    assert edits == [[
+        "gh", "issue", "edit", "39", "--repo", "owner/repo",
+        "--add-label", "ai-pr-opened", "--remove-label", "ai-fix-needed",
+    ]]
     # ONE review round per tick (Issue #788): the step returns after it.
     assert len(reviews) == 1
     # No fixer: the review ran on the derived worktree/branch of the
@@ -4905,12 +4926,16 @@ def test_delivery_step_marks_blocked_when_pr_closed_unmerged(
     # (the delivery was awaiting the next review session) — so the
     # terminal state is ai-blocked alone. One deterministic patch,
     # not two hardcoded removes.
+    # Issue #2357: the removal is written before the terminal add.
     assert edits[0][1] == {
         "repo": "owner/repo",
-        "add": "ai-blocked",
         "remove": "ai-fix-needed",
     }
-    assert len(edits) == 1
+    assert edits[1][1] == {
+        "repo": "owner/repo",
+        "add": "ai-blocked",
+    }
+    assert len(edits) == 2
     # ... with a failure comment carrying the run marker and run_id and,
     # from the ONE blocked exit, the community help line last (Issue #1730).
     body = comments[0][1]["body"]
@@ -4987,10 +5012,11 @@ def test_delivery_step_blocked_clears_the_repositorys_dispatch_label(
     )
     # The blocked transition clears the delivery state AND the queue label
     # the claim scanned: `ai-blocked` ALONE, no `ship` residue.
+    # Issue #2357: removals first, terminal add last.
     assert edits == [
-        ((39,), {"repo": "owner/repo", "add": "ai-blocked",
-                 "remove": "ai-fix-needed"}),
+        ((39,), {"repo": "owner/repo", "remove": "ai-fix-needed"}),
         ((39,), {"repo": "owner/repo", "remove": "ship"}),
+        ((39,), {"repo": "owner/repo", "add": "ai-blocked"}),
     ]
 
 
@@ -5072,10 +5098,14 @@ def test_delivery_step_review_failure_without_bound_run_id(
         PR_URL, issue, config_domain.RunnerConfig(repo_dir=tmp_path, base_branch="main"),
         "owner/repo",
     )
+    # Issue #2357: every removal is written before the terminal add.
     assert edits[0][1] == {
         "repo": "owner/repo",
-        "add": "ai-blocked",
         "remove": "ai-pr-opened",
+    }
+    assert edits[1][1] == {
+        "repo": "owner/repo",
+        "add": "ai-blocked",
     }
     body = comments[0][1]["body"]
     assert "the independent review of" in body
@@ -5688,10 +5718,14 @@ def test_run_review_round_returns_none_when_scene_base_differs(
     )
     assert outcome is None
     assert reviews == []
+    # Issue #2357: every removal is written before the terminal add.
     assert edits[0][1] == {
         "repo": "owner/repo",
-        "add": "ai-blocked",
         "remove": "ai-pr-opened",
+    }
+    assert edits[1][1] == {
+        "repo": "owner/repo",
+        "add": "ai-blocked",
     }
     assert "Orbi failed:" in comments[0][1]["body"]
     assert "base_branch=develop" in comments[0][1]["body"]
@@ -5745,7 +5779,7 @@ def test_run_review_round_failure_comment_follows_the_config_language(
     )
     assert outcome is None
     assert reviews == []
-    assert edits[0][1]["add"] == "ai-blocked"
+    assert edits[-1][1]["add"] == "ai-blocked"
     body = comments[0][1]["body"]
     assert "Orbi：已阻塞 —— 等待人工决定" in body
     assert "**原因：**" in body
@@ -6778,11 +6812,15 @@ def test_route_external_pr_probe_failure_falls_through_to_block(
     落回 missing-scene 分支自己的 block 路径，让失败被看见。"""
     monkeypatch.setattr(seam, "slot_occupancy", lambda *a, **k: [])
     monkeypatch.setattr(seam, "issue_comments", lambda number, repo: [])
-    monkeypatch.setattr(seam, "run_command",
-        lambda command, **kwargs: json.dumps([issue])
-        if command[:3] == ["gh", "issue", "list"]
-        else (_ for _ in ()).throw(RuntimeError("gh down")),
-    )
+    def failing_probe(command, **kwargs):
+        if command[:3] == ["gh", "issue", "list"]:
+            return json.dumps([issue])
+        if (command[1] == "issue" and command[2] == "view"
+                and command[-1] == "labels"):
+            return json.dumps({"labels": issue["labels"]})
+        raise RuntimeError("gh down")
+
+    monkeypatch.setattr(seam, "run_command", failing_probe)
     edits = []
     posted = []
     monkeypatch.setattr(seam, "edit_issue",
@@ -6800,10 +6838,10 @@ def test_route_external_pr_probe_failure_falls_through_to_block(
     )
     assert result is None
     # ai-blocked ALONE: the queue label the claim kept goes too (#1775).
+    # Issue #2357: the label actually on the Issue is preserved (#672),
+    # so the terminal add is the only write.
     assert edits == [
-        ((100,), {"repo": "owner/repo",
-                  "add": "ai-blocked", "remove": "ai-fix-needed"}),
-        ((100,), {"repo": "owner/repo", "remove": "ai-ready"}),
+        ((100,), {"repo": "owner/repo", "add": "ai-blocked"}),
     ]
     assert "no trusted 'Orbi opened PR'" in posted[0]
 
@@ -6815,13 +6853,19 @@ def test_route_external_pr_unknown_state_falls_through_to_block(
     block 路径——路由器只承诺三种已知世界。"""
     monkeypatch.setattr(seam, "slot_occupancy", lambda *a, **k: [])
     monkeypatch.setattr(seam, "issue_comments", lambda number, repo: [])
-    monkeypatch.setattr(seam, "run_command",
-        lambda command, **kwargs: json.dumps([issue])
-        if command[:3] == ["gh", "issue", "list"] else (
-        json.dumps({"state": "DRAFT"})
-        if command[:3] == ["gh", "pr", "view"] else (_ for _ in ()).throw(
-            AssertionError(f"unexpected command: {command}"))),
-    )
+    def draft_state(command, **kwargs):
+        if command[:3] == ["gh", "issue", "list"]:
+            return json.dumps([issue])
+        if (command[1] == "issue" and command[2] == "view"
+                and command[-1] == "labels"):
+            return json.dumps({"labels": issue["labels"]})
+        if command[:3] == ["gh", "pr", "view"]:
+            return json.dumps({"state": "DRAFT"})
+        raise AssertionError(f"unexpected command: {command}")
+
+    monkeypatch.setattr(seam, "run_command", draft_state)
+    with pytest.raises(AssertionError, match="unexpected command"):
+        draft_state(["gh", "release", "list"])
     edits = []
     posted = []
     monkeypatch.setattr(seam, "edit_issue",
@@ -6839,10 +6883,10 @@ def test_route_external_pr_unknown_state_falls_through_to_block(
     )
     assert result is None
     # ai-blocked ALONE: the queue label the claim kept goes too (#1775).
+    # Issue #2357: the label actually on the Issue is preserved (#672),
+    # so the terminal add is the only write.
     assert edits == [
-        ((100,), {"repo": "owner/repo",
-                  "add": "ai-blocked", "remove": "ai-fix-needed"}),
-        ((100,), {"repo": "owner/repo", "remove": "ai-ready"}),
+        ((100,), {"repo": "owner/repo", "add": "ai-blocked"}),
     ]
     assert "no trusted 'Orbi opened PR'" in posted[0]
 
@@ -6858,6 +6902,9 @@ def test_route_external_pr_ignores_tickets_without_marker(
     def fake_run(command, **kwargs):
         if command[:3] == ["gh", "issue", "list"]:
             return json.dumps([issue])
+        if (command[1] == "issue" and command[2] == "view"
+                and command[-1] == "labels"):
+            return json.dumps({"labels": issue["labels"]})
         raise AssertionError(f"unexpected command: {command}")
 
     monkeypatch.setattr(seam, "run_command", fake_run)
@@ -6877,10 +6924,10 @@ def test_route_external_pr_ignores_tickets_without_marker(
     )
     assert result is None
     # ai-blocked ALONE: the queue label the claim kept goes too (#1775).
+    # Issue #2357: the label actually on the Issue is preserved (#672),
+    # so the terminal add is the only write.
     assert edits == [
-        ((41,), {"repo": "owner/repo",
-                 "add": "ai-blocked", "remove": "ai-fix-needed"}),
-        ((41,), {"repo": "owner/repo", "remove": "ai-ready"}),
+        ((41,), {"repo": "owner/repo", "add": "ai-blocked"}),
     ]
     assert "no trusted 'Orbi opened PR'" in posted[0]
     with pytest.raises(AssertionError, match="unexpected command"):

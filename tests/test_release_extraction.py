@@ -205,10 +205,11 @@ def test_release_success_path_golden_comment_and_side_effects(monkeypatch):
         ["gh", "issue", "close", "99", "--repo", "o/r"])
     # Labels: claimed (the queue entry goes with it, #2309), then
     # ai-merged alone (ai-ready cleared, #1526).
+    # Issue #2357: every removal is written before the terminal add, so
+    # the timeline ends on ai-merged.
     assert state["edits"] == [
         (99, {"repo": "o/r", "add": "ai-in-progress",
               "remove": "ai-ready"}),
-        (99, {"repo": "o/r", "add": "ai-merged",
-              "remove": "ai-in-progress"}),
-        (99, {"repo": "o/r", "remove": "ai-ready"}),
+        (99, {"repo": "o/r", "remove": "ai-in-progress"}),
+        (99, {"repo": "o/r", "add": "ai-merged"}),
     ]
