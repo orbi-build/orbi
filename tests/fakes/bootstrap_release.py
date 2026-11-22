@@ -461,6 +461,16 @@ def make_release_process_env(monkeypatch, *, body=RELEASE_DECLARATION_BODY,
 
     def fake_run_command(command, **kwargs):
         state["commands"].append((command, kwargs))
+        if (command[0:4] == ["gh", "api", "--method", "PUT"]
+                and command[4].endswith("/labels")):
+            # Issue #2369: the claim's whole-set label replacement.
+            state["labels"] = {
+                value[len("labels[]="):] for value in command
+                if value.startswith("labels[]=")
+            }
+            return json.dumps([
+                {"name": name} for name in sorted(state["labels"])
+            ])
         # Issue #1492: the release notes come from the tagged commit range,
         # computed by real git against a real checkout in production. This
         # fake env has no repository, so the range is modelled here from

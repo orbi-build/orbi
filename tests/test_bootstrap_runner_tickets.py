@@ -204,6 +204,7 @@ def test_process_ticket_only_posts_agent_output_without_git_delivery(monkeypatch
     edits = []
     comments = []
     commands = []
+    label_writes = []
     monkeypatch.setattr(seam, "new_run_id", lambda: "a1b2c3d4")
     monkeypatch.setattr(seam, "set_run_id", lambda run_id: None)
     monkeypatch.setattr(seam, "edit_issue",
@@ -214,8 +215,21 @@ def test_process_ticket_only_posts_agent_output_without_git_delivery(monkeypatch
                         lambda *args, **kwargs: "\u53ef\u4ee5\u76f4\u63a5\u53d1\u5e03\u7684\u5e16\u5b50")
     monkeypatch.setattr(runner, "ProgressPublisher", Mock())
     monkeypatch.setattr(seam, "safe_publish", lambda **kwargs: None)
-    monkeypatch.setattr(seam, "run_command",
-                        lambda command, **kwargs: commands.append(command) or "")
+
+    def run(command, **kwargs):
+        commands.append(command)
+        if command[0:3] == ["gh", "issue", "view"] and command[-1] == "labels":
+            # `bug` is not in the caller's snapshot: it must survive the
+            # whole-set replacement (Issue #2369).
+            return json.dumps({"labels": [
+                {"name": "ai-ready"}, {"name": "ai-content-only"},
+                {"name": "bug"},
+            ]})
+        if command[0:2] == ["gh", "api"]:
+            label_writes.append(command)
+        return ""
+
+    monkeypatch.setattr(seam, "run_command", run)
 
     result = runner.process_issue(
         issue,
@@ -226,11 +240,15 @@ def test_process_ticket_only_posts_agent_output_without_git_delivery(monkeypatch
     )
 
     assert result == runner.IssueResult("ticket-only", None)
-    assert edits == [
-        (99, {"repo": "o/r", "add": "ai-in-progress",
-              "remove": "ai-ready"}),
-        (99, {"repo": "o/r", "remove": "ai-in-progress"}),
-    ]
+    # Issue #2369: the claim is ONE whole-set replacement (the queue label
+    # goes, `ai-in-progress` comes, the content label stays); the terminal
+    # close clears the claim label directly.
+    assert label_writes == [[
+        "gh", "api", "--method", "PUT", "repos/o/r/issues/99/labels",
+        "-f", "labels[]=ai-content-only", "-f", "labels[]=bug",
+        "-f", "labels[]=ai-in-progress", "--include",
+    ]]
+    assert edits == [(99, {"repo": "o/r", "remove": "ai-in-progress"})]
     assert comments and "\u53ef\u4ee5\u76f4\u63a5\u53d1\u5e03\u7684\u5e16\u5b50" in comments[0][1]["body"]
     # Issue #1826: the delivery record carries the readable summary with
     # the operator's fixed status link, before the agent's output.
@@ -245,7 +263,7 @@ def test_process_ticket_only_posts_agent_output_without_git_delivery(monkeypatch
     )
     assert "<!-- orbi:run=a1b2c3d4 -->" in comments[0][1]["body"]
     assert "run_id=a1b2c3d4" in comments[0][1]["body"]
-    assert commands == [["gh", "issue", "close", "99", "--repo", "o/r"]]
+    assert ["gh", "issue", "close", "99", "--repo", "o/r"] in commands
 
 
 def _answer_terminal_labels(monkeypatch, labels):
@@ -359,9 +377,8 @@ def test_process_issue_keeps_pr_ready_label_when_scene_comment_5xx_exhausts(
     monkeypatch.setattr(seam, "has_in_progress_label", lambda n, r: False)
     monkeypatch.setattr(seam, "stable_branch_exists", lambda *a, **k: False)
     monkeypatch.setattr(seam, "freeze_base", lambda r, b: "abc123")
-    edits = []
-    monkeypatch.setattr(seam, "edit_issue",
-                        lambda *args, **kwargs: edits.append((args, kwargs)))
+    label_writes: list[list[str]] = []
+    monkeypatch.setattr(seam, "edit_issue", lambda *args, **kwargs: None)
     monkeypatch.setattr(seam, "set_active_run", lambda *args, **k: None)
     worktree = tmp_path / "wt"
     worktree.mkdir()
@@ -381,6 +398,11 @@ def test_process_issue_keeps_pr_ready_label_when_scene_comment_5xx_exhausts(
     def run(command, **kwargs):
         if command[0:3] == ["gh", "pr", "list"]:
             return "[]"
+        if command[0:3] == ["gh", "issue", "view"] and command[-1] == "labels":
+            return json.dumps({"labels": [{"name": "ai-ready"}]})
+        if command[0:2] == ["gh", "api"]:
+            label_writes.append(command)
+            return ""
         return "abc123"
     monkeypatch.setattr(seam, "run_command", run)
     monkeypatch.setattr(seam, "delivery_step", Mock())
@@ -397,7 +419,13 @@ def test_process_issue_keeps_pr_ready_label_when_scene_comment_5xx_exhausts(
             issue, config_domain.RunnerConfig(base_branch="main", repo_dir=tmp_path), "o/r",
         )
     assert result == runner.IssueResult("pr", "https://github.com/o/r/pull/1")
-    assert any(kwargs.get("add") == delivery_labels.PR_OPENED_LABEL for _, kwargs in edits)
+    # Issue #2369: PR-opened is one whole-set replacement ending on
+    # `ai-pr-opened`.
+    assert any(
+        write[2:4] == ["--method", "PUT"]
+        and "labels[]=ai-pr-opened" in write
+        for write in label_writes
+    )
     assert "progress_comment_failed" in caplog.text
 
 
@@ -476,6 +504,8 @@ def _ops_issue_mocks(monkeypatch, tmp_path, *, head_sha: str, dirty: str):
 
     def fake_run(command, **kwargs):
         commands.append(command)
+        if command[0:3] == ["gh", "issue", "view"] and command[-1] == "labels":
+            return json.dumps({"labels": issue["labels"]})
         if command[:2] == ["git", "rev-parse"]:
             # Issue #1581: the tree probes get their own ref back, so
             # the delivered head tree differs from the frozen base tree.
@@ -623,10 +653,16 @@ def test_process_issue_ops_with_uncommitted_leftovers_fails_fast(
     assert result == runner.IssueResult("failed", None)
     cleanup.assert_not_called()
     runner.cleanup_task_worktree = original_cleanup
-    runner.edit_issue.assert_called_once_with(
-        99, repo="o/r", add=delivery_labels.IN_PROGRESS_LABEL,
-        remove=delivery_labels.READY_LABEL,
-    )
+    claim_writes = [
+        command for command in commands
+        if command[0:2] == ["gh", "api"]
+        and command[2:4] == ["--method", "PUT"]
+    ]
+    assert claim_writes == [[
+        "gh", "api", "--method", "PUT", "repos/o/r/issues/99/labels",
+        "-f", "labels[]=ai-ops-only", "-f", "labels[]=ai-in-progress",
+        "--include",
+    ]]
 
 
 def test_bot_git_identity_overrides_git_config(tmp_path):
@@ -674,3 +710,4 @@ def test_runner_main_pins_bot_git_identity(monkeypatch, tmp_path):
         "327503608+orbi-build[bot]@users.noreply.github.com"
     )
     assert os.environ["GIT_COMMITTER_NAME"] == "orbi-build[bot]"
+

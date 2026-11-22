@@ -203,13 +203,20 @@ def test_release_success_path_golden_comment_and_side_effects(monkeypatch):
                        "--method", "PATCH", "-f", "state=closed"]
     assert commands.index(close_milestone) > commands.index(
         ["gh", "issue", "close", "99", "--repo", "o/r"])
-    # Labels: claimed (the queue entry goes with it, #2309), then
-    # ai-merged alone (ai-ready cleared, #1526).
+    # Labels: claimed with ONE whole-set replacement (Issue #2369: the
+    # queue entry goes, the in-flight one comes, `ai-release` stays),
+    # then ai-merged alone (ai-in-progress cleared, #1526).
     # Issue #2357: every removal is written before the terminal add, so
     # the timeline ends on ai-merged.
+    assert [
+        command for command, _ in state["commands"]
+        if command[2:4] == ["--method", "PUT"]
+    ] == [[
+        "gh", "api", "--method", "PUT", "repos/o/r/issues/99/labels",
+        "-f", "labels[]=ai-release", "-f", "labels[]=ai-in-progress",
+        "--include",
+    ]]
     assert state["edits"] == [
-        (99, {"repo": "o/r", "add": "ai-in-progress",
-              "remove": "ai-ready"}),
         (99, {"repo": "o/r", "remove": "ai-in-progress"}),
         (99, {"repo": "o/r", "add": "ai-merged"}),
     ]

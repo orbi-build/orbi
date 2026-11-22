@@ -431,43 +431,56 @@ def test_edit_issue_builds_add_and_remove_flags(monkeypatch):
 
 def test_apply_label_patch_applies_the_idempotent_patch(monkeypatch):
     captured = []
-    monkeypatch.setattr(seam, "run_command", lambda c, **k: (
-        captured.append(c), "")[1])
+    issue_labels = {"current": ["ai-ready"]}
 
-    # ai-ready + claim -> ai-in-progress added and the queue label
-    # removed in the SAME edit call (Issue #2309).
+    def fake_run(command, **kwargs):
+        captured.append(command)
+        if command[0:3] == ["gh", "issue", "view"] and command[-1] == "labels":
+            return json.dumps({"labels": [
+                {"name": name} for name in issue_labels["current"]
+            ]})
+        return ""
+
+    monkeypatch.setattr(seam, "run_command", fake_run)
+
+    # Issue #2369: the claim reads the Issue's labels and replaces the
+    # WHOLE set in one write (GitHub's "Set labels for an issue").
     github.apply_label_patch(
         4, repo="o/r", event="claim",
         current_labels={"ai-ready"},
     )
     assert captured == [
-        ["gh", "issue", "edit", "4", "--repo", "o/r",
-         "--add-label", "ai-in-progress", "--remove-label", "ai-ready"],
+        ["gh", "issue", "view", "4", "--repo", "o/r", "--json", "labels"],
+        ["gh", "api", "--method", "PUT", "repos/o/r/issues/4/labels",
+         "-f", "labels[]=ai-in-progress", "--include"],
     ]
 
-    # A stale fix-needed residue is removed in the SAME edit call, and the
-    # second remove (the queue label) is its own call.
+    # The fresh read is the set: an unrelated label that was not in the
+    # caller's snapshot survives the claim, and the stale fix-needed /
+    # queue labels go — still ONE write.
+    issue_labels["current"] = ["ai-ready", "ai-fix-needed", "bug"]
+    captured.clear()
     github.apply_label_patch(
         4, repo="o/r", event="claim",
-        current_labels={"ai-ready", "ai-fix-needed"},
+        current_labels={"ai-ready"},
     )
-    assert captured[-2:] == [
-        ["gh", "issue", "edit", "4", "--repo", "o/r",
-         "--add-label", "ai-in-progress", "--remove-label", "ai-fix-needed"],
-        ["gh", "issue", "edit", "4", "--repo", "o/r",
-         "--remove-label", "ai-ready"],
+    assert captured == [
+        ["gh", "issue", "view", "4", "--repo", "o/r", "--json", "labels"],
+        ["gh", "api", "--method", "PUT", "repos/o/r/issues/4/labels",
+         "-f", "labels[]=bug", "-f", "labels[]=ai-in-progress",
+         "--include"],
     ]
 
-    # A no-op patch (no add, no remove) applies nothing. No real event
-    # produces one today — the guard is the contract, so the patch
-    # computation is stubbed to the empty patch here.
+    # A patch that changes nothing writes nothing (only the one read).
     monkeypatch.setattr(
         github, "label_patch",
         lambda event, labels, ready_label=None: ([], []),
     )
     captured.clear()
     github.apply_label_patch(4, repo="o/r", event="claim", current_labels=set())
-    assert captured == []
+    assert captured == [
+        ["gh", "issue", "view", "4", "--repo", "o/r", "--json", "labels"],
+    ]
 
 
 def test_comment_issue_wraps_the_body_in_the_status_format(monkeypatch):

@@ -122,7 +122,15 @@ elif args[:2] == ["issue", "comment"]:
         {"issue": args[2], "body": args[args.index("--body") + 1]})
     save()
 elif args[:1] == ["api"]:
-    if "--method" in args:
+    if args[:3] == ["api", "--method", "PUT"]:
+        # Issue #2369: the whole-set label replacement
+        # (`PUT repos/<owner>/<repo>/issues/<n>/labels`).
+        issue = state["issues"][args[3].split("/")[4]]
+        issue["labels"] = [a[len("labels[]="):] for a in args
+                           if a.startswith("labels[]=")]
+        save()
+        print(json.dumps([{"name": label} for label in issue["labels"]]))
+    elif "--method" in args:
         method = args[args.index("--method") + 1]
         body = args[args.index("--field") + 1][len("body="):]
         if method == "POST":

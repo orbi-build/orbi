@@ -38,6 +38,7 @@ import pytest
 
 import orbi.claim as claim
 import orbi.failure_report as failure_report
+import orbi.implementation_delivery as implementation_delivery
 import orbi.runner as runner
 import orbi.pr_verification as pr_verification
 import orbi.resume_verification as resume_verification
@@ -56,7 +57,7 @@ from tests.fakes.waiting_checks import PENDING_HEAD, bind_pending_delivery
 import orbi.journal as journal
 from seam import resume_deps, seam
 from orbi.delivery_labels import EVENT_BLOCKED
-from orbi.delivery_scene import RunContext
+from orbi.delivery_scene import DeliveryFacts, RunContext
 
 # Issue #1826: the operator's one optional project status page.
 TASK_STATUS_URL = "https://tasks.example.org/project-status?repo=example%2Fwidget"
@@ -4362,13 +4363,18 @@ def test_delivery_step_marks_blocked_when_review_fails_while_fix_needed(
         PR_URL, issue, config_domain.RunnerConfig(repo_dir=tmp_path, base_branch="main"),
         "owner/repo",
     )
-    # Issue #2357: the round-start repair normalizes the stale
-    # ai-fix-needed to ai-pr-opened; the blocked terminal then removes the
-    # delivery-state label and adds ai-blocked LAST, so the timeline ends
-    # on the terminal state.
+    # Issue #2369: the round-start repair is ONE whole-set replacement
+    # ending on ai-pr-opened; the blocked terminal then removes the
+    # delivery-state label and adds ai-blocked LAST.
+    assert [
+        command for command in api_calls
+        if command[2:4] == ["--method", "PUT"]
+    ] == [[
+        "gh", "api", "--method", "PUT",
+        "repos/owner/repo/issues/39/labels",
+        "-f", "labels[]=ai-pr-opened", "--include",
+    ]]
     assert edits == [
-        ((39,), {"repo": "owner/repo", "add": "ai-pr-opened",
-                 "remove": "ai-fix-needed"}),
         ((39,), {"repo": "owner/repo", "remove": "ai-fix-needed"}),
         ((39,), {"repo": "owner/repo", "add": "ai-blocked"}),
     ]
@@ -4765,12 +4771,18 @@ def test_delivery_step_worktree_missing_while_fix_needed_keeps_label(
     )
     # No review was started.
     assert reviews == []
-    # Issue #2357: the round-start repair normalizes the stale
-    # ai-fix-needed to ai-pr-opened; the recoverable failure then sets
+    # Issue #2369: the round-start repair is ONE whole-set replacement
+    # ending on ai-pr-opened; the recoverable failure then sets
     # ai-fix-needed again, the same end state as before.
+    assert [
+        command for command in api_calls
+        if command[2:4] == ["--method", "PUT"]
+    ] == [[
+        "gh", "api", "--method", "PUT",
+        "repos/owner/repo/issues/39/labels",
+        "-f", "labels[]=ai-pr-opened", "--include",
+    ]]
     assert edits == [
-        ((39,), {"repo": "owner/repo", "add": "ai-pr-opened",
-                 "remove": "ai-fix-needed"}),
         ((39,), {"repo": "owner/repo", "add": "ai-fix-needed"}),
     ]
     body = comments[0][1]["body"]
@@ -4788,6 +4800,7 @@ def test_delivery_step_runs_review_when_fix_needed(
     Issue #2357: the resumed round writes no ai-in-progress; its stale
     ai-fix-needed is normalized to ai-pr-opened alone."""
     edits = []
+    label_writes = []
 
     def fake_run(command, **kwargs):
         if command[:2] == ["gh", "pr"] and command[2] == "view":
@@ -4811,6 +4824,10 @@ def test_delivery_step_runs_review_when_fix_needed(
                     "author": {"login": "maintainer"},
                 },
             ]})
+        if command[0:2] == ["gh", "api"]:
+            # Issue #2369: the repair's whole-set label replacement.
+            label_writes.append(command)
+            return ""
         if command[1] == "issue" and command[2] == "edit":
             edits.append(command)
             return ""
@@ -4838,13 +4855,15 @@ def test_delivery_step_runs_review_when_fix_needed(
     caplog.set_level("INFO")
     config = config_domain.RunnerConfig(repo_dir=tmp_path, base_branch="main")
     runner.delivery_step(PR_URL, issue, config, "owner/repo")
-    # Issue #2357: no ai-in-progress is written; the stale ai-fix-needed
-    # is normalized to ai-pr-opened alone before the review.
-    assert not any("ai-in-progress" in command for command in edits)
-    assert edits == [[
-        "gh", "issue", "edit", "39", "--repo", "owner/repo",
-        "--add-label", "ai-pr-opened", "--remove-label", "ai-fix-needed",
+    # Issue #2369: no ai-in-progress is written; the stale ai-fix-needed
+    # is normalized to ai-pr-opened alone in ONE whole-set replacement.
+    assert not any("ai-in-progress" in command for command in label_writes)
+    assert label_writes == [[
+        "gh", "api", "--method", "PUT",
+        "repos/owner/repo/issues/39/labels",
+        "-f", "labels[]=ai-pr-opened", "--include",
     ]]
+    assert edits == []
     # ONE review round per tick (Issue #788): the step returns after it.
     assert len(reviews) == 1
     # No fixer: the review ran on the derived worktree/branch of the
@@ -5158,9 +5177,15 @@ def test_delivery_step_repairs_in_progress_label_and_logs_ci(
         PR_URL, {"number": 39, "title": "task", "body": ""},
         config_domain.RunnerConfig(repo_dir=tmp_path, base_branch="main"), "owner/repo",
     )
-    assert any("--add-label" in call and "ai-pr-opened" in call
-               and "--remove-label" in call and "ai-in-progress" in call
-               for call in calls)
+    # Issue #2369: the repair is ONE whole-set replacement ending on
+    # ai-pr-opened.
+    assert [
+        call for call in calls if call[2:4] == ["--method", "PUT"]
+    ] == [[
+        "gh", "api", "--method", "PUT",
+        "repos/owner/repo/issues/39/labels",
+        "-f", "labels[]=ai-pr-opened", "--include",
+    ]]
     assert "tests=COMPLETED/SUCCESS" in caplog.text
     assert "lint=COMPLETED/SKIPPED" in caplog.text
 
@@ -7026,3 +7051,41 @@ def test_a_stopped_run_is_neither_resumed_nor_reclaimed(monkeypatch, tmp_path):
     ) is None
     assert claim.pick_issue("xqliu/orbi") is None
     assert claim.pick_issue("xqliu/orbi", dispatch_label="ship") is None
+
+
+def test_claim_issue_is_one_whole_set_replacement(monkeypatch):
+    """Issue #2369 acceptance 1: the claim `_claim_issue` performs is ONE
+    whole-set replacement computed from a fresh read — a label the
+    caller's snapshot lacks survives, the queue label goes and
+    `ai-in-progress` comes."""
+    fake = FakeGh("o/r")
+    fake.add_issue(7, labels=("ai-ready", "bug"))
+    monkeypatch.setattr(seam, "run_command", fake)
+    hooks = Mock()
+    attempt = implementation_delivery._Attempt(
+        issue={"number": 7},
+        source_repo="o/r",
+        facts=DeliveryFacts(
+            labels=frozenset({"ai-ready", "bug"}),
+            # The stale snapshot the scan produced: it lacks `bug`.
+            claim_labels=frozenset({"ai-ready"}),
+            dispatch_label="ai-ready",
+        ),
+        hooks=hooks,
+        ops=False,
+        run_id="a1b2c3d4",
+        config=config_domain.RunnerConfig(repo_dir=Path("/repo")),
+        priority="normal",
+        started=0.0,
+    )
+    implementation_delivery._claim_issue(attempt)
+    assert fake.issues[7]["labels"] == ["bug", "ai-in-progress"]
+    assert [
+        command for command in fake.commands
+        if command[0:4] == ["gh", "api", "--method", "PUT"]
+    ] == [[
+        "gh", "api", "--method", "PUT", "repos/o/r/issues/7/labels",
+        "-f", "labels[]=bug", "-f", "labels[]=ai-in-progress",
+        "--include",
+    ]]
+    hooks.runner_health.record_pickup.assert_called_once_with(Path("/repo"))

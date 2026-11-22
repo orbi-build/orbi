@@ -108,6 +108,16 @@ def make_fake_gh(monkeypatch, comments=None, in_progress=False):
     return calls, posted
 
 
+def _label_writes(calls):
+    """The whole-set label replacements (Issue #2369) among `calls`."""
+    return [
+        command for command in calls
+        if command[0:2] == ["gh", "api"]
+        and command[2:4] == ["--method", "PUT"]
+        and command[4].endswith("/labels")
+    ]
+
+
 def make_config(tmp_path):
     return config_domain.RunnerConfig(repo_dir=tmp_path, prompt=tmp_path / "prompt.md", base_branch="main")
 
@@ -409,16 +419,18 @@ def test_process_issue_p0_failure_enters_ai_blocked_terminal_state(
     # unchanged.
     assert runner.process_issue(issue, make_config(tmp_path),
                                 "xqliu/orbi").kind == "failed"
-    # Claim first (Issue #2309: the queue entry goes with it), then the
-    # terminal state: `ai-blocked` added, `ai-in-progress` removed.
+    # Issue #2369: the claim is ONE whole-set replacement (the queue
+    # entry goes, `ai-in-progress` comes).
+    assert _label_writes(calls) == [[
+        "gh", "api", "--method", "PUT",
+        "repos/xqliu/orbi/issues/18/labels",
+        "-f", "labels[]=ai-in-progress", "--include",
+    ]]
+    # Issue #2357: the terminal removals are written before its add.
     assert edit.call_args_list[0] == mock_call(
-        18, repo="xqliu/orbi", add="ai-in-progress", remove="ai-ready",
-    )
-    # Issue #2357: the removal is written before the terminal add.
-    assert edit.call_args_list[1] == mock_call(
         18, repo="xqliu/orbi", remove="ai-ready",
     )
-    assert edit.call_args_list[2] == mock_call(
+    assert edit.call_args_list[1] == mock_call(
         18, repo="xqliu/orbi", add="ai-blocked",
     )
     # The failure comment carries the run marker and the reason.
@@ -702,19 +714,20 @@ def test_process_issue_pi_infrastructure_failure_keeps_run_for_resume(
         1, ["pi"], stderr="provider unavailable",
     )
     patch_process_deps(monkeypatch, tmp_path, run_pi_side_effect=error)
-    edit = runner.edit_issue
     runner.process_issue(make_issue(), make_config(tmp_path), "xqliu/orbi")
 
-    assert edit.call_count == 1
-    assert edit.call_args.kwargs == {
-        "repo": "xqliu/orbi", "add": "ai-in-progress",
-    }
+    # Issue #2369: the claim is the one whole-set replacement.
+    assert _label_writes(calls) == [[
+        "gh", "api", "--method", "PUT",
+        "repos/xqliu/orbi/issues/18/labels",
+        "-f", "labels[]=ai-in-progress", "--include",
+    ]]
     state = json.loads(
         (derived_wt(tmp_path) / ".orbi" / "run-state.json").read_text(),
     )
     assert state["run_id"] == "a1b2c3d4"
     assert any("Pi failure recovered" in str(call) for call in calls)
-    assert not any("ai-blocked" in str(call) for call in edit.call_args_list)
+    assert not any("ai-blocked" in str(call) for call in calls)
 
 
 def test_process_issue_repeated_recoverable_failure_updates_one_comment(
@@ -733,15 +746,20 @@ def test_process_issue_repeated_recoverable_failure_updates_one_comment(
     # always appends (the legacy transport) — exactly the traffic the
     # runner makes.
     comments: list[dict] = []
+    calls: list[list[str]] = []
     next_id = iter(range(101, 300))
     patches: list[tuple[int, str]] = []
 
     def fake_gh(command, **kwargs):
+        calls.append(command)
         if command[:2] == ["gh", "api"]:
             endpoint = command[2]
             if "--method" not in command:
                 return json.dumps([dict(c) for c in comments])
             method = command[command.index("--method") + 1]
+            if method == "PUT":
+                # Issue #2369: the claim's whole-set replacement.
+                return ""
             body = command[command.index("--field") + 1][len("body="):]
             if method == "POST":
                 comment = {"id": next(next_id), "body": body}
@@ -807,11 +825,10 @@ def test_process_issue_repeated_recoverable_failure_updates_one_comment(
     ), "the repeated failure must update the existing comment in place"
     # The retry scene is unchanged: every tick keeps `ai-in-progress`
     # (claim label only, never a terminal state).
-    edit = runner.edit_issue
-    assert edit.call_count == 2
+    writes = _label_writes(calls)
+    assert len(writes) == 2
     assert all(
-        call.kwargs == {"repo": "xqliu/orbi", "add": "ai-in-progress"}
-        for call in edit.call_args_list
+        "labels[]=ai-in-progress" in write for write in writes
     )
 
 
@@ -828,16 +845,21 @@ def _stateful_comments(monkeypatch):
     comments, the PATCH log and the POST log — exactly the traffic the
     runner makes against the real Issue (Issue #1465 acceptance)."""
     comments: list[dict] = []
+    calls: list[list[str]] = []
     next_id = iter(range(301, 900))
     patches: list[tuple[int, str]] = []
     posts: list[dict] = []
 
     def fake_gh(command, **kwargs):
+        calls.append(command)
         if command[0] == "gh" and command[1] == "api":
             endpoint = command[2]
             if "--method" not in command:
                 return json.dumps([dict(c) for c in comments])
             method = command[command.index("--method") + 1]
+            if method == "PUT":
+                # Issue #2369: the claim's whole-set replacement.
+                return ""
             body = command[command.index("--field") + 1][len("body="):]
             if method == "POST":
                 comment = {"id": next(next_id), "body": body}
@@ -871,7 +893,7 @@ def _stateful_comments(monkeypatch):
         return ""
 
     monkeypatch.setattr(seam, "run_command", fake_gh)
-    return comments, patches, posts
+    return comments, patches, posts, calls
 
 
 def _recoverable_scenes(comments):
@@ -893,7 +915,7 @@ def test_recoverable_401_posts_one_classified_comment(monkeypatch, tmp_path):
     the Issue `ai-in-progress`."""
     from orbi import runner_health
 
-    comments, _, _ = _stateful_comments(monkeypatch)
+    comments, _, _, calls = _stateful_comments(monkeypatch)
     error = _pi_401(PROVIDER_401_A)
     patch_process_deps(
         monkeypatch, tmp_path, run_pi_side_effect=error,
@@ -912,9 +934,13 @@ def test_recoverable_401_posts_one_classified_comment(monkeypatch, tmp_path):
         f"{runner_health.failure_fingerprint(error)} -->"
     ) in body
     assert "<!-- orbi:failure:v1" not in body
-    # The Issue stays ai-in-progress: the only label edit is the claim.
-    edits = [call.kwargs for call in runner.edit_issue.call_args_list]
-    assert edits == [{"repo": "xqliu/orbi", "add": "ai-in-progress"}]
+    # The Issue stays ai-in-progress: the only label write is the claim.
+    assert _label_writes(calls) == [[
+        "gh", "api", "--method", "PUT",
+        "repos/xqliu/orbi/issues/18/labels",
+        "-f", "labels[]=ai-in-progress", "--include",
+    ]]
+    assert runner.edit_issue.call_args_list == []
 
 
 def test_recoverable_401_next_tick_patches_the_same_comment(
@@ -922,7 +948,7 @@ def test_recoverable_401_next_tick_patches_the_same_comment(
 ):
     """Issue #1465 acceptance: the same 401 on the next tick with a new
     request id PATCHes the same comment (no second comment)."""
-    comments, patches, _ = _stateful_comments(monkeypatch)
+    comments, patches, _, _calls = _stateful_comments(monkeypatch)
     patch_process_deps(
         monkeypatch, tmp_path,
         run_pi_side_effect=[_pi_401(PROVIDER_401_A), _pi_401(PROVIDER_401_B)],
@@ -952,7 +978,7 @@ def test_recoverable_401_stops_after_three_identical_ticks(monkeypatch, tmp_path
     and patch the same recovery comment, but the same fingerprint on the
     third consecutive round is a dead loop — the Issue ends `ai-blocked`
     with ONE blocker comment, never a fifth, sixth ... resume."""
-    comments, _, _ = _stateful_comments(monkeypatch)
+    comments, _, _, _calls = _stateful_comments(monkeypatch)
     patch_process_deps(
         monkeypatch, tmp_path, run_pi_side_effect=[_pi_401(PROVIDER_401_A)] * 4,
     )
@@ -986,7 +1012,7 @@ def test_recoverable_401_stops_after_three_identical_ticks(monkeypatch, tmp_path
 def test_recoverable_timeout_posts_its_own_comment(monkeypatch, tmp_path):
     """Issue #1465 acceptance: a DIFFERENT cause (a timeout) in the same
     run posts its own comment with its own reason — both remain."""
-    comments, _, _ = _stateful_comments(monkeypatch)
+    comments, _, _, _calls = _stateful_comments(monkeypatch)
     patch_process_deps(
         monkeypatch, tmp_path,
         run_pi_side_effect=[
@@ -1022,6 +1048,9 @@ def test_process_issue_resumes_update_one_started_comment(monkeypatch, tmp_path)
             if "--method" not in command:
                 return json.dumps([dict(c) for c in comments])
             method = command[command.index("--method") + 1]
+            if method == "PUT":
+                # Issue #2369: the claim's whole-set replacement.
+                return ""
             body = command[command.index("--field") + 1][len("body="):]
             if method == "POST":
                 comment = {"id": next(next_id), "body": body}
@@ -1133,13 +1162,14 @@ def test_process_issue_keeps_the_claim_when_the_journal_proves_the_request(
         make_issue(), make_config(tmp_path), "xqliu/orbi",
     )
     assert result.kind == "failed"
-    edit = runner.edit_issue
-    # The only label transition is the claim: the Issue stays
-    # ai-in-progress (no `ai-blocked`).
-    assert edit.call_count == 1
-    assert edit.call_args.kwargs == {
-        "repo": "xqliu/orbi", "add": "ai-in-progress",
-    }
+    # The only label transition is the claim's whole-set replacement
+    # (Issue #2369): the Issue stays ai-in-progress (no `ai-blocked`).
+    assert _label_writes(calls) == [[
+        "gh", "api", "--method", "PUT",
+        "repos/xqliu/orbi/issues/18/labels",
+        "-f", "labels[]=ai-in-progress", "--include",
+    ]]
+    assert runner.edit_issue.call_args_list == []
     state = json.loads(
         (worktree / ".orbi" / "run-state.json").read_text(),
     )
@@ -1389,21 +1419,23 @@ def test_pr_opened_transition_removes_a_pre_upgrade_queue_label(
     entry of `implementation_delivery` — not only inside `label_patch`.
     The claim drops it first, and the PR-opened patch reads the real snapshot
     so its own patch removes the residue too."""
-    make_fake_gh(monkeypatch)
+    calls, _posted = make_fake_gh(monkeypatch)
     patch_process_deps(monkeypatch, tmp_path)
-    edit = seam.edit_issue  # the mock `patch_process_deps` installed
     issue = make_issue()
     issue["labels"] = [{"name": "ai-ready"}]
 
     result = runner.process_issue(issue, make_config(tmp_path), "xqliu/orbi")
 
     assert result.url == "https://github.com/xqliu/orbi/pull/40"
-    assert [call.kwargs for call in edit.call_args_list] == [
-        {"repo": "xqliu/orbi", "add": "ai-in-progress",
-         "remove": "ai-ready"},
-        {"repo": "xqliu/orbi", "add": "ai-pr-opened",
-         "remove": "ai-in-progress"},
-        {"repo": "xqliu/orbi", "remove": "ai-ready"},
+    # Issue #2369: both transitions are one whole-set replacement each;
+    # the PR-opened one ends on `ai-pr-opened` with the queue residue gone.
+    writes = [
+        [value for value in command if value.startswith("labels[]=")]
+        for command in _label_writes(calls)
+    ]
+    assert writes == [
+        ["labels[]=ai-in-progress"],
+        ["labels[]=ai-pr-opened"],
     ]
 
 
@@ -1417,9 +1449,6 @@ def test_process_issue_delivered_patch_failure_does_not_fail_delivery(
     the run continues into the review/merge wait loop."""
     calls, posted = make_failing_gh(monkeypatch, _progress_patch_of)
     patch_process_deps(monkeypatch, tmp_path)
-    edits = []
-    monkeypatch.setattr(seam, "edit_issue", lambda number, **kwargs:
-                        edits.append(kwargs))
     caplog.set_level("ERROR")
 
     result = runner.process_issue(make_issue(), make_config(tmp_path),
@@ -1427,13 +1456,11 @@ def test_process_issue_delivered_patch_failure_does_not_fail_delivery(
 
     assert result.url == "https://github.com/xqliu/orbi/pull/40"
     # The state transition happened (the Issue awaits review)...
-    assert edits == [{
-        "repo": "xqliu/orbi", "add": "ai-in-progress"},
-        {"repo": "xqliu/orbi", "add": "ai-pr-opened",
-         "remove": "ai-in-progress"},
-    ]
+    writes = _label_writes(calls)
+    assert len(writes) == 2
+    assert "labels[]=ai-pr-opened" in writes[-1]
     # ...and the delivery was NOT marked blocked.
-    assert not any(kwargs.get("add") == "ai-blocked" for kwargs in edits)
+    assert not any("ai-blocked" in str(command) for command in calls)
     # The failure is logged like the in-stream callback...
     assert any(
         "progress_publish_failed" in line
@@ -1505,20 +1532,15 @@ def test_process_issue_post_pr_comment_failure_keeps_delivery_open(
         ),
     )
     patch_process_deps(monkeypatch, tmp_path)
-    edits = []
-    monkeypatch.setattr(seam, "edit_issue", lambda number, **kwargs:
-                        edits.append(kwargs))
     caplog.set_level("WARNING")
 
     result = runner.process_issue(make_issue(), make_config(tmp_path),
                                   "xqliu/orbi")
 
     assert result.url == "https://github.com/xqliu/orbi/pull/40"
-    assert edits == [{
-        "repo": "xqliu/orbi", "add": "ai-in-progress"},
-        {"repo": "xqliu/orbi", "add": "ai-pr-opened",
-         "remove": "ai-in-progress"},
-    ]
+    writes = _label_writes(calls)
+    assert len(writes) == 2
+    assert "labels[]=ai-pr-opened" in writes[-1]
     assert "progress_comment_failed" in caplog.text
     assert "pr=https://github.com/xqliu/orbi/pull/40" in caplog.text
     assert any(command[:2] == ["gh", "issue"] for command in calls)
@@ -1588,12 +1610,15 @@ def test_process_issue_ensure_failure_does_not_fail_delivery(
     in-stream callback)."""
     calls, posted = make_failing_gh(
         monkeypatch,
-        lambda command: command[:2] == ["gh", "api"],
+        lambda command: (
+            command[0:2] == ["gh", "api"]
+            # Issue #2369: the claim's whole-set label write is not the
+            # progress path this test fails.
+            and not (command[2:4] == ["--method", "PUT"]
+                     and command[4].endswith("/labels"))
+        ),
     )
     patch_process_deps(monkeypatch, tmp_path)
-    edits = []
-    monkeypatch.setattr(seam, "edit_issue", lambda number, **kwargs:
-                        edits.append(kwargs))
     caplog.set_level("ERROR")
 
     result = runner.process_issue(make_issue(), make_config(tmp_path),
@@ -1602,13 +1627,12 @@ def test_process_issue_ensure_failure_does_not_fail_delivery(
     # The delivery completed: the PR is open and awaits review...
     assert result.url == "https://github.com/xqliu/orbi/pull/40"
     assert any(
-        kwargs.get("add") == "ai-pr-opened"
-        for kwargs in edits
+        "labels[]=ai-pr-opened" in command for command in calls
     )
     # ...Pi ran (run_pi was not skipped because ensure failed)...
     assert pi_session.run_pi.called
     # ...and the delivery was NOT marked blocked.
-    assert not any(kwargs.get("add") == "ai-blocked" for kwargs in edits)
+    assert not any("ai-blocked" in str(command) for command in calls)
     # The failure is logged like the in-stream callback.
     assert any(
         "progress_publish_failed" in line
@@ -2937,6 +2961,8 @@ def test_process_ticket_only_publishes_the_bound_context(monkeypatch):
     monkeypatch.setattr(
         pi_session, "run_ticket_agent", lambda *args, **kwargs: "content")
     monkeypatch.setattr(runner, "ProgressPublisher", Mock())
+    monkeypatch.setattr(seam, "issue_labels", lambda *a, **k: [])
+    monkeypatch.setattr(seam, "set_issue_labels", lambda *a, **k: None)
     monkeypatch.setattr(seam, "run_command", lambda command, **kwargs: "")
     monkeypatch.setattr(seam, "safe_publish", lambda **kwargs: seen.append(kwargs))
 
@@ -3179,14 +3205,14 @@ def test_fresh_claim_yields_when_another_executor_already_started(
         if command[0] == "gh" and command[1] == "issue"
         and command[2] == "edit"
     ] == []
-    # The claim write itself landed before the yield; nothing removed it.
-    assert [edit.kwargs.get("add") for edit in edit_issue.call_args_list] \
-        == ["ai-in-progress"]
-    assert not [
-        edit for edit in edit_issue.call_args_list
-        if edit.kwargs.get("add") == "ai-blocked"
-        or "remove" in edit.kwargs
-    ]
+    # The claim write itself landed before the yield; nothing removed it
+    # (Issue #2369: one whole-set replacement).
+    assert _label_writes(calls) == [[
+        "gh", "api", "--method", "PUT",
+        "repos/xqliu/orbi/issues/18/labels",
+        "-f", "labels[]=ai-in-progress", "--include",
+    ]]
+    assert edit_issue.call_args_list == []
     # Only its own local worktree is removed.
     assert not derived_wt(tmp_path).exists()
     assert "claim_yield" in caplog.text

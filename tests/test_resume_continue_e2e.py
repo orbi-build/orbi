@@ -216,6 +216,16 @@ def install_fake_gh(monkeypatch, comments: list[str],
                         for label in labels.get(int(command[3]), [])
                     ]})
             if command[1] == "api":
+                if command[2:4] == ["--method", "PUT"]:
+                    # Issue #2369: the whole-set label replacement.
+                    number = int(command[4].rsplit("/", 2)[-2])
+                    labels[number] = [
+                        value[len("labels[]="):] for value in command
+                        if value.startswith("labels[]=")
+                    ]
+                    return json.dumps([
+                        {"name": name} for name in labels[number]
+                    ])
                 if "--method" in command:
                     method = command[command.index("--method") + 1]
                     body = command[command.index("--field") + 1][

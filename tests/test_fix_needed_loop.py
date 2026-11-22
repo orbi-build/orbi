@@ -384,7 +384,7 @@ def test_delivery_step_recoverable_failure_while_fix_needed_keeps_label(
     fix-needed label is the one the next tick scans for)."""
     (tmp_path / ".worktrees"
      / f"orbi-owner-repo-issue-39-{RUN_ID}").mkdir(parents=True)
-    make_wait_failure_fake(
+    api_calls = make_wait_failure_fake(
         monkeypatch, labels=("ai-fix-needed",), progress_comments=[],
     )
     edits = []
@@ -400,12 +400,19 @@ def test_delivery_step_recoverable_failure_while_fix_needed_keeps_label(
     monkeypatch.setattr(review_merge, "review_and_merge_if_clean", failing_review)
     bind_run_id(RUN_ID)
     runner.delivery_step(PR_URL, _issue(), _config(tmp_path), "owner/repo")
-    # Issue #2357: the round-start repair moves the stale ai-fix-needed
-    # to ai-pr-opened; the failed review then sets ai-fix-needed again —
-    # the same end state as before.
+    # Issue #2369: the round-start repair is ONE whole-set replacement
+    # ending on ai-pr-opened; the failed review then sets ai-fix-needed
+    # again — the same end state as before.
+    label_writes = [
+        command for command in api_calls
+        if command[2:4] == ["--method", "PUT"]
+        and command[4].endswith("/labels")
+    ]
+    assert label_writes == [[
+        "gh", "api", "--method", "PUT", "repos/owner/repo/issues/39/labels",
+        "-f", "labels[]=ai-pr-opened", "--include",
+    ]]
     assert edits == [
-        ((39,), {"repo": "owner/repo", "add": "ai-pr-opened",
-                 "remove": "ai-fix-needed"}),
         ((39,), {"repo": "owner/repo", "add": "ai-fix-needed"}),
     ]
 

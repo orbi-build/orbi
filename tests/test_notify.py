@@ -722,17 +722,24 @@ def test_apply_label_patch_does_not_notify_a_non_attention_add(monkeypatch):
     with TelegramEndpoint() as endpoint:
         endpoint.point(monkeypatch)
         bind(monkeypatch)
-        monkeypatch.setattr(seam, "edit_issue", lambda *a, **k: None)
+
+        def fake_run(command, **kwargs):
+            assert command[0:2] == ["gh", "api"]  # the whole-set write only
+            return ""
+
+        monkeypatch.setattr(seam, "run_command", fake_run)
         reads = []
         monkeypatch.setattr(
             seam, "issue_view",
-            lambda *a, **k: reads.append(a) or {"title": "t"},
+            lambda *a, **k: reads.append(a) or {"labels": []},
         )
         github.apply_label_patch(
             7, repo="o/r", event=EVENT_CLAIM, current_labels=(),
         )
         assert endpoint.requests == []
-        assert reads == []
+        # Issue #2369: the claim reads the labels ONCE (the whole-set
+        # replacement needs the current set) and never the title.
+        assert reads == [(7, "labels")]
 
 
 def test_apply_label_patch_sends_nothing_when_the_label_write_fails(
