@@ -495,9 +495,9 @@ def test_create_uploads_a_local_image_and_writes_the_section_after_the_marker(
 
 
 def test_a_remote_image_is_written_as_its_own_address(
-    config, recorder, gh, tmp_path, downloads,
+    config, recorder, gh, downloads,
 ):
-    """Acceptance 4: an http(s) image needs no upload and keeps its address."""
+    """Acceptance 1: an http(s) image needs no upload, no download (Issue #2374)."""
     code, out, err = run_create(
         config,
         {"key": KEY, "issues": ONE_ISSUE, "attachments": [
@@ -510,7 +510,25 @@ def test_a_remote_image_is_written_as_its_own_address(
         in created_body(gh, out)
     )
     assert not any("--attach" in command for command in recorder.commands)
-    assert downloads.urls() == ["https://cdn.example.test/shot.png"]
+    assert downloads.urls() == []
+
+
+def test_an_unreachable_remote_image_does_not_fail_the_creation(
+    config, recorder, gh, downloads,
+):
+    """Acceptance 1/2: no request is made, so an unreachable address cannot
+    fail the filing (the fake fails if it is called)."""
+    url = "https://cdn.example.test/gone.png"
+    downloads.failures[url] = AssertionError("the creation requested the address")
+    code, out, err = run_create(
+        config,
+        {"key": KEY, "issues": ONE_ISSUE, "attachments": [
+            {"name": "gone.png", "src": url},
+        ]},
+    )
+    assert code == 0, err
+    assert f"![gone.png]({url})" in created_body(gh, out)
+    assert downloads.urls() == []
 
 
 def test_an_upload_gh_refuses_still_counts_as_created(

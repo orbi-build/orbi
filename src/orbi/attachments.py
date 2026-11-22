@@ -19,7 +19,8 @@ everything that list means:
   them with 'read';
 - what a NEW Issue gets: the Attachments section after the draft marker, a
   local image uploaded through 'gh issue create --attach' and an http(s) one
-  written as its own address.
+  written as its own address and never requested, so a creation does not
+  depend on that address being reachable (Issue #2374).
 
 The extension is the only type signal. Every other type is refused with its
 reason, and so is a file over a bound: the person reads why, in one sentence.
@@ -308,7 +309,8 @@ def filing(value: object) -> Iterator[Filing | None]:
         return
     with tempfile.TemporaryDirectory(prefix="orbi-filing-") as directory:
         yield Filing(
-            directory=Path(directory), files=_staged(entries, Path(directory)),
+            directory=Path(directory),
+            files=_staged(entries, Path(directory), download=False),
         )
 
 
@@ -369,9 +371,15 @@ def _render(blocks: tuple[str, ...]) -> str:
 
 
 def _staged(
-    entries: tuple[Attachment, ...], destination: Path,
+    entries: tuple[Attachment, ...], destination: Path, *, download: bool = True,
 ) -> tuple[StagedFile, ...]:
-    """Validate every entry and write it under its generated name."""
+    """Validate every entry and write it under its generated name.
+
+    With 'download' false an http(s) image is only recorded with its own
+    address: a new Issue writes it as a link, so reading it would make the
+    creation depend on that address being reachable (Issue #2374). Drafting
+    rounds keep downloading it, because the session receives the file.
+    """
     if len(entries) > MAX_FILES:
         raise AttachmentError(
             f"at most {MAX_FILES} files per draft, got {len(entries)}"
@@ -381,6 +389,13 @@ def _staged(
     characters = 0
     for position, entry in enumerate(entries, start=1):
         suffix, image = _kind(entry.name)
+        if image and not download and _URL_RE.match(entry.src):
+            name = f"{position}{suffix}"
+            staged.append(StagedFile(
+                name=name, source=entry.name, image=True,
+                path=destination / name, address=entry.src,
+            ))
+            continue
         data, address = _read(entry)
         megabytes = MAX_FILE_BYTES // (1024 * 1024)
         if len(data) > MAX_FILE_BYTES:
