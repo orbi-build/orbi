@@ -273,6 +273,18 @@ def install_fake_gh(monkeypatch, comments: list[str],
                         return "[]"
                     return "[]"
             if command[1] == "api":
+                if command[2:4] == ["--method", "PUT"]:
+                    # Issue #2369: the whole-set label replacement.
+                    number = int(command[4].rsplit("/", 2)[-2])
+                    new_labels = [
+                        value[len("labels[]="):] for value in command
+                        if value.startswith("labels[]=")
+                    ]
+                    if labels is not None:
+                        labels[number] = new_labels
+                    return json.dumps([
+                        {"name": name} for name in new_labels
+                    ])
                 # The progress publisher (Issue #18) keeps the single
                 # per-run comment via gh api: list (GET), create (POST),
                 # update (PATCH). Comments are tracked by id like the

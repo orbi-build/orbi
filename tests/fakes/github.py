@@ -105,6 +105,8 @@ class FakeGh:
         # Label edits that fail server-side, keyed as (add|remove, label)
         # — the terminal-transition restore tests (Issue #2357).
         self.fail_label_edits: set[tuple[str, str]] = set()
+        # The whole-set label replacement fails server-side (Issue #2369).
+        self.failing_label_replace = False
         self._clock = 0
 
     # --- state arrangement (what a test does instead of patching) -------
@@ -262,6 +264,10 @@ class FakeGh:
     def fail_label_edit(self, verb: str, label: str) -> None:
         """Make one `gh issue edit --add/--remove-label` write fail."""
         self.fail_label_edits.add((verb, label))
+
+    def fail_label_replace(self) -> None:
+        """Make the whole-set `PUT .../labels` replacement fail."""
+        self.failing_label_replace = True
 
     def set_repo_config(self, text: str) -> None:
         """Seed the repository's default `.github/orbi.toml` — the
@@ -853,12 +859,43 @@ class FakeGh:
                     return json.dumps(comment)
         self._fail(1, f"gh: Could not resolve an Issue comment {comment_id}.")
 
+    def _api_put_issue_labels(self, match, args: list[str]) -> str:
+        """GitHub's "Set labels for an issue": the WHOLE set replaces the
+        current one (`-f labels[]=name`). One request, so a failure
+        changes nothing."""
+        self._repo_or_fail(match.group(1))
+        issue = self._issue_or_fail(int(match.group(2)))
+        if self.failing_label_replace:
+            self._fail(1, "fake-gh: label replacement failed")
+        labels: list[str] = []
+        index = 1
+        while index < len(args):
+            if args[index] != "-f" or index + 1 >= len(args):
+                return self._unsupported(
+                    ["gh", "api", "--method", "PUT", *args]
+                )
+            key, _separator, value = args[index + 1].partition("=")
+            if key != "labels[]":
+                return self._unsupported(
+                    ["gh", "api", "--method", "PUT", *args]
+                )
+            labels.append(value)
+            index += 2
+        issue["labels"] = labels
+        return json.dumps([{"name": name} for name in labels])
+
     def _api_put(self, args: list[str]) -> str:
-        """The contents API PUT (create/update a file): `gh api --method
-        PUT <path> -f key=value ...`. Only the repository policy path is
-        modelled, and only for the three required fields, so a mistyped
-        write fails fast instead of silently updating the wrong file."""
+        """The contents API PUT (create/update a file) and the Issue
+        whole-set label replacement (Issue #2369): `gh api --method PUT
+        <path> -f key=value ...`. Only those paths are modelled, so a
+        mistyped write fails fast instead of silently updating the wrong
+        thing."""
         path = args[0]
+        labels_match = re.fullmatch(
+            r"repos/([^/]+/[^/]+)/issues/(\d+)/labels", path,
+        )
+        if labels_match is not None:
+            return self._api_put_issue_labels(labels_match, args)
         match = re.fullmatch(
             r"repos/([^/]+/[^/]+)/contents/\.github/orbi\.toml", path,
         )

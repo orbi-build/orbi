@@ -278,7 +278,16 @@ elif args[:2] == ["auth", "status"]:
           "  - Active account: true\\n"
           "  - Git operations protocol: https\\n")
 elif args[:1] == ["api"]:
-    if "check-runs" in args[1]:
+    if args[:3] == ["api", "--method", "PUT"]:
+        # Issue #2369: the whole-set label replacement
+        # (`PUT repos/<owner>/<repo>/issues/<n>/labels`).
+        num = args[3].split("/")[4]
+        labels = [a[len("labels[]="):] for a in args
+                  if a.startswith("labels[]=")]
+        state["issues"][num]["labels"] = labels
+        save()
+        print(json.dumps([{"name": label} for label in labels]))
+    elif "check-runs" in args[1]:
         print(json.dumps([{
             "name": "tests", "status": "completed",
             "conclusion": "success",
@@ -980,8 +989,10 @@ def test_capacity_two_allows_two_runners_and_rejects_third(clone, tmp_path):
     assert "capacity_full" in err
     # The third runner claimed nothing: both Issues keep their labels.
     snap = read_state(state)
-    assert snap["issues"]["7"]["labels"] == ["ai-ready", "ai-in-progress"]
-    assert snap["issues"]["8"]["labels"] == ["ai-ready", "ai-in-progress"]
+    # Issue #2369: the claim's single whole-set write leaves the queue
+    # label gone and `ai-in-progress` present.
+    assert snap["issues"]["7"]["labels"] == ["ai-in-progress"]
+    assert snap["issues"]["8"]["labels"] == ["ai-in-progress"]
     # Scene pinned deterministically: release the deliveries IN ORDER —
     # issue 7 fully opens its PR first, then issue 8 follows.
     pi_gate_7.write_text("go", encoding="utf-8")
@@ -1086,6 +1097,10 @@ def test_two_runners_one_ready_issue_claim_it_once(clone, tmp_path):
     # label write is a separate `gh` call after the claim).
     snap = read_state(state)
     snap["issues"]["7"]["labels"].remove("ai-in-progress")
+    # Issue #2369: the claim removed the queue label in its one
+    # whole-set write, so the pre-write scene this test simulates puts
+    # it back (the scan saw it, the claim label has not landed).
+    snap["issues"]["7"]["labels"].insert(0, "ai-ready")
     atomic_write_json(state, snap)
 
     loser = start_runner(config, bin_dir, state, pi_log)
@@ -1363,9 +1378,11 @@ def test_killed_runner_is_resumed_by_the_next_claim_scan(clone, tmp_path):
     wait_for_pid_exit(orphan_pid)
 
     # The kill left the claim label behind (the failure path never ran).
+    # Issue #2369: the claim's whole-set write also removed the queue
+    # label, so only `ai-in-progress` remains.
     snap = read_state(state)
     assert "ai-in-progress" in snap["issues"]["7"]["labels"]
-    assert "ai-ready" in snap["issues"]["7"]["labels"]
+    assert "ai-ready" not in snap["issues"]["7"]["labels"]
     # The dead run's task worktree survives; its name carries the run id.
     worktrees = sorted(
         (clone / ".worktrees").glob("orbi-owner-repo-issue-7-*"),
