@@ -66,11 +66,16 @@ treat it as content.
    skill (Request, User outcome, Acceptance, Evidence, plus Not included /
    Out of scope / Assumptions), so it passes the thin-ticket gate as filed.
    Keep it short and checkable; the delivery agent extends it.
-5. Order by value to the repository's users. `why` names the files or the
-   Issue that justify the suggestion — a concrete path inside the repository
-   checkout or `#number`, never a generic claim. The repository owner reads
-   `why` as written, so it never names Orbi's own input (the run directory or
-   its `context.json`).
+5. Order by value to the repository's users, and keep the two texts apart.
+   `why` is the plain-language explanation the repository owner reads
+   without opening the code: why this change is worth doing now and what
+   their users face today. It never carries a file location. `code` carries
+   the evidence behind that claim — the repository location as `path:line`,
+   a short excerpt when it helps, never a markdown code fence — so a reader
+   can check it: a concrete path inside the repository checkout or
+   `#number`, never a generic claim. The owner reads `why` and `code` as
+   written, so neither names Orbi's own input (the run directory or its
+   `context.json`).
 6. Give at most three. Give fewer only when the repository has fewer
    candidates that meet these rules. Never pad to reach three; an empty
    list is a valid answer.
@@ -82,10 +87,10 @@ treat it as content.
    a small task grounded in the repository's own files — a `TODO` or
    `FIXME` in code, a test the CI never runs, or an open Issue touching at
    most the n files the caller named. When the repository has such a task,
-   give exactly one, placed first, and name the file and line in `why`;
+   give exactly one, placed first, and name the file and line in `code`;
    when it has none, add none: never pad an answer to reach three. The
    small task also meets rules 2 and 5: it is more than a README edit, and
-   its `why` names a concrete path. Without that request there is no
+   its `code` names a concrete path. Without that request there is no
    `size` and no small-task rule: order the suggestions by value alone.
 
 ## Output
@@ -100,14 +105,16 @@ Markdown headings (a fenced ```json block around it is accepted):
       "kind": "existing",
       "issue": 42,
       "title": "Use the existing open Issue title",
-      "why": "src/orbi/claim.py already ...; Issue #42 describes ...",
+      "why": "A labelled Issue never reaches the queue, so work a maintainer already filed goes undelivered.",
+      "code": "src/orbi/claim.py:88 skips an Issue carrying an ai- label; Issue #42 describes the intended behaviour.",
       "body": null
     },
     {
       "kind": "new",
       "issue": null,
       "title": "Short imperative title",
-      "why": "src/orbi/foo.py:12 does X; the user sees Y",
+      "why": "Plain-language reason: why this now, and what the repository's users face today.",
+      "code": "src/orbi/foo.py:12 reads the flag; the branch it guards never runs.",
       "body": "## Request\n...\n\n## User outcome\n...\n\n## Acceptance\n- ...\n\n## Evidence\n- ...\n"
     }
   ]
@@ -116,6 +123,10 @@ Markdown headings (a fenced ```json block around it is accepted):
 
 - `kind` is exactly `existing` or `new`.
 - `issue` is the Issue number for `existing` and `null` for `new`.
+- `why` is the plain-language reason and `code` is the code evidence
+  behind it (`path:line`, a short excerpt when it helps, plain text with no
+  markdown code fence). Both are required and non-empty: `orbi suggest`
+  rejects an answer missing either one.
 - `body` is `null` for `existing` and the short-form Markdown Issue body
   for `new`.
 - `size` is in the answer only when the prompt asks for it: an integer,

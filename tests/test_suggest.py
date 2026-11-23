@@ -46,15 +46,18 @@ SUGGEST_DIR = Path(".orbi") / "suggest"
 
 EXISTING = {
     "kind": "existing", "issue": 5, "title": "Fix the existing thing",
-    "why": "src/orbi/claim.py does X", "body": None,
+    "why": "A labelled Issue never reaches the queue",
+    "code": "src/orbi/claim.py:88", "body": None,
 }
 NEW_TWO = {
     "kind": "new", "issue": None, "title": "Second thing",
-    "why": "README gap", "body": "## Request\nSecond.",
+    "why": "The README workflow cannot be followed", "code": "README.md:36",
+    "body": "## Request\nSecond.",
 }
 NEW_THREE = {
     "kind": "new", "issue": None, "title": "Third thing",
-    "why": "tests gap", "body": "## Request\nThird.",
+    "why": "The tests never run on CI", "code": "tests/start.test.js:21",
+    "body": "## Request\nThird.",
 }
 
 
@@ -292,9 +295,13 @@ def test_orbi_suggest_json_prints_the_document(
         "Fix the existing thing", "Second thing", "Third thing",
     ]
     # Issue #2139: without `--size` the document carries no size.
+    # Issue #2381: every entry carries the user `why` and the code `code`.
     assert all(
-        set(item) == {"kind", "issue", "title", "why", "body"}
+        set(item) == {"kind", "issue", "title", "why", "code", "body"}
         for item in document["suggestions"]
+    )
+    assert all(
+        item["why"] and item["code"] for item in document["suggestions"]
     )
 
     run_dirs = _run_dirs(world)
@@ -342,6 +349,98 @@ def test_orbi_suggest_json_prints_the_document(
 
     after = _repo_files(world.repo)
     assert after == before
+
+
+# --- why and code are two independent texts (Issue #2381) --------------------
+#
+# Until #2381 `why` carried both the user-facing reason and the code
+# evidence (`scripts/start.js hardcodes port 4178 (lines 3 and 9), and
+# test/start.test.js therefore …`), so a caller that shows the two parts
+# apart had to guess where the code part starts. Now `why` is the plain
+# explanation and `code` is the repository location — two required,
+# non-empty fields, and the prompt and the skill say which is which.
+
+WHY_TEXT = (
+    "Anyone who labels an Issue before Orbi claims it never sees that "
+    "Issue delivered again."
+)
+CODE_TEXT = "src/orbi/claim.py:88 (skips an Issue carrying an ai- label)"
+
+
+def test_suggest_json_documents_why_and_code_as_two_texts(
+    tmp_path, monkeypatch, capsys,
+):
+    """Acceptance: one `orbi suggest --json` prints each suggestion with
+    the plain-language `why` and a separate `code` carrying the
+    repository location, unchanged and unmerged."""
+    world = _world(tmp_path, monkeypatch)
+    world.gh.add_issue(5, title="Existing", labels=())
+    stub = PiStub(_answer_json(
+        {**EXISTING, "why": WHY_TEXT, "code": CODE_TEXT},
+    ))
+    suggest_fakes.stub_stream_pi(monkeypatch, stub)
+    assert cli.main([
+        "suggest", "--json", "--config", str(world.config_path),
+    ]) == 0
+    document = json.loads(capsys.readouterr().out)
+    [item] = document["suggestions"]
+    assert item["why"] == WHY_TEXT
+    assert item["code"] == CODE_TEXT
+    # The user explanation carries no code location: that is `code`.
+    assert "src/orbi/claim.py" not in item["why"]
+    # The prompt the session read asked for both fields, apart.
+    assert '"code": "..."' in stub.prompt
+    assert "why and code are two separate texts" in " ".join(
+        stub.prompt.split()
+    )
+
+
+@pytest.mark.parametrize("code", ["", "   ", None, 3])
+def test_validate_suggestions_requires_a_non_empty_code(code):
+    """Acceptance: a blank or non-string `code` fails fast, like a blank
+    `why` does."""
+    with pytest.raises(suggest.SuggestError) as excinfo:
+        _validate_one({**NEW_TWO, "code": code})
+    assert "suggestion code must be a non-empty string" in str(excinfo.value)
+
+
+def test_validate_suggestions_names_code_in_the_required_keys():
+    """Acceptance: an entry with no `code` key is rejected by the key set
+    and the message names all six fields."""
+    entry = {key: value for key, value in NEW_TWO.items() if key != "code"}
+    with pytest.raises(suggest.SuggestError) as excinfo:
+        _validate_one(entry)
+    assert "kind, issue, title, why, code and body" in str(excinfo.value)
+
+
+@pytest.mark.parametrize("locale", [None, "zh", "en"])
+def test_prompt_states_the_why_code_split(locale):
+    """Acceptance: the answer template carries `code` and the prompt says
+    what each of the two texts is, in every locale."""
+    prompt = " ".join(suggest._prompt(
+        LOCALE_CONTEXT_PATH, LOCALE_REPO_DIR, LOCALE_REPO, locale=locale,
+    ).split())
+    assert '"code": "..."' in prompt
+    assert "why and code are two separate texts" in prompt
+    # Issue #2381: the plain-language why carries no code location; the
+    # location, and only it, is what `code` holds.
+    assert "with no file location" in prompt
+    assert "path:line" in prompt
+    assert "never a code fence" in prompt
+
+
+def test_the_skill_keeps_why_and_code_apart():
+    """Acceptance: the skill's rule 5 and its output format split the two
+    texts, and the small-task rule of rule 7 lands in `code`."""
+    skill = (
+        Path(__file__).resolve().parent.parent / SKILL_REL
+    ).read_text(encoding="utf-8")
+    flat = " ".join(skill.split())
+    assert "`why` is the plain-language explanation" in flat
+    assert "`code` carries the evidence" in flat
+    assert "name the file and line in `code`" in flat
+    example = skill.split('"suggestions"', 1)[1].split("```", 1)[0]
+    assert '"why"' in example and '"code"' in example
 
 
 # --- the understanding session (Issue #1600) ---------------------------------
@@ -482,7 +581,7 @@ BAD_RESULTS = {
     "too_many": json.dumps({"suggestions": [
         EXISTING, NEW_TWO, NEW_THREE,
         {"kind": "new", "issue": None, "title": "Fourth",
-         "why": "more", "body": "## Request\nFourth."},
+         "why": "more", "code": "src/orbi/x.py:1", "body": "## Request\nFourth."},
     ]}),
     "extra_key": json.dumps({
         "suggestions": [EXISTING], "extra": True,
@@ -495,6 +594,12 @@ BAD_RESULTS = {
     "entry_missing_keys": json.dumps({"suggestions": [{"kind": "new"}]}),
     "empty_title": json.dumps({"suggestions": [{**NEW_TWO, "title": "  "}]}),
     "empty_why": json.dumps({"suggestions": [{**NEW_TWO, "why": ""}]}),
+    # Issue #2381: `code` is required and must not be blank.
+    "empty_code": json.dumps({"suggestions": [{**NEW_TWO, "code": "  "}]}),
+    "missing_code": json.dumps({
+        "suggestions": [{key: value for key, value in NEW_TWO.items()
+                         if key != "code"}],
+    }),
     "existing_issue_not_a_number": json.dumps(
         {"suggestions": [{**EXISTING, "issue": "5"}]},
     ),
@@ -612,7 +717,8 @@ def test_validate_suggestions_rejects_a_why_naming_orbi_input(why):
     with pytest.raises(suggest.SuggestError) as excinfo:
         _validate_one({
             "kind": "new", "issue": None, "title": "Do X",
-            "why": why, "body": "## Request\nX.",
+            "why": why, "code": "src/orbi/claim.py:88",
+            "body": "## Request\nX.",
         })
     assert str(excinfo.value) == (
         "suggestion why must describe the repository and its Issues and "
@@ -633,7 +739,8 @@ def test_validate_suggestions_accepts_a_why_naming_the_repository(why):
     Issues stay valid reasons."""
     kept = _validate_one({
         "kind": "new", "issue": None, "title": "Do X",
-        "why": why, "body": "## Request\nX.",
+        "why": why, "code": "src/orbi/claim.py:88",
+        "body": "## Request\nX.",
     })
     assert kept[0]["why"] == why
 
@@ -735,12 +842,19 @@ def test_real_session_answers_carry_their_size(name, sizes):
     )
     assert [item["size"] for item in kept] == sizes
     assert kept[0]["size"] <= 2
+    # Issue #2381: every entry carries the user `why` and the code
+    # evidence as two separate, non-empty texts.
+    for item in kept:
+        assert item["why"].strip()
+        assert item["code"].strip()
+        assert item["code"] != item["why"]
 
 
 def _sized(**overrides):
     entry = {
         "kind": "new", "issue": None, "title": "Do X",
-        "why": "src/orbi/claim.py does X", "body": "## Request\nX.",
+        "why": "The queue drops labelled Issues",
+        "code": "src/orbi/claim.py:88", "body": "## Request\nX.",
     }
     entry.update(overrides)
     return entry
@@ -900,7 +1014,7 @@ def test_suggest_keeps_the_validated_batch_in_the_run_dir(
     document = json.loads(capsys.readouterr().out)
     assert [item["size"] for item in document["suggestions"]] == [1, 4]
     assert all(
-        set(item) == {"kind", "issue", "title", "why", "body", "size"}
+        set(item) == {"kind", "issue", "title", "why", "code", "body", "size"}
         for item in document["suggestions"]
     )
     assert "edits at most 1 file" in stub.prompt
@@ -1534,17 +1648,23 @@ PROMPT_WITHOUT_LOCALE = (
     "4. Reply with ONE JSON object and nothing else:\n"
     '{"suggestions": [{"kind": "existing" or "new", '
     '"issue": <number> or null, "title": "...", "why": "...", '
-    '"body": <markdown Issue body> or null}]}\n'
+    '"code": "...", "body": <markdown Issue body> or null}]}\n'
     "At most three entries, ordered by value to the repository's "
     "users.\n\n"
+    # Issue #2381: the two texts a suggestion carries.
+    "why and code are two separate texts. why explains in plain "
+    "language, with no file location, why the owner should do this "
+    "now and what their users face today. code carries the "
+    "evidence: path:line and a short plain-text excerpt, never a "
+    "code fence.\n\n"
     # Issue #2139: size and the small-task rule are the CALLER's input
     # (`--size`), so the default prompt carries neither — this frozen
     # copy pins the pre- and post-#2131 default back to one text.
     # Issue #2119: the answer is shown to the repository owner as
     # written, so the prompt says it and names Orbi's input as off
     # limits; this frozen copy pins that sentence too.
-    "The title, why and body are shown to the repository owner "
-    "exactly as you write them: they must describe the repository "
+    "The title, why, code and body are shown to the repository "
+    "owner exactly as you write them: they must describe the repository "
     "and its Issues and PRs, never Orbi's own input files "
     "(context.json, the run directory), which the owner never "
     "sees.\n\n"
@@ -1893,6 +2013,7 @@ def test_suggest_count_one_keeps_the_first_before_validating(
         _answer_json(EXISTING, NEW_TWO, {"kind": "existing", "issue": 6,
                                          "title": "Queued",
                                          "why": "already ai-ready",
+                                         "code": "AGENTS.md:1",
                                          "body": None}),
     )
     monkeypatch.setattr(seam, "stream_pi", stub)
@@ -1920,7 +2041,8 @@ def test_suggest_count_one_still_fails_when_the_first_entry_is_invalid(
     world.gh.add_issue(6, title="Already queued", labels=("ai-ready",))
     stub = PiStub(
         _answer_json({"kind": "existing", "issue": 6, "title": "Queued",
-                      "why": "already ai-ready", "body": None},
+                      "why": "already ai-ready", "code": "AGENTS.md:1",
+                      "body": None},
                      EXISTING),
     )
     monkeypatch.setattr(seam, "stream_pi", stub)
@@ -1942,7 +2064,8 @@ def test_suggest_default_count_still_fails_on_an_invalid_third_entry(
     stub = PiStub(
         _answer_json(EXISTING, NEW_TWO,
                      {"kind": "existing", "issue": 6, "title": "Queued",
-                      "why": "already ai-ready", "body": None}),
+                      "why": "already ai-ready", "code": "AGENTS.md:1",
+                      "body": None}),
     )
     monkeypatch.setattr(seam, "stream_pi", stub)
     assert cli.main([
@@ -1964,8 +2087,8 @@ def test_prompt_says_the_answer_is_shown_to_the_repository_owner():
         )
 
     shown = (
-        "title, why and body are shown to the repository owner exactly as "
-        "you write them"
+        "title, why, code and body are shown to the repository owner "
+        "exactly as you write them"
     )
     scope = (
         "they must describe the repository and its Issues and PRs, never "
@@ -2073,7 +2196,8 @@ def test_count_one_then_count_two_hands_the_first_batch(
 def _new_suggestion(title: str) -> dict:
     return {
         "kind": "new", "issue": None, "title": title,
-        "why": f"{title} matters", "body": f"## Request\n{title}.",
+        "why": f"{title} matters", "code": "src/orbi/x.py:1",
+        "body": f"## Request\n{title}.",
     }
 
 

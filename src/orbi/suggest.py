@@ -93,12 +93,13 @@ SUGGESTIONS_MAX = 3
 # word so the default (3) prompt stays byte-for-byte what it was before
 # the flag existed.
 COUNT_WORDS = {1: "one", 2: "two", 3: "three"}
-# The Suggestions document keys, in one place. `size` — the estimated
-# number of files the change edits — joins them only when the caller
-# passed `--size <n>` (Issue #2139): the small-task preference behind it
-# is a caller input, not an engine rule, so a call that did not ask for a
-# size gets neither the key in the answer shape nor in the document.
-SUGGESTION_KEYS = {"kind", "issue", "title", "why", "body"}
+# The Suggestions document keys, in one place. `why` is the plain
+# explanation the repository owner reads without opening the code and
+# `code` is the repository evidence behind it (Issue #2381). `size` —
+# the estimated number of files the change edits — joins them only when
+# the caller passed `--size <n>` (Issue #2139): the preference behind it
+# is the caller's, so a call that did not ask for a size gets neither.
+SUGGESTION_KEYS = {"kind", "issue", "title", "why", "code", "body"}
 SUGGESTION_SIZE_KEYS = SUGGESTION_KEYS | {"size"}
 # The kept batch: `<run_dir>/suggestions.json`, the subset of the
 # Suggestions document the next run for the SAME repository must not
@@ -129,8 +130,8 @@ _FENCE_RE = re.compile(r"^```(?:json)?\s*\n(.*?)\n```$", re.DOTALL)
 _ASK_YES = frozenset({"", "y", "yes"})
 # The per-suggestion prompt is [y/N] and the contract is: nothing is
 # written before a y/Y, any other answer skips that suggestion. An
-# empty answer (Enter, the shown default) therefore skips and must
-# never reach GitHub.
+# empty answer (Enter, the shown default) therefore skips, never reaches
+# GitHub.
 _CONFIRM_YES = frozenset({"y", "yes"})
 # The `--locale` language sentence appended to BOTH prompts (Issue
 # #1620): the caller's page language, never a detection. `--locale` is
@@ -154,10 +155,9 @@ LOCALE_SENTENCES = {
 # repair pass, no retry.
 #
 # The headings rule names the fixed Chinese section headings (Issue
-# #1764): the suggest skill's output example shows the English ones, and
-# the model copied them into a Chinese body. Nothing parses the headings
-# by name, so only the zh prompt changes; en and no locale stay as they
-# were.
+# #1764): the skill's output example shows the English ones, and the
+# model copied them into a Chinese body. Nothing parses the headings by
+# name, so only the zh prompt changes.
 SUGGESTION_LOCALE_RULES = {
     "zh": (
         'Inside JSON string values, quote words with 「」 and never with '
@@ -338,8 +338,7 @@ def _suggestion_locale_suffix(locale: str | None) -> str:
     """`_locale_suffix` plus the suggestions session's answer rules.
 
     The rules describe the JSON answer and the Issue body, so only the
-    suggestions prompt gets them (Issue #1822); the summary prompt gets
-    the language sentence alone.
+    suggestions prompt gets them (Issue #1822).
     """
     suffix = _locale_suffix(locale)
     rules = SUGGESTION_LOCALE_RULES.get(locale) if locale else None
@@ -355,12 +354,7 @@ def _size_field(size: int | None) -> str:
 
 
 def _size_paragraphs(size: int | None) -> str:
-    """The `--size` paragraphs: the size estimate and the small-task rule.
-
-    Absent without `--size` (Issue #2139): the prompt asks for what the
-    call requested and nothing else, so a caller that wants no small task
-    first — or no size at all — gets the plain value-ordered answer.
-    """
+    """The `--size` paragraphs, absent without `--size` (Issue #2139)."""
     if size is None:
         return ""
     limit = f"{size} file" if size == 1 else f"{size} files"
@@ -371,10 +365,10 @@ def _size_paragraphs(size: int | None) -> str:
         f"its own files that edits at most {limit} (a TODO or FIXME in "
         "code, a test the CI never runs, or an open Issue touching at most "
         f"{limit}), this answer's first entry is exactly one such task, "
-        "with a why that names the file and line. When there is none, add "
+        "with a code that names the file and line. When there is none, add "
         "none: never pad an answer to reach three. The small task still "
         "meets the skill's rules 2 and 5: it is more than a README edit, "
-        "and its why names a concrete path.\n\n"
+        "and its code names a concrete path.\n\n"
     )
 
 
@@ -386,8 +380,7 @@ def _prompt(context_path: Path, repo_dir: Path, repo: str,
 
     The context file carries the Issue/PR bodies; the prompt names it so
     the session reads it with its `read` tool (a single argv entry is
-    limited to about 128 KiB, and a Pi `@file` argument would inline the
-    whole file into the first message).
+    limited to about 128 KiB, and a Pi `@file` argument would inline it).
     """
     return (
         f"Propose deliverable GitHub Issues for {repo}.\n\n"
@@ -402,20 +395,25 @@ def _prompt(context_path: Path, repo_dir: Path, repo: str,
         "4. Reply with ONE JSON object and nothing else:\n"
         '{"suggestions": [{"kind": "existing" or "new", '
         '"issue": <number> or null, "title": "...", "why": "...", '
-        f'"body": <markdown Issue body> or null{_size_field(size)}}}]}}\n'
+        f'"code": "...", "body": <markdown Issue body> or null'
+        f"{_size_field(size)}}}]}}\n"
         f"At most {COUNT_WORDS[count]} "
         f"{'entry' if count == 1 else 'entries'}, ordered by value to "
         "the repository's users.\n\n"
+        "why and code are two separate texts. why explains in plain "
+        "language, with no file location, why the owner should do this "
+        "now and what their users face today. code carries the "
+        "evidence: path:line and a short plain-text excerpt, never a "
+        "code fence.\n\n"
         # Issue #2139: size and the small-task rule are the CALLER's
         # input (`--size <n>`); without the flag the prompt is the plain
         # value-ordered answer and carries neither.
         + _size_paragraphs(size)
-        # Issue #2119: the answer is read by the repository owner, not by
-        # Orbi, so a why quoting the session's own input (the observed
-        # 2026-11-05 answer said "in context.json the open Issues and PRs
-        # are both empty") must never reach them.
-        + "The title, why and body are shown to the repository owner "
-        "exactly as you write them: they must describe the repository "
+        # Issue #2119: the owner reads the answer, so a why quoting the
+        # session's own input (one observed answer said "in context.json
+        # the open Issues and PRs are both empty") must never reach them.
+        + "The title, why, code and body are shown to the repository "
+        "owner exactly as you write them: they must describe the repository "
         "and its Issues and PRs, never Orbi's own input files "
         "(context.json, the run directory), which the owner never "
         "sees.\n\n"
@@ -492,8 +490,8 @@ def _run_session(config: RunnerConfig, repo: str, run_id: str,
     """Run the ONE read-only suggest Pi session; return (stdout, log argv)."""
     session_dir = run_dir / ".pi-session"
     # The run directory is kept after the command exits (success and
-    # failure); materialize the session dir so `session_dir` exists even
-    # before Pi writes its first JSONL record.
+    # failure); materialize the session dir so `session_dir` exists before
+    # Pi writes its first JSONL record.
     session_dir.mkdir(parents=True, exist_ok=True)
     skill = Path(config.deploy_home) / SUGGEST_SKILL_REL
     command, log_command = build_pi_command(
@@ -544,13 +542,13 @@ def _run_understanding(config: RunnerConfig, repo: str, run_id: str,
 
     Best-effort bypass (Issue #79): a non-zero exit, a spawn failure,
     the 60-second timeout or a write error logs ONE
-    `suggest_understanding_failed` line and writes nothing. The
-    suggestions session and the Suggestions document are never affected.
+    `suggest_understanding_failed` line and writes nothing; the
+    suggestions session and its document are never affected.
     """
     try:
         # Its own cwd/session dir under the run directory: `stream_pi`
-        # follows `<cwd>/.pi-session`, so the two concurrent sessions
-        # must not share one (they would bind to each other's JSONL).
+        # follows `<cwd>/.pi-session`, so the two concurrent sessions must
+        # not share one (they would bind to each other's JSONL).
         session_cwd = run_dir / UNDERSTANDING_DIR
         session_dir = session_cwd / ".pi-session"
         session_dir.mkdir(parents=True, exist_ok=True)
@@ -660,16 +658,19 @@ def _validate_suggestions(entries: list, context: dict,
             or not SUGGESTION_KEYS <= set(entry) <= allowed_keys
         ):
             raise SuggestError(
-                "each suggestion must hold kind, issue, title, why and "
-                "body"
+                "each suggestion must hold kind, issue, title, why, code "
+                "and body"
                 + (", and optionally size" if size is not None else "")
             )
-        title = entry["title"]
-        why = entry["why"]
+        title, why, code = entry["title"], entry["why"], entry["code"]
         if not isinstance(title, str) or not title.strip():
             raise SuggestError("suggestion title must be a non-empty string")
         if not isinstance(why, str) or not why.strip():
             raise SuggestError("suggestion why must be a non-empty string")
+        if not isinstance(code, str) or not code.strip():
+            raise SuggestError(
+                "suggestion code must be a non-empty string"
+            )
         entry_size = (
             _suggestion_size(entry, title) if size is not None else None
         )
@@ -707,7 +708,7 @@ def _validate_suggestions(entries: list, context: dict,
                 )
             item = {
                 "kind": "existing", "issue": number, "title": title,
-                "why": why, "body": None,
+                "why": why, "code": code, "body": None,
             }
         elif entry["kind"] == "new":
             if entry["issue"] is not None:
@@ -721,7 +722,7 @@ def _validate_suggestions(entries: list, context: dict,
                 )
             item = {
                 "kind": "new", "issue": None, "title": title,
-                "why": why, "body": body,
+                "why": why, "code": code, "body": body,
             }
         else:
             raise SuggestError(
