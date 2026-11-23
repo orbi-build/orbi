@@ -422,6 +422,9 @@ def test_prompt_states_the_why_code_split(locale):
     ).split())
     assert '"code": "..."' in prompt
     assert "why and code are two separate texts" in prompt
+    # Issue #2381: the plain-language why carries no code location; the
+    # location, and only it, is what `code` holds.
+    assert "with no file location" in prompt
     assert "path:line" in prompt
     assert "never a code fence" in prompt
 
@@ -1650,8 +1653,8 @@ PROMPT_WITHOUT_LOCALE = (
     "users.\n\n"
     # Issue #2381: the two texts a suggestion carries.
     "why and code are two separate texts. why explains in plain "
-    "language, without opening the code, why the owner should do "
-    "this now and what their users face today. code carries the "
+    "language, with no file location, why the owner should do this "
+    "now and what their users face today. code carries the "
     "evidence: path:line and a short plain-text excerpt, never a "
     "code fence.\n\n"
     # Issue #2139: size and the small-task rule are the CALLER's input
