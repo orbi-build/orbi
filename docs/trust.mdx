@@ -1,0 +1,104 @@
+---
+title: "Why trust Orbi: the design choices behind an AI that ships your code"
+description: "Why can a small team let Orbi deliver code to its repository, what does Orbi promise, what does it not promise, and how do you check every claim yourself?"
+---
+
+Orbi writes code, reviews it, and merges it into your repository. Letting software do that is a trust decision, and a small team usually has no platform group to make it for them. This page explains the design choices behind Orbi, what each one protects you from, what Orbi does **not** promise, and how to check every claim yourself.
+
+The short version: **don't take our word for it.** Every promise below links to the code, the docs or the test that backs it, and Orbi's own delivery history is public.
+
+## The principle: the AI does the work, the system holds the line
+
+Most AI coding tools ask you to trust the model. Orbi tries to make that unnecessary. The model writes and reviews code; a small, deterministic Runner decides what is allowed to merge, and GitHub's own branch rules enforce the final boundary. Models get better and worse from release to release. The gates around them should not depend on that.
+
+## Six questions a small team should ask, and how Orbi answers them
+
+### 1. Will it break my main branch?
+
+A development change reaches your base branch only through a pull request that passed every gate:
+
+- An **independent review session**, not the session that wrote the code, must return a clean verdict, and that verdict is bound to the exact commit it reviewed.
+- CI must be green **on that exact commit**. Pending CI waits; red CI fails.
+- If the base branch moved after the review, the Runner merges the new base in itself (when there is no conflict) and waits for CI on the new head. If anyone else pushes to the PR, it goes back to review.
+- The merge itself uses `gh pr merge --match-head-commit`, so a head that changes at the last second is refused.
+
+The agent sessions themselves stop at a commit: they don't push, open the PR, or merge. The Runner does those steps, and only after the gates pass.
+
+Details: [Security](/security#the-ai-never-merges-or-pushes-protected-branches) · each gate with the test that proves it: [Safety matrix](/safety-matrix).
+
+### 2. Can the code be reviewed by something other than the model that wrote it?
+
+Yes. The reviewer is always a separate session, and with `review_pi_provider` / `review_pi_model` it can run on a **different model from a different provider**, so the reviewer doesn't share the author's blind spots. We think an AI approving its own work is the wrong default for anything you care about, which is why Orbi is model-agnostic: it never ties you to the vendor that wrote the code.
+
+Details: [Reviewing with a different model](/workflow#reviewing-with-a-different-model).
+
+### 3. When something goes wrong, can I find out what happened?
+
+Orbi has no private database. GitHub Issues, labels, comments and PRs **are** the delivery record. Every run has a `run_id` that appears in the Issue comments, the PR and the Runner's logs, so one search reconstructs the whole timeline: what was asked, what was built, what the reviewer rejected, what was fixed, and when it merged.
+
+Orbi builds itself the same way. You can read its own history: [merged PRs](https://github.com/orbi-build/orbi/pulls?q=is:merged), [closed Issues](https://github.com/orbi-build/orbi/issues?q=is:closed), [releases](https://github.com/orbi-build/orbi/releases). That includes the reviews that said no.
+
+### 4. What happens when it can't do the job?
+
+It stops and tells you. Orbi has no silent fallback and no "best effort" merge:
+
+- A command error fails fast and leaves the evidence in the log and the Issue.
+- A delivery that can't be finished is labelled `ai-blocked` with the reason, for a person to decide.
+- The review-and-fix loop has a budget of five rounds. It cannot loop forever, and untrusted comments cannot extend it.
+- A vague ticket can be sent back for more detail instead of being guessed at.
+
+We would rather hand you an honest "blocked" than a confident wrong merge.
+
+Details: [Workflow](/workflow) · [Safety matrix](/safety-matrix).
+
+### 5. Will I be locked in?
+
+No, by construction:
+
+- **The code is open source** (AGPL-3.0, or the Sustainable Use License, your choice). You can run it on your own repositories for free, at any scale, forever.
+- **The state is yours.** Everything Orbi knows lives in your GitHub repository. If you stop using Orbi tomorrow, your Issues, PRs and history stay exactly where they are. There is nothing to export.
+- **The model is yours.** Orbi works with any OpenAI-compatible endpoint, hosted or local. Switching models is a config change.
+- **[Managed Cloud](https://orbi.build/cloud/?ref=docs-trust) runs the same open engine** and keeps the same ledger, so moving between Cloud and self-hosting doesn't change your record.
+
+### 6. Who can see my code and credentials?
+
+When you self-host, the GitHub token, SSH key and model keys stay on your machine. They are never written to the repository, the config file, the logs or a GitHub comment, and logs are redacted by construction. Orbi only works on repositories you configure explicitly, and you should give it a fine-grained token scoped to just those repositories.
+
+Public text can't steer it either. Orbi only trusts recovery instructions from people with write access to the repository, and a repository's own config file can never redirect where credentials are sent.
+
+Details: [Security](/security).
+
+## What you must do: three settings that make the promises hold
+
+Orbi is designed to work *with* GitHub's protections, not replace them. Before you let it merge, set up:
+
+1. **Branch protection or a ruleset on your base branch**, with required status checks. This is the enforcing boundary. See the first known gap below.
+2. **A fine-grained personal access token** limited to the repositories Orbi works on, with only contents, pull requests, issues and metadata permissions.
+3. **`.github/orbi.toml` in `CODEOWNERS`**, if you use repository-level policy, so changing it requires an owner's review.
+
+If you want a person to sign off before merges, turn on the [human acceptance gate](/workflow#human-acceptance-gate-ai-human-review) (`human_review_gate = true`). Every delivery then posts a checklist that separates what was verified automatically from what only a person can confirm, such as business intent and UI copy, and waits for your `ai-human-review` label.
+
+## What Orbi does not promise
+
+We'd rather you hear the limits from us:
+
+- **Orbi does not stop an agent session from pushing your protected branch by itself.** The agents are told not to, but that is an instruction, not an enforcement. Branch protection is what enforces it. Without it, nothing in Orbi does.
+- **Releases don't go through the PR review gate.** A release task has its own gates and can push a version commit directly to the base branch.
+- **Green tests are not correct intent.** Tests prove the code matches the tests, not that the tests match what you meant. That is what the acceptance criteria in your Issue and the human gate are for.
+- **Some decisions need a person.** When the reviewer asks for a human decision or the round budget runs out, Orbi stops. It doesn't merge.
+- **Local tests are not a live boundary.** Our test suite doesn't prove your GitHub permissions, your host, or your model endpoint.
+
+The full, maintained list is in [Safety matrix → Known gaps](/safety-matrix#known-gaps). When a gap closes, it stays listed there with the fix, so the history stays honest.
+
+## Why this matters more for a small team
+
+A large company can absorb a bad merge: there's an on-call rotation, a platform team, a staging fleet. A five-person team often can't. That's why Orbi's defaults lean toward stopping rather than guessing, and toward leaving a record you can read without special tools. You shouldn't need to trust a vendor's dashboard to know what happened in your own repository.
+
+## Check it yourself in ten minutes
+
+1. Open one real loop: [Issue #1367](https://github.com/orbi-build/orbi/issues/1367) → [PR #1370](https://github.com/orbi-build/orbi/pull/1370) → [Release v0.5.47](https://github.com/orbi-build/orbi/releases/tag/v0.5.47).
+2. Pick any row in the [Safety matrix](/safety-matrix) and run its test: `python3 -m pytest "<test id>"`.
+3. Read the [security model](/security) and compare it with the code in `src/orbi/`.
+4. Try it on a throwaway repository with branch protection on, with [Managed Cloud](https://orbi.build/?ref=docs-trust) (three merged deliveries free) or [self-hosted](/quickstart).
+
+If something on this page doesn't match what the code does, that's a bug. Please [open an Issue](https://github.com/orbi-build/orbi/issues).

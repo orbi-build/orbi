@@ -43,6 +43,7 @@
             "icon": "compass",
             "pages": [
               "workflow",
+              "trust",
               "security",
               "safety-matrix"
             ]
@@ -294,6 +295,7 @@
             "icon": "compass",
             "pages": [
               "zh/workflow",
+              "zh/trust",
               "zh/security",
               "zh/safety-matrix"
             ]
