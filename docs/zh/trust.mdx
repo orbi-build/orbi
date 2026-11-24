@@ -23,7 +23,7 @@ Orbi 的回答是：不要求你信任模型。模型负责写代码和审代码
 | 记录在哪里 | 厂商的仪表盘 | 你自己的 GitHub Issue、PR 和评论 |
 | 做不完时 | 视工具而定 | 停下，给 Issue 打上 `ai-blocked` 并写明原因 |
 | 做到哪一步 | 通常到批准为止 | 从 Issue 到合并，再到带发布说明的 tag 版本 |
-| 用哪个模型 | 厂商自己的 | 任何 OpenAI 兼容端点，托管或本地都行 |
+| 用哪个模型 | 厂商自己的 | Pi 支持的任何供应商：OpenAI、Gemini 等原生接口，或任何 OpenAI 兼容端点，托管或本地都行 |
 | 停用之后 | 取决于能否导出 | 无需导出：记录一直就在你的仓库里 |
 
 ## 小团队该问的七个问题
@@ -76,7 +76,7 @@ Orbi 自己也是这样被构建出来的：[已合并 PR](https://github.com/or
 
 - **代码开源**（AGPL-3.0 或 Sustainable Use License，二选一）。在你自己的仓库上运行永久免费，不限规模，即使 Orbi 背后的公司不在了也一样。
 - **状态属于你。** Orbi 知道的一切都存在你的 GitHub 仓库里。明天停用 Orbi，你的 Issue、PR 和历史原封不动。
-- **模型属于你。** Orbi 支持任何 OpenAI 兼容端点，托管的或本地的都可以。换模型只是改一行配置。
+- **模型属于你。** Orbi 可以运行在 Pi agent 支持的所有供应商上：既有 OpenAI（含 ChatGPT 账号登录和 Codex）、Google Gemini 等原生接口，也有任何 OpenAI 兼容端点，托管或本地都行。换模型只是改一行配置。详见 [Pi 供应商模板](/zh/providers)。
 - **[Orbi Cloud](https://orbi.build/cloud/?ref=docs-trust-zh) 运行的是同一个开源引擎**，使用同一套账本，在云端和自托管之间切换不会改变你的记录。
 
 ### 7. 谁能看到我的代码和凭据？
