@@ -81,6 +81,8 @@ No, by construction:
 
 ### 7. Who can see my code and credentials?
 
+**Orbi does not train any AI model on your code.** It runs models; it does not build them. Your code goes only to the model provider you use, under that provider's own data terms.
+
 **Self-hosted:** the GitHub token, SSH key and model keys stay on your machine. They are never written to the repository, the config file, the logs or a GitHub comment, and logs are redacted by construction. Orbi only works on repositories you configure, and you should give it a fine-grained token scoped to just those. Public text can't steer it: recovery instructions are only trusted from people with write access, and a repository's own config file can never redirect where credentials are sent. Details: [Security](/security).
 
 **Orbi Cloud:**
