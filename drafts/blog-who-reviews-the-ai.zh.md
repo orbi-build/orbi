@@ -76,6 +76,6 @@ Orbi 没有数据库。GitHub 的 Issue、标签、评论和 PR 就是全部交�
 - 在安全矩阵里任选一行，跑它的测试
 - 读完整的[信任页](https://docs.orbi.build/zh/trust)
 
-然后在一个开了分支保护的测试仓库上试一试：[托管云](https://orbi.build/?ref=blog-trust-zh)前三次合并交付免费，[自托管](https://docs.orbi.build/zh/quickstart)永久免费。
+然后在一个开了分支保护的测试仓库上试一试：[托管云](https://orbi.build/?ref=blog-trust-zh)可免费试用 14 天，[自托管](https://docs.orbi.build/zh/quickstart)永久免费。
 
 AI 写代码的速度只会越来越快。真正稀缺的，是一个让你敢于放手的理由。

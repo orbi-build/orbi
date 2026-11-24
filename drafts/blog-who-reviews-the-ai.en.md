@@ -76,6 +76,6 @@ We don't want you to trust Orbi because of this post. We want you to verify:
 - Pick any row in the safety matrix and run its test
 - Read the full [trust page](https://docs.orbi.build/trust)
 
-Then try it on a throwaway repository with branch protection on: [Managed Cloud](https://orbi.build/?ref=blog-trust) is free for your first three merged deliveries, and [self-hosting](https://docs.orbi.build/quickstart) is free forever.
+Then try it on a throwaway repository with branch protection on: [Managed Cloud](https://orbi.build/?ref=blog-trust) comes with a 14-day free trial, and [self-hosting](https://docs.orbi.build/quickstart) is free forever.
 
 AI will keep writing code faster. What's scarce is a reason to let go of the wheel.
