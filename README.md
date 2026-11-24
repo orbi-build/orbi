@@ -4,7 +4,7 @@ English | [简体中文](README.zh-CN.md)
 
 **Label a GitHub Issue. Get back a reviewed, merged PR. Release when you decide.**
 
-[Try Orbi Cloud — 3 merged deliveries free](https://orbi.build/?ref=gh-readme) · no server, no credit card required
+[Try Orbi Cloud — 14-day free trial](https://orbi.build/?ref=gh-readme) · no server, no credit card required
 
 [![Watch the 95-second film](https://img.youtube.com/vi/zvPnE2whb08/maxresdefault.jpg)](https://youtu.be/zvPnE2whb08)
 
