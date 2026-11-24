@@ -10,80 +10,104 @@ Orbi 会写代码、审代码，并把代码合并进你的仓库。让软件做
 
 ## 原则：AI 干活，系统守线
 
-大多数 AI 编码工具要求你信任模型。Orbi 试图让这件事变得不必要。模型负责写代码和审代码；一个小而确定的 Runner 决定什么可以合并；GitHub 自己的分支规则执行最后一道边界。模型每个版本都可能变好或变差，围绕它的门禁不应该依赖这一点。
+AI 编码工具已经可以审查 PR、修复问题并批准合并。这让一个问题绕不过去：**AI 写代码、AI 审代码、AI 批准合并，那么谁来检查 AI？记录在哪里？**
 
-## 小团队该问的六个问题，以及 Orbi 的回答
+Orbi 的回答是：不要求你信任模型。模型负责写代码和审代码；一个小而确定的 Runner 决定什么可以合并；GitHub 自己的分支规则执行最后一道边界。模型每个版本都可能变好或变差，围绕它的门禁不应该依赖这一点。
+
+## 这在实践中意味着什么
+
+| | AI 批准自己工作的工具 | Orbi |
+| --- | --- | --- |
+| 谁来审查 | 通常是同一家厂商的模型，往往就是同一个模型 | 一个没写这段代码的独立会话，可以换成另一家供应商的另一个模型 |
+| 谁决定合并 | 模型的结论 | 固定门禁：绑定在被审 commit 上的结论、该 commit 上的 CI、head 未变、base 最新 |
+| 记录在哪里 | 厂商的仪表盘 | 你自己的 GitHub Issue、PR 和评论 |
+| 做不完时 | 视工具而定 | 停下，给 Issue 打上 `ai-blocked` 并写明原因 |
+| 做到哪一步 | 通常到批准为止 | 从 Issue 到合并，再到带发布说明的 tag 版本 |
+| 用哪个模型 | 厂商自己的 | 任何 OpenAI 兼容端点，托管或本地都行 |
+| 停用之后 | 取决于能否导出 | 无需导出：记录一直就在你的仓库里 |
+
+## 小团队该问的七个问题
 
 ### 1. 它会把我的主分支搞坏吗？
 
 开发改动只能通过一个通过全部门禁的 PR 进入你的 base 分支：
 
-- 一个**独立的审查会话**（不是写代码的那个会话）必须给出通过结论，并且这个结论绑定在它审查的那个确切 commit 上。
-- CI 必须在**那个确切 commit 上**是绿的。CI 还在跑就等待，红了就失败。
+- 一个**独立的审查会话**（不是写代码的那个会话）必须给出通过结论，并且这个结论绑定在它审查的那个确切 commit 上。通过 Issue、diff 或评论注入的"结论"永远不会被当成审查者的结论。
+- 如果你的仓库会上报 CI 检查，它们必须在**那个确切 commit 上**通过。检查还在跑就等待，失败就阻止合并。
 - 如果审查之后 base 分支前进了，Runner 会在没有冲突时自己合入新的 base，并等待新 head 上的 CI；如果有其他人向 PR 推送，就退回重新审查。
 - 合并本身使用 `gh pr merge --match-head-commit`，最后一刻 head 变了也会被拒绝。
 
-Agent 会话本身止步于 commit：不推送、不开 PR、不合并。这些步骤由 Runner 在门禁全部通过后执行。
+Agent 会话止步于 commit：不推送、不开 PR、不合并。这些步骤由 Runner 在门禁全部通过后执行。
 
 详见：[安全](/zh/security) · 每道门禁及证明它的测试：[安全矩阵](/zh/safety-matrix)。
 
-### 2. 代码能不能由写它的模型以外的东西来审？
+### 2. 代码会由写它的模型以外的东西来审吗？
 
-可以。审查者始终是一个独立会话；通过 `review_pi_provider` / `review_pi_model`，它还可以运行在**另一家供应商的另一个模型**上，不继承作者的盲区。我们认为，对任何你在乎的东西，让 AI 批准自己的工作都是错误的默认值。这也是 Orbi 坚持模型中立的原因：它永远不会把你绑在写代码的那家厂商上。
+会。审查者始终是一个独立会话；通过 `review_pi_provider` / `review_pi_model`，它还可以运行在**另一家供应商的另一个模型**上，不继承作者的盲区。对任何你在乎的东西，让 AI 批准自己的工作都是错误的默认值。这也是 Orbi 坚持模型中立的原因：它永远不会把你绑在写代码的那家厂商上。
 
 详见：[工作流](/zh/workflow)（用不同模型审查）。
 
-### 3. 出了问题，我能查清楚发生了什么吗？
+### 3. 审查真的会说"不"吗？
+
+会，而且你可以公开看到。在 [PR #1023](https://github.com/orbi-build/orbi/pull/1023) 里，审查者以一条 Major 级问题打回了第一版，指明了 `src/orbi/release.py:2377` 和修法。这次交付随后追加提交，直到审查通过、CI 变绿才合并，并随 [v0.5.17](https://github.com/orbi-build/orbi/releases/tag/v0.5.17) 发布。Orbi 每一次交付的每一轮审查，都记录在对应的 Issue 里。
+
+### 4. 出了问题，我能查清楚发生了什么吗？
 
 Orbi 没有私有数据库。GitHub 的 Issue、标签、评论和 PR **就是**交付记录。每次运行都有一个 `run_id`，同时出现在 Issue 评论、PR 和 Runner 日志里，一次搜索就能还原完整时间线：要求了什么、做了什么、审查打回了什么、修了什么、何时合并。
 
-Orbi 自己也是这样被构建出来的。你可以直接阅读它的历史：[已合并 PR](https://github.com/orbi-build/orbi/pulls?q=is:merged)、[已关闭 Issue](https://github.com/orbi-build/orbi/issues?q=is:closed)、[发布记录](https://github.com/orbi-build/orbi/releases)，包括那些说"不"的审查。
+Orbi 自己也是这样被构建出来的：[已合并 PR](https://github.com/orbi-build/orbi/pulls?q=is:merged)、[已关闭 Issue](https://github.com/orbi-build/orbi/issues?q=is:closed)、[发布记录](https://github.com/orbi-build/orbi/releases)。
 
-### 4. 它做不到的时候会怎样？
+### 5. 它做不到的时候会怎样？
 
 它会停下来告诉你。Orbi 没有静默兜底，也没有"尽力而为"的合并：
 
 - 命令出错立即失败，证据留在日志和 Issue 里。
 - 无法完成的交付会被标记为 `ai-blocked` 并写明原因，交给人决定。
 - 审查与修复循环最多五轮，不会无限循环，不受信任的评论也无法延长它。
-- 描述过于模糊的工单可以被退回要求补充细节，而不是靠猜。
+- 打开 `clarify_thin_tickets` 后，描述过于模糊的工单会被退回提问，而不是靠猜。
 
 我们宁可给你一个诚实的"卡住了"，也不给你一个自信但错误的合并。
 
 详见：[工作流](/zh/workflow) · [安全矩阵](/zh/safety-matrix)。
 
-### 5. 我会被锁死吗？
+### 6. 我会被锁死吗？
 
 不会，这是结构决定的：
 
-- **代码开源**（AGPL-3.0 或 Sustainable Use License，二选一）。在你自己的仓库上运行永久免费，不限规模。
-- **状态属于你。** Orbi 知道的一切都存在你的 GitHub 仓库里。明天停用 Orbi，你的 Issue、PR 和历史原封不动，没有任何东西需要导出。
+- **代码开源**（AGPL-3.0 或 Sustainable Use License，二选一）。在你自己的仓库上运行永久免费，不限规模，即使 Orbi 背后的公司不在了也一样。
+- **状态属于你。** Orbi 知道的一切都存在你的 GitHub 仓库里。明天停用 Orbi，你的 Issue、PR 和历史原封不动。
 - **模型属于你。** Orbi 支持任何 OpenAI 兼容端点，托管的或本地的都可以。换模型只是改一行配置。
-- **[托管云](https://orbi.build/cloud/?ref=docs-trust-zh)运行的是同一个开源引擎**，使用同一套账本，在云端和自托管之间切换不会改变你的记录。
+- **[Orbi Cloud](https://orbi.build/cloud/?ref=docs-trust-zh) 运行的是同一个开源引擎**，使用同一套账本，在云端和自托管之间切换不会改变你的记录。
 
-### 6. 谁能看到我的代码和凭据？
+### 7. 谁能看到我的代码和凭据？
 
-自托管时，GitHub token、SSH key 和模型 key 都留在你的机器上，永远不会写进仓库、配置文件、日志或 GitHub 评论，日志在构造上就做了脱敏。Orbi 只处理你显式配置的仓库，你应该给它一个只限这些仓库的 fine-grained token。
+**自托管：** GitHub token、SSH key 和模型 key 都留在你的机器上，永远不会写进仓库、配置文件、日志或 GitHub 评论，日志在构造上就做了脱敏。Orbi 只处理你配置的仓库，你应该给它一个只限这些仓库的 fine-grained token。公开文本也无法操纵它：Orbi 只信任对仓库有写权限的人留下的恢复指令，仓库自己的配置文件永远无法改变凭据的发送去向。详见：[安全](/zh/security)。
 
-公开文本也无法操纵它：Orbi 只信任对仓库有写权限的人留下的恢复指令，仓库自己的配置文件永远无法改变凭据的发送去向。
+**Orbi Cloud：**
 
-详见：[安全](/zh/security)。
+- 它**只能访问你在 GitHub App 安装里授权的仓库**；在 GitHub 上卸载 App 即可撤销访问，不需要 Orbi 配合。
+- 每个租户的交付环境是一个独立的操作系统用户，有自己的家目录和凭据；它接触不到你的生产凭据、部署流水线或其他仓库。
+- 默认情况下，交付使用 Orbi 的平台模型通道，运行的是 **DeepSeek**：这个通道上你的代码和提示会发送给 DeepSeek。如果你的代码不能接受这一点，可以配置自己的模型 key，它加密存储，永远不会完整显示出来。
 
-## 你需要做的：让承诺成立的三项设置
+详见：[Cloud 安全](https://cloud-docs.orbi.build/zh/security) · [模型配置](https://cloud-docs.orbi.build/zh/model-configuration)。
 
-Orbi 的设计是*配合* GitHub 的保护机制，而不是取代它。在让它合并之前，请设置：
+## 需要你做的选择
 
-1. **base 分支的分支保护或 ruleset**，并启用必需的状态检查。这是真正执行边界的一层，原因见下方第一条已知限制。
-2. **一个 fine-grained personal access token**，只限 Orbi 处理的仓库，只授予 contents、pull requests、issues 和 metadata 权限。
-3. 如果使用仓库级策略，把 **`.github/orbi.toml` 加入 `CODEOWNERS`**，修改它需要 owner 审查。
+Orbi 的设计是*配合* GitHub 的保护机制，而不是取代它。在让它合并之前：
 
-如果你希望合并前有人签字，打开[人工验收门](/zh/workflow)（`human_review_gate = true`）。每次交付会发布一份清单，区分"已自动验证的"和"只有人能确认的"（例如业务意图、UI 文案），等待你打上 `ai-human-review` 标签后才继续。
+1. **给 base 分支开启分支保护，并要求状态检查通过。** 分支保护或 ruleset 是真正执行边界的一层（原因见下方第一条限制），必需的状态检查让每次合并都经过 CI。
+2. **决定是否每次合并都要有人批准。** 如果 base 分支要求批准评审，每次交付都会停在合并这一步：Orbi 以同一个身份提交和合并，而 GitHub 不允许自己批准自己。想让每次合并都有人把关，就保留这条规则，Orbi 会等待批准；否则就去掉它，或给合并身份配置绕过权限，让独立审查和 CI 替代人工批准。详见[如何选择](https://cloud-docs.orbi.build/zh/connect-repository)。
+3. **自托管时使用 fine-grained personal access token**，只限 Orbi 处理的仓库，只授予 contents、pull requests、issues 和 metadata 权限。
+4. **如果使用 `.github/orbi.toml`，把它加入 `CODEOWNERS`**，修改仓库的交付策略需要 owner 审查。
+
+如果希望由人确认机器无法验证的部分，打开[人工验收门](/zh/workflow)（`human_review_gate = true`，默认关闭）。每次交付会发布一份清单，区分"已自动验证的"和"只有人能确认的"（例如业务意图、UI 文案），等你打上 `ai-human-review` 标签后才继续。
 
 ## Orbi 不承诺的事
 
 这些限制，我们宁愿你先从我们这里听到：
 
 - **Orbi 不会拦截 agent 会话自己推送受保护分支。** Agent 被要求不这样做，但那是指令，不是强制。强制执行的是分支保护；没有分支保护，Orbi 里没有任何东西能阻止它。
+- **没有 CI，就没有测试证据。** 一个没有上报任何检查的 PR，在审查和其他门禁通过后仍然可以合并，只是它的测试不会被报告为通过。Orbi 门禁的强度取决于你提供的 CI。
 - **发版不经过 PR 审查门禁。** 发版任务有自己的门禁，可以直接向 base 分支推送版本提交。
 - **测试通过不等于意图正确。** 测试证明代码符合测试，不证明测试符合你的本意。这正是 Issue 里的验收标准和人工验收门存在的意义。
 - **有些决定需要人。** 审查者要求人工决定、或轮次预算用完时，Orbi 会停下，不会合并。
@@ -97,9 +121,11 @@ Orbi 的设计是*配合* GitHub 的保护机制，而不是取代它。在让�
 
 ## 十分钟亲自核实
 
-1. 打开一个真实的闭环：[Issue #1367](https://github.com/orbi-build/orbi/issues/1367) → [PR #1370](https://github.com/orbi-build/orbi/pull/1370) → [Release v0.5.47](https://github.com/orbi-build/orbi/releases/tag/v0.5.47)。
+1. 打开一个真实的闭环：[Issue #1367](https://github.com/orbi-build/orbi/issues/1367) → [PR #1370](https://github.com/orbi-build/orbi/pull/1370) → [Release v0.5.47](https://github.com/orbi-build/orbi/releases/tag/v0.5.47)；再看一次被打回的审查：[PR #1023](https://github.com/orbi-build/orbi/pull/1023)。
 2. 在[安全矩阵](/zh/safety-matrix)里任选一行，运行它的测试：`python3 -m pytest "<test id>"`。
 3. 阅读[安全模型](/zh/security)，与 `src/orbi/` 里的代码对照。
-4. 在一个开了分支保护的测试仓库上试用：[托管云](https://orbi.build/?ref=docs-trust-zh)（14 天免费试用）或[自托管](/zh/quickstart)。
+4. 在一个开了分支保护的测试仓库上试用：[Orbi Cloud](https://orbi.build/?ref=docs-trust-zh)（14 天免费试用）或[自托管](/zh/quickstart)。
 
-如果本页的任何内容与代码的实际行为不一致，那是 bug，请[提交 Issue](https://github.com/orbi-build/orbi/issues)。
+## 本页如何保持诚实
+
+本页和它描述的代码放在同一个 Orbi 仓库里，每一次修改都能在[文件历史](https://github.com/orbi-build/orbi/commits/main/docs/zh/trust.mdx)里看到。门禁、默认值或已知限制一旦变化，本页会在同一次交付里一起更新。如果这里的任何内容与代码的实际行为不一致，那是 bug，请[提交 Issue](https://github.com/orbi-build/orbi/issues)。
