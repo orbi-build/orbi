@@ -10,7 +10,7 @@ every deliverable needs — an **observable result**, an **acceptance
 condition** and a **single outcome** — and a failing verdict either
 applies the proposal it carries or stops the ticket at the claim. The
 judgment reads the ticket the way every other Issue session does
-(`issue_images.attach_to`, Issue #2390): its text AND the images attached
+(`issue_material.material`, Issue #2390): its text AND the images attached
 to it, so a screenshot that states the result and the acceptance counts.
 
 A failing verdict whose only missing piece is the acceptance condition and

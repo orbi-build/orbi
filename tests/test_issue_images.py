@@ -23,6 +23,7 @@ import orbi.failure as failure
 import orbi.failure_report as failure_report
 import orbi.language as language
 import orbi.issue_images as issue_images
+import orbi.issue_material as issue_material
 import orbi.model_catalog as model_catalog
 import orbi.pi_session as pi_session
 import orbi.draft_marker as draft_marker
@@ -83,6 +84,24 @@ def drafted(body: str, *, section: str = "") -> str:
     )
 
 
+def session_images(
+    issue: dict, *, config, repo: str, worktree: Path, review: bool = False,
+) -> attachments.Attached:
+    """The images ONE session receives, through the ONE shared entry point.
+
+    Issue #2390: `orbi.issue_material.material` is the only builder of an
+    Issue session's material, so these image assertions read the image half
+    of exactly what every session is handed. `with_comments=False` keeps the
+    text half out — it is the same shape a session whose prompt already
+    carries `{{ISSUE_COMMENTS}}` gets, and the images still read the trusted
+    comments.
+    """
+    return issue_material.material(
+        issue, config, repo=repo, directory=worktree, review=review,
+        with_comments=False,
+    ).images
+
+
 # --- the sources ---------------------------------------------------------
 
 def test_an_attachments_section_image_is_downloaded_with_no_token(
@@ -91,7 +110,7 @@ def test_an_attachments_section_image_is_downloaded_with_no_token(
     """Acceptance 5: the section's own address, fetched directly."""
     address = "https://cdn.example.test/shot.png"
     body = drafted(BODY, section=f"## Attachments\n\n![shot.png]({address})")
-    attached = issue_images.for_session(
+    attached = session_images(
         {"number": 1, "body": body}, config=image_input_config(), repo=REPO,
         worktree=worktree,
     )
@@ -112,7 +131,7 @@ def test_an_attachments_section_image_is_requested_as_orbi(
     """
     address = "https://beta.orbi.build/api/attachments/key"
     body = drafted(BODY, section=f"## Attachments\n\n![shot.png]({address})")
-    issue_images.for_session(
+    session_images(
         {"number": 1, "body": body}, config=image_input_config(), repo=REPO,
         worktree=worktree,
     )
@@ -133,7 +152,7 @@ def test_a_403_on_the_section_image_still_stops_the_delivery(
     with caplog.at_level(logging.WARNING), pytest.raises(
         issue_images.Unreadable, match="shot.png",
     ) as raised:
-        issue_images.for_session(
+        session_images(
             {"number": 1, "body": body}, config=image_input_config(),
             repo=REPO, worktree=worktree,
         )
@@ -146,7 +165,7 @@ def test_a_native_image_in_the_body_is_read_through_the_markdown_render(
 ):
     """Acceptance 5: rendered, then the signed address downloads with no token."""
     body = drafted(f"{BODY}\n\n![shots]({NATIVE})")
-    issue_images.for_session(
+    session_images(
         {"number": 1, "body": body}, config=image_input_config(), repo=REPO,
         worktree=worktree,
     )
@@ -169,7 +188,7 @@ def test_a_private_issue_receives_its_section_and_body_native_images(
     """
     section = f"## Attachments\n\n![shot]({NATIVE})"
     body = drafted(f"{BODY}\n\n![pasted]({NATIVE_2})", section=section)
-    attached = issue_images.for_session(
+    attached = session_images(
         {"number": 1, "body": body}, config=image_input_config(), repo=REPO,
         worktree=worktree,
     )
@@ -195,7 +214,7 @@ def test_the_render_asks_for_gfm_mode_with_the_repository_as_context(
     without it the render keeps the bare native address.
     """
     body = drafted(f"{BODY}\n\n![shot]({NATIVE})")
-    issue_images.for_session(
+    session_images(
         {"number": 1, "body": body}, config=image_input_config(), repo=REPO,
         worktree=worktree,
     )
@@ -209,7 +228,7 @@ def test_a_native_image_of_a_trusted_comment_is_read(gh, downloads, worktree):
     gh.add_issue(1, body=drafted(BODY))
     gh.collaborators["maintainer"] = "write"
     gh.comment(1, f"look: ![shot]({NATIVE})", login="maintainer")
-    issue_images.for_session(
+    session_images(
         {"number": 1, "body": gh.issues[1]["body"]}, config=image_input_config(),
         repo=REPO, worktree=worktree,
     )
@@ -223,7 +242,7 @@ def test_a_link_in_an_untrusted_comment_is_never_fetched(
     gh.add_issue(1, body=drafted(BODY))
     gh.collaborators["stranger"] = "read"
     gh.comment(1, f"look: ![shot]({NATIVE})", login="stranger")
-    attached = issue_images.for_session(
+    attached = session_images(
         {"number": 1, "body": gh.issues[1]["body"]}, config=image_input_config(),
         repo=REPO, worktree=worktree,
     )
@@ -236,7 +255,7 @@ def test_an_image_repeated_in_two_places_is_read_once(gh, downloads, worktree):
     """The same native image in the body and in the section is one file."""
     section = f"## Attachments\n\n![shot]({NATIVE})"
     body = drafted(f"{BODY}\n\n![shot]({NATIVE})", section=section)
-    attached = issue_images.for_session(
+    attached = session_images(
         {"number": 1, "body": body}, config=image_input_config(), repo=REPO,
         worktree=worktree,
     )
@@ -249,7 +268,7 @@ def test_a_body_without_a_marker_still_offers_its_images(
 ):
     """A hand-written Issue has no marker: its native images still arrive."""
     body = f"{BODY}\n\n![shot]({NATIVE})"
-    attached = issue_images.for_session(
+    attached = session_images(
         {"number": 1, "body": body}, config=image_input_config(), repo=REPO,
         worktree=worktree,
     )
@@ -262,7 +281,7 @@ def test_a_downloaded_image_keeps_its_own_suffix(gh, downloads, worktree):
     address = "https://cdn.example.test/shot.jpg"
     downloads.answers[address] = b"\xff\xd8\xff\xe0" + b"0" * 8
     body = drafted(BODY, section=f"## Attachments\n\n![shot]({address})")
-    attached = issue_images.for_session(
+    attached = session_images(
         {"number": 1, "body": body}, config=image_input_config(), repo=REPO,
         worktree=worktree,
     )
@@ -279,7 +298,7 @@ def test_a_download_that_is_not_an_image_is_unreadable(
     with caplog.at_level(logging.WARNING), pytest.raises(
         issue_images.Unreadable, match="shot",
     ):
-        issue_images.for_session(
+        session_images(
             {"number": 1, "body": body}, config=image_input_config(),
             repo=REPO, worktree=worktree,
         )
@@ -300,7 +319,7 @@ def test_an_unreadable_image_stops_and_names_the_file(
     with caplog.at_level(logging.WARNING), pytest.raises(
         issue_images.Unreadable, match="gone",
     ) as raised:
-        issue_images.for_session(
+        session_images(
             {"number": 1, "body": body}, config=image_input_config(),
             repo=REPO, worktree=worktree,
         )
@@ -316,7 +335,7 @@ def test_a_failed_comment_read_leaves_the_body_images(
     body = drafted(f"{BODY}\n\n![shot]({NATIVE})")
     gh.comment_read_failure = "gh: HTTP 502"
     with caplog.at_level(logging.WARNING):
-        attached = issue_images.for_session(
+        attached = session_images(
             {"number": 1, "body": body}, config=image_input_config(),
             repo=REPO, worktree=worktree,
         )
@@ -333,7 +352,7 @@ def test_the_signed_address_is_never_logged(
     with caplog.at_level(logging.DEBUG), pytest.raises(
         issue_images.Unreadable,
     ):
-        issue_images.for_session(
+        session_images(
             {"number": 1, "body": body}, config=image_input_config(),
             repo=REPO, worktree=worktree,
         )
@@ -348,7 +367,7 @@ def test_a_model_without_image_input_reads_no_image(
 ):
     """Acceptance 2: a text-only model neither reads nor names an image."""
     body = drafted(f"{BODY}\n\n![shot]({NATIVE})")
-    attached = issue_images.for_session(
+    attached = session_images(
         {"number": 1, "body": body}, config=RunnerConfig(), repo=REPO,
         worktree=worktree,
     )

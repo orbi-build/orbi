@@ -121,20 +121,12 @@ def material(
     limit = config.issue_comments_limit
     issue_kept = _limited(fetched, limit, repo=repo)
     if extra_comments:
-        kept = _limited(
-            sorted(
-                [*fetched, *extra_comments],
-                key=lambda item: str(item.get("createdAt") or ""),
-            ),
-            limit, repo=repo,
+        timeline = sorted(
+            [*fetched, *extra_comments],
+            key=lambda item: str(item.get("createdAt") or ""),
         )
-        block = trusted_issue_comments_block(
-            sorted(
-                [*fetched, *extra_comments],
-                key=lambda item: str(item.get("createdAt") or ""),
-            ),
-            limit, repo=repo,
-        )
+        kept = _limited(timeline, limit, repo=repo)
+        block = trusted_issue_comments_block(timeline, limit, repo=repo)
     else:
         kept = issue_kept
         block = trusted_issue_comments_block(fetched, limit, repo=repo)

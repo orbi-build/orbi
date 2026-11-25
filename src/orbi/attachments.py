@@ -52,7 +52,6 @@ SECTION_HEADING = "## Attachments"
 # `Python-urllib/3.x` User-Agent with HTTP 403 and Orbi's own value with
 # 200 (measured 2026-11-23), so `orbi draft` and a delivery share it.
 USER_AGENT = "orbi"
-DOWNLOAD_TIMEOUT_SECONDS = 60
 _URL_RE = re.compile(r"^https?://", re.IGNORECASE)
 _MAGIC = (
     (b"\x89PNG", ".png"), (b"\xff\xd8", ".jpg"),

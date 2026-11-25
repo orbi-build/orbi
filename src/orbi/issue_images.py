@@ -18,11 +18,11 @@ credential, so it is never logged and never written into a comment.
 Only a model that declares image input gets this work: an image cannot
 reach any other model, so nothing is read for it (orbi.model_catalog).
 
-`stage` is the one staging implementation; `orbi.issue_material` builds the
-material every Issue session receives (text, trusted comments and these
-images) from it, so no path assembles the Issue on its own (Issue #2390).
-Downloads go through `orbi.attachments.download`, the same downloader
-`orbi draft` uses.
+`stage` is the ONE staging implementation and has exactly one caller:
+`orbi.issue_material.material` builds the material every Issue session
+receives (text, trusted comments and these images) from it, so no path
+assembles the Issue on its own (Issue #2390). Downloads go through
+`orbi.attachments.download`, the same downloader `orbi draft` uses.
 
 Unreadable means stop: an attachment is often the request itself, so
 skipping it would write the wrong code. A failed image download or render
@@ -39,8 +39,7 @@ import logging
 import re
 from pathlib import Path
 
-from orbi import attachments, failure, model_catalog
-from orbi.comment_trust import trusted_comments
+from orbi import attachments, failure
 from orbi.github import issue_comments, run_gh_write_command
 from orbi.journal import event
 
@@ -79,33 +78,6 @@ IMAGES_DIRNAME = "attachments"
 NATIVE_PREFIX = "https://github.com/user-attachments/assets/"
 _IMAGE_RE = re.compile(r"!\[(?P<alt>[^\]]*)\]\((?P<url>https?://[^)\s]+)\)")
 _SRC_RE = re.compile(r'src="(?P<url>[^"]+)"')
-
-
-def for_session(
-    issue: dict, *, config, repo: str, worktree: Path, review: bool = False,
-) -> attachments.Attached:
-    """The images one delivery or review session receives.
-
-    Raises `Unreadable` when any image cannot be read: the caller stops
-    before the session starts, so the request is never half-seen, and the
-    failure-stop path reports it once as `attachment_unavailable` (the
-    record rides the exception). A failed comment read is still a bypass,
-    logged and skipped, and leaves the body's own images in place.
-    """
-    viewable = model_catalog.declares_image_input(config, review=review)
-    if not viewable:
-        # A session whose model declares no image input cannot see one: the
-        # file is neither read nor named, and an unreadable image can never
-        # stop a session that could not use it (Issue #2364).
-        return attachments.Attached()
-    number = issue.get("number")
-    trusted = trusted_comments(
-        comments(number, repo=repo), repo=repo,
-    )[-config.issue_comments_limit:]
-    return stage(
-        issue, trusted_comments=trusted, viewable=viewable,
-        directory=worktree, repo=repo,
-    )
 
 
 def comments(number: object, *, repo: str) -> list[dict]:
