@@ -290,6 +290,9 @@ def test_every_role_reads_and_writes_the_configured_name(tmp_path, role):
 
     def fake_run(command, **kwargs):
         commands.append(list(command))
+        if " ".join(command).startswith("gh issue create"):
+            # Real gh prints the created Issue's URL (Issue #2394).
+            return "https://github.com/acme/app/issues/12"
         return "[]"
 
     runner_health.create_health_issue(

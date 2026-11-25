@@ -30,7 +30,7 @@ import pytest
 from subprocess import CalledProcessError
 
 import orbi.failure_report as failure_report
-from orbi import runner
+from orbi import health_state, runner
 import orbi.pi_session as pi_session
 from orbi import runner_health
 from seam import seam
@@ -85,7 +85,9 @@ class FakeRunCommand:
     """Records every call and answers from a substring route table.
 
     Routes are checked in insertion order (first match wins); an
-    Exception-valued answer is raised. An unmatched command returns ""."""
+    Exception-valued answer is raised. A `gh issue create` answers the URL
+    real gh prints (the adapter parses its number, Issue #2394); an
+    unmatched command returns ""."""
 
     def __init__(self, routes=None):
         self.calls: list[list[str]] = []
@@ -96,6 +98,10 @@ class FakeRunCommand:
         self.calls.append(list(command))
         self.call_kwargs.append(dict(kwargs))
         joined = " ".join(command)
+        if joined.startswith("gh issue create"):
+            # Real gh prints the created Issue's URL, never a listing
+            # payload (the adapter parses its number, Issue #2394).
+            return f"https://github.com/{REPO}/issues/{900 + len(self.calls)}"
         for needle, answer in self.routes.items():
             if needle in joined:
                 if isinstance(answer, BaseException):
@@ -1449,7 +1455,7 @@ def test_record_pickup_blocks_behind_a_busy_health_lock(tmp_path):
     stale_pickup alarm)."""
     (tmp_path / ".orbi").mkdir(exist_ok=True)
     path = runner_health.health_state_path(tmp_path)
-    lock_fd = os.open(str(runner_health._health_lock_path(path)),
+    lock_fd = os.open(str(runner_health._lock_path(path)),
                       os.O_CREAT | os.O_RDWR, 0o644)
     fcntl.flock(lock_fd, fcntl.LOCK_EX)  # a foreign instance holds it
     done: list[bool] = []
@@ -1477,11 +1483,11 @@ def test_run_health_check_skips_when_the_lock_stays_busy(
     no journal/gh command may run, nothing may be recorded."""
     (tmp_path / ".orbi").mkdir(exist_ok=True)
     path = runner_health.health_state_path(tmp_path)
-    lock_fd = os.open(str(runner_health._health_lock_path(path)),
+    lock_fd = os.open(str(runner_health._lock_path(path)),
                       os.O_CREAT | os.O_RDWR, 0o644)
     fcntl.flock(lock_fd, fcntl.LOCK_EX)
     try:
-        monkeypatch.setattr(runner_health, "HEALTH_LOCK_TIMEOUT_S", 0.2)
+        monkeypatch.setattr(health_state, "HEALTH_LOCK_TIMEOUT_S", 0.2)
         probe = Mock(side_effect=AssertionError("must not run any command"))
         alerts = runner_health.run_health_check(
             make_config(tmp_path), run_command=probe,

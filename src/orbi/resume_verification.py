@@ -43,6 +43,7 @@ from orbi.failure_report import UnrecoverableDeliveryError
 from orbi.github import (
     pr_number,
     apply_label_patch,
+    close_issue,
     comment_issue,
     issue_labels,
     run_gh_read_command,
@@ -363,10 +364,7 @@ def _close_external_triage_issue(
             )
         )
         comment_issue(number, repo=source_repo, body=body)
-        run_command(
-            ["gh", "issue", "close", str(number),
-             "--repo", source_repo],
-        )
+        close_issue(number, repo=source_repo)
     except Exception:
         LOGGER.exception(
             "issue=%s external_takeover_close_failed pr=%s",

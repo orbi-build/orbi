@@ -36,6 +36,9 @@ from tests.fakes.milestone_gh import FakeMilestoneGh
 from tests.seam import seam
 
 ROOT = Path(__file__).resolve().parent.parent
+# The URL one faked `gh issue create` prints; the adapter parses its number
+# (Issue #2394).
+CREATE_URL = "https://github.com/owner/repo/issues/501"
 REAL_TEMPLATE = (ROOT / ".github" / "release-ticket-template.md").read_text(
     encoding="utf-8",
 )
@@ -563,7 +566,7 @@ def test_ensure_release_ticket_creates_one_with_both_labels(monkeypatch):
         }),
     )
     monkeypatch.setattr(
-        seam, "run_command", lambda command, **kwargs: created.append(command) or "",
+        seam, "run_command", lambda command, **kwargs: created.append(command) or CREATE_URL,
     )
     milestone_command._ensure_command_release_ticket(
         "owner/repo", "v0.5.41", base_branch="main",
@@ -594,7 +597,7 @@ def test_ensure_release_ticket_skips_when_one_already_covers_the_milestone(
         seam, "list_issues", lambda repo, **kwargs: [{"number": 7}],
     )
     monkeypatch.setattr(
-        seam, "run_command", lambda command, **kwargs: created.append(command) or "",
+        seam, "run_command", lambda command, **kwargs: created.append(command) or CREATE_URL,
     )
     milestone_command._ensure_command_release_ticket(
         "owner/repo", "v0.5.41", base_branch="main",
@@ -616,7 +619,7 @@ def test_ensure_release_ticket_detects_the_version_file_when_unset(monkeypatch):
     monkeypatch.setattr(seam, "list_issues", lambda repo, **kwargs: [])
     monkeypatch.setattr(seam, "run_gh_read_command", fake_read)
     monkeypatch.setattr(
-        seam, "run_command", lambda command, **kwargs: created.append(command) or "",
+        seam, "run_command", lambda command, **kwargs: created.append(command) or CREATE_URL,
     )
     milestone_command._ensure_command_release_ticket(
         "owner/repo", "v0.5.41", base_branch="main",
@@ -665,7 +668,7 @@ def test_ensure_release_ticket_uses_a_configured_version_file_without_detecting(
     monkeypatch.setattr(seam, "list_issues", lambda repo, **kwargs: [])
     monkeypatch.setattr(seam, "run_gh_read_command", fake_read)
     monkeypatch.setattr(
-        seam, "run_command", lambda command, **kwargs: created.append(command) or "",
+        seam, "run_command", lambda command, **kwargs: created.append(command) or CREATE_URL,
     )
     milestone_command._ensure_command_release_ticket(
         "owner/repo", "v0.5.41", base_branch="main",
@@ -694,7 +697,7 @@ def test_ensure_release_ticket_uses_the_builtin_set_without_a_template(
     monkeypatch.setattr(seam, "list_issues", lambda repo, **kwargs: [])
     monkeypatch.setattr(seam, "run_gh_read_command", fake_read)
     monkeypatch.setattr(
-        seam, "run_command", lambda command, **kwargs: created.append(command) or "",
+        seam, "run_command", lambda command, **kwargs: created.append(command) or CREATE_URL,
     )
     milestone_command._ensure_command_release_ticket(
         "owner/repo", "v0.5.41", base_branch="main",

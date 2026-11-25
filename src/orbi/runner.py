@@ -1911,7 +1911,7 @@ def _preflight(config: config_domain.RunnerConfig) -> None:
     # is unreachable evidence and otherwise stays on the remote forever.
     # Bounded, idempotent, never fatal: one delete failure is a warning.
     try:
-        reclaim_merged_delivery_branches(config)
+        reclaim_merged_delivery_branches(config, list_prs=github.list_pull_requests)
     except Exception:
         LOGGER.exception("branch_reclaim_failed")
     # Notify bypass (Issue #1673): bind this tick's config and token once.

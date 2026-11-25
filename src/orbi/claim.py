@@ -28,10 +28,9 @@ from orbi.epic_reconciliation import (
 )
 from orbi.github import (
     close_issue,
-    comment_issue, issue_comments, issue_priority, issue_view,
-    list_issues, milestone_open_issue_count,
-    open_blocker_numbers, pr_comments,
-    run_gh_read_command,
+    comment_issue, filter_same_repository_prs, issue_comments,
+    issue_priority, issue_view, list_issues, list_pull_requests,
+    milestone_open_issue_count, open_blocker_numbers, pr_comments,
 )
 from orbi.journal import LOGGER, current_run_id, event, new_run_id, set_run_id
 from orbi.pilot_slots import slot_held_deliveries
@@ -263,14 +262,14 @@ def reconcile_orphan_prs(
     idempotent report comment (the `ORPHAN_PR_MARK` marker); the
     merge/close decision stays with the human — the Runner never
     auto-merges and never auto-closes across a human's close decision.
+
+    The list is the github module's one open-PR query, and a fork PR that
+    reuses a delivery branch name is never this repository's (Issue #2394).
     """
-    raw = run_gh_read_command([
-        "gh", "pr", "list", "--repo", repo, "--state", "open",
-        "--json", "number,headRefName", "--limit", "200",
-    ], timeout=30)
-    prs = json.loads(raw)
-    if not isinstance(prs, list):
-        raise ValueError("pr list must return a JSON array")
+    prs = filter_same_repository_prs(list_pull_requests(
+        repo, state="open", limit=200,
+        json_fields="number,headRefName,isCrossRepository", timeout=30,
+    ))
     evidence: list[str] = []
     for pr in prs:
         if not isinstance(pr, dict):

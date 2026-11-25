@@ -3122,11 +3122,12 @@ def test_verify_pr_rejects_missing_pr(monkeypatch, tmp_path):
 
 
 def test_verify_pr_rejects_non_array(monkeypatch, tmp_path):
+    """A broken payload is the shared PR listing's own error (Issue #2394)."""
     outputs = iter([
         f"orbi/issue-4-{FAKE_RUN_ID}", "", "", FAKE_HEAD_SHA, "{}",
     ])
     monkeypatch.setattr(seam, "run_command", lambda command, **kwargs: next(outputs))
-    with pytest.raises(RuntimeError, match="exactly one open PR"):
+    with pytest.raises(ValueError, match="non-array payload"):
         pr_verification.verify_pr(RunContext(run_id=FAKE_RUN_ID, issue=4, branch=f"orbi/issue-4-{FAKE_RUN_ID}", worktree=tmp_path, source_repo="owner/repo"), "main", repo_dir=tmp_path)
 
 

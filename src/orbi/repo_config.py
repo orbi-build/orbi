@@ -34,7 +34,7 @@ import tomllib
 from pathlib import PurePosixPath
 from typing import TYPE_CHECKING, Callable, cast
 
-from orbi import __version__, language, tick_reads
+from orbi import __version__, gh_response, language, tick_reads
 from orbi import delivery_labels
 from orbi.journal import event, run_command
 
@@ -467,13 +467,6 @@ def repo_config_audit(sha: str | None, policy: RepoPolicy, *,
     return fields
 
 
-def _is_not_found(exc: Exception) -> bool:
-    """True when a `gh api` failure is GitHub's 404 for a missing path."""
-    stdout = getattr(exc, "stdout", "") or ""
-    stderr = getattr(exc, "stderr", "") or ""
-    return '"status":"404"' in stdout.replace(" ", "") or "HTTP 404" in stderr
-
-
 def _command_output_detail(exc: Exception) -> str:
     """One-line stdout/stderr detail of a failed read (empty when absent)."""
     parts = []
@@ -507,7 +500,7 @@ def read_repo_config(repo: str, *, path: str = REPO_CONFIG_PATH,
             failure_log_level=logging.DEBUG,
         )
     except Exception as exc:
-        if not _is_not_found(exc):
+        if not gh_response.not_found(exc):
             event(
                 "repo_config_read_failed", level=logging.ERROR,
                 repo=repo, path=path, error=exc,

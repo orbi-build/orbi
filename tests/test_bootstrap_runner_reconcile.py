@@ -31,6 +31,14 @@ from seam import resume_deps, seam
 from tests.test_bootstrap_runner_outcome import _gh_api
 
 
+# The orphan sweep one open-PR query (the github module shared listing,
+# Issue #2394): the fork flag is fetched so a fork PR is never read as
+# this repository's.
+ORPHAN_PR_LIST_COMMAND = [
+    "gh", "pr", "list", "--state", "open", "--repo", "o/r",
+    "--json", "number,headRefName,isCrossRepository", "--limit", "200",
+]
+
 EPIC_DETAILS = {"number": 20, "labels": [{"name": "ai-epic"}],
                 "blockedBy": {"nodes": []}}
 
@@ -324,8 +332,7 @@ def test_reconcile_orphan_prs_reports_an_open_pr_of_a_closed_issue(monkeypatch, 
     posted = []
 
     def fake_run(command, **kwargs):
-        if command == ["gh", "pr", "list", "--repo", "o/r", "--state", "open",
-                       "--json", "number,headRefName", "--limit", "200"]:
+        if command == ORPHAN_PR_LIST_COMMAND:
             return json.dumps([
                 {"number": 9, "headRefName": "orbi/o-r-issue-4"},
                 {"number": 30, "headRefName": "orbi/x-y-issue-3"},
@@ -375,14 +382,16 @@ def test_reconcile_orphan_prs_reports_an_open_pr_of_a_closed_issue(monkeypatch, 
 def test_reconcile_orphan_prs_rejects_malformed_pr_list_and_state(monkeypatch):
     """A non-array `pr list` answer and a malformed Issue state fail fast
     inside the sweep — the per-tick try/except turns that into the
-    `orphan_pr_reconcile_failed` bypass log, never a broken delivery."""
+    `orphan_pr_reconcile_failed` bypass log, never a broken delivery.
+    The shape check is the github module's shared PR listing (Issue #2394),
+    so it is the same error every other caller gets."""
     def pr_list_run(command, **kwargs):
         if command[:3] == ["gh", "pr", "list"]:
             return json.dumps({"comments": []})
         raise AssertionError(command)
 
     monkeypatch.setattr(seam, "run_command", pr_list_run)
-    with pytest.raises(ValueError, match="pr list must return a JSON array"):
+    with pytest.raises(ValueError, match="gh pr list returned a non-array"):
         claim.reconcile_orphan_prs("o/r", "abc12345", hooks=resume_deps(), language_code="en")
     with pytest.raises(AssertionError):
         pr_list_run(["unexpected"])
@@ -489,8 +498,7 @@ def test_claim_time_comment_follows_the_repository_language(
                     policy_text.encode("utf-8"),
                 ).decode("ascii"),
             })
-        if command == ["gh", "pr", "list", "--repo", "o/r", "--state", "open",
-                       "--json", "number,headRefName", "--limit", "200"]:
+        if command == ORPHAN_PR_LIST_COMMAND:
             return json.dumps([{"number": 9, "headRefName": "orbi/o-r-issue-4"}])
         if command == ["gh", "issue", "view", "4", "--repo", "o/r",
                        "--json", "state"]:

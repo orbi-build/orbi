@@ -1,5 +1,5 @@
 {
-  "boundary_total": 1161,
+  "boundary_total": 1183,
   "command_shape_asserts": 435,
   "internal_total": 1609,
   "monkeypatch_setattr_runner": 104,
@@ -8,7 +8,7 @@
     "HTTPServer": 1,
     "Path": 14,
     "claim": 95,
-    "cli_commands": 28,
+    "cli_commands": 24,
     "cli_doctor": 4,
     "cli_source": 8,
     "cli_status": 65,
@@ -17,6 +17,7 @@
     "failure_report": 59,
     "fcntl": 1,
     "github": 19,
+    "health_state": 1,
     "journal": 9,
     "merge_exec": 45,
     "milestone": 5,
@@ -40,12 +41,12 @@
     "review_merge": 49,
     "run_state": 5,
     "runner": 109,
-    "runner_health": 14,
+    "runner_health": 13,
     "runner_seam": 33,
     "runner_source": 6,
     "scheduler": 17,
     "script": 6,
-    "seam": 1761,
+    "seam": 1781,
     "session_command": 3,
     "setup_checks": 5,
     "setup_config": 2,
@@ -53,6 +54,6 @@
     "signal": 1,
     "subprocess": 20,
     "sys": 4,
-    "time": 60
+    "time": 66
   }
 }

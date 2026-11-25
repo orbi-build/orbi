@@ -32,19 +32,19 @@ callers can share it: it imports no gate module, so no import cycle exists.
 from __future__ import annotations
 
 import re
-import subprocess
 from dataclasses import dataclass
 
 from orbi import attachments, clarify_proposal, language
 from orbi.delivery_labels import label_names
 from orbi import delivery_labels
 from orbi.github import (
+    ISSUE_TIMEOUT_SECONDS,
+    create_issue,
     edit_issue,
     issue_view,
     list_issues,
     run_gh_write_command,
 )
-from orbi.journal import run_command
 from orbi.ticket_command import (
     TicketCommandError,
     author_login_key,
@@ -387,56 +387,27 @@ def create_ticket(
     milestone: str | None = None, step: str = "create the child ticket",
     filed: "attachments.Filing | None" = None,
 ) -> int:
-    """Open one ticket; `gh issue create` prints its URL.
+    """Open one ticket through the ONE Issue creation (Issue #2394).
 
-    The ONE creation leaf both the split command and `orbi draft` use, so
-    the "open it WITHOUT the dispatch label" rule has one implementation:
-    the caller queues the ticket with its own later step.
-
-    Only the labels the caller names and the Milestone are passed; the
-    dispatch label is never one of them. `filed` adds the draft's attached
-    files: one `--attach` per local image, run from their staging directory,
-    and the fixed longer limit an upload needs (Issue #2364).
+    The leaf both the split command and `orbi draft` use, so the "open it
+    WITHOUT the dispatch label" rule has one implementation: the caller
+    queues the ticket with its own later step. Only the labels the caller
+    names and the Milestone are passed; the dispatch label is never one of
+    them. `filed` adds the draft's attached files: one `--attach` per local
+    image, run from their staging directory, and the fixed longer limit an
+    upload needs (Issue #2364). A refused upload is reported from the
+    created body afterwards (`attachments.Filing.unuploaded`), never by
+    failing a creation that already happened.
     """
-    command = [
-        "gh", "issue", "create", "--repo", repo,
-        "--title", title, "--body", body,
-        *(filed.arguments() if filed is not None else ()),
-    ]
-    for label in labels or []:
-        command += ["--label", label]
-    if milestone:
-        command += ["--milestone", milestone]
-    url = run_step(step, lambda: _created_url(command, filed))
-    try:
-        return int(url.rstrip("/").rsplit("/", 1)[-1])
-    except ValueError:
-        raise TicketCommandError(
-            step, f"gh returned no issue URL: {url!r}",
-        ) from None
-
-
-def _created_url(command: list[str], filed: "attachments.Filing | None") -> str:
-    """The created Issue's URL, also when one attachment upload failed.
-
-    gh uploads a local image before the Issue exists; when it refuses one
-    upload it still creates the Issue with the rest, prints the URL and exits
-    non-zero. That IS a creation — the images it dropped are read from the
-    created body afterwards (`attachments.Filing.unuploaded`), so a refusal is
-    reported instead of failing a creation that already happened. A failed
-    create without a URL stays the step's own failure.
-    """
-    try:
-        return run_command(
-            command,
-            timeout=30 if filed is None else FILED_CREATE_TIMEOUT_SECONDS,
-            cwd=filed.directory if filed is not None else None,
-        )
-    except subprocess.CalledProcessError as exc:
-        output = (exc.stdout or "").strip()
-        if filed is None or not output.startswith("https://"):
-            raise
-        return output
+    filed_now = filed is not None
+    return run_step(step, lambda: create_issue(
+        repo, title=title, body=body, labels=labels or (),
+        milestone=milestone,
+        extra_args=filed.arguments() if filed_now else (),
+        cwd=filed.directory if filed_now else None,
+        timeout=(FILED_CREATE_TIMEOUT_SECONDS if filed_now
+                 else ISSUE_TIMEOUT_SECONDS),
+    ))
 
 
 def create_child(

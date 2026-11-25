@@ -30,8 +30,8 @@ from orbi import config as config_domain
 from orbi import language, runner_health
 from orbi import delivery_labels
 from orbi.delivery_scene import RunContext
-from orbi.github import edit_issue
-from orbi.journal import LOGGER, event, issue_context, run_command
+from orbi.github import close_issue, edit_issue
+from orbi.journal import LOGGER, event, issue_context
 from orbi.pi_activity import format_end_scene
 from orbi.pi_process import ROLE_IMPLEMENT
 from orbi.progress import (
@@ -82,10 +82,7 @@ def deliver_pure_ops(
     """
     if head != base_sha or dirty:
         return False
-    run_command([
-        "gh", "issue", "close", str(ctx.issue),
-        "--repo", ctx.source_repo,
-    ])
+    close_issue(ctx.issue, repo=ctx.source_repo)
     edit_issue(
         ctx.issue, repo=ctx.source_repo, remove=delivery_labels.IN_PROGRESS_LABEL,
     )

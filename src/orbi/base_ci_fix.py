@@ -31,10 +31,10 @@ from orbi.base_ci_red import (
 )
 from orbi import delivery_labels
 from orbi.github import (
-    branch_head_sha, comment_issue, commit_check_runs, edit_issue,
+    branch_head_sha, comment_issue, commit_check_runs, create_issue, edit_issue,
     issue_comments, pr_view,
 )
-from orbi.journal import LOGGER, event, run_command
+from orbi.journal import LOGGER, event
 from orbi.pi_activity import parse_iso_utc
 from orbi.progress import fenced
 from orbi.ticket_command import (
@@ -100,22 +100,16 @@ def _base_red_checks(repo: str, record: BaseCIRed) -> list[FailingCheck]:
 def _create_triage_issue(repo: str, checks: list[FailingCheck],
                          record: BaseCIRed, *, milestone: str | None,
                          dispatch_label: str, language_code: str) -> int:
-    command = [
-        "gh", "issue", "create", "--repo", repo,
-        "--title", triage_title(record.base_branch),
-        "--body", _triage_body(checks, record, language_code),
-        "--label", dispatch_label,
-        "--label", delivery_labels.P0_LABEL,
-    ]
-    if milestone:
-        command += ["--milestone", milestone]
-    url = run_command(command, timeout=30).strip()
+    """Open the base-ci-red ticket through the ONE Issue creation (#2394)."""
     try:
-        return int(url.rstrip("/").rsplit("/", 1)[-1])
-    except ValueError:
-        raise TicketCommandError(
-            "create issue", f"gh returned no issue URL: {url!r}",
-        ) from None
+        return create_issue(
+            repo, title=triage_title(record.base_branch),
+            body=_triage_body(checks, record, language_code),
+            labels=[dispatch_label, delivery_labels.P0_LABEL],
+            milestone=milestone,
+        )
+    except ValueError as exc:
+        raise TicketCommandError("create issue", str(exc)) from None
 
 
 def open_fix_issues(

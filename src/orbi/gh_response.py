@@ -2,29 +2,16 @@
 
 A GitHub failure is classified from the HTTP status the response carries,
 never from the error text: the detail of a `CalledProcessError` also holds
-the command's argv, so a branch, label or check named `credential` or
-`forbidden` could be read as a credential problem (Issue #1760).
+the command's argv, so a branch named `credential` could be misread (#1760).
 
 `gh api --include` (documented: "Include HTTP response status line and
-headers in the output") prints the status line and the response headers in
-front of the body — for a failed request too, verified against gh 2.100.0:
-a 403 prints `HTTP/2.0 403 Forbidden`, its headers and the error body on
-stdout, writes one line to stderr and exits 1. `X-Ratelimit-Remaining` is
-one of those headers, and a 403 with `0` remaining is GitHub's rate limit,
-while a 403 with quota left is a permission failure. The status is
-therefore read from the response itself.
-
-The other structural source is gh's documented exit code: `gh help
-exit-codes` says "If a command requires authentication, the exit code will
-be 4", which covers the gh subcommands that print no response headers.
-
-JSON output escapes newlines inside string values, so a line that starts
-with a status line can only be gh's own header block — a body that merely
-QUOTES an HTTP example keeps it inside one JSON string.
-
-An empty body prints no line at all: gh's output is then the status line
-and the headers, and the stripped stdout ends after the last header. That
-block is still complete — the body it carries is the empty string.
+headers in the output") prints the status line and the headers in front of
+the body — for a failed request too, verified against gh 2.100.0: a 403
+prints `HTTP/2.0 403 Forbidden`, its headers and the error body on stdout
+and exits 1. `X-Ratelimit-Remaining` is one of those headers, and a 403
+with `0` remaining is the rate limit while one with quota left is a
+permission failure. JSON escapes newlines inside string values, so a line
+starting with a status line is gh's own header block, never body text.
 """
 from __future__ import annotations
 
@@ -49,6 +36,10 @@ _STATUS_LINE_RE = re.compile(r"HTTP/\d+(?:\.\d+)? (\d{3})\b")
 # text cannot be mistaken for response metadata.
 _HEADER_LINE_RE = re.compile(r"^[A-Za-z0-9!#$%&'*+.^_`|~-]+:")
 _RATELIMIT_RE = re.compile(r"^x-ratelimit-remaining:\s*(\d+)\s*$", re.IGNORECASE)
+# Only a status 404, or GitHub's own 404 marker in the message of a
+# status-less `gh` subcommand: a 403/5xx sentence says "not found" too.
+_NOT_FOUND_RE = re.compile(r'"status"\s*:\s*"?404|(?:http|status) ?404',
+                           re.IGNORECASE)
 
 
 class GitHubRequestFailed(subprocess.CalledProcessError):
@@ -83,7 +74,7 @@ def include_headers(command: list[str]) -> list[str]:
     """Return `command` asking `gh api` to print the response status line.
 
     Only `gh api` prints response headers; every other gh subcommand keeps
-    its argv (its authentication failure is gh's own exit code).
+    its argv.
     """
     if command[:2] != ["gh", "api"]:
         return command
@@ -95,12 +86,10 @@ def include_headers(command: list[str]) -> list[str]:
 def _header_block_end(lines: list[str], start: int) -> int | None:
     """Index of the first line after a header block, or None if not one.
 
-    A block also ends at the end of the output: gh prints no body line at
-    all when the response body is empty (a `--jq` filter that selects
-    nothing, a `204`), and the caller's stripped stdout then ends right
-    after the last header — without the trailing blank line. A status
-    line followed by header lines and nothing else is still gh's header
-    block, never body text (Issue #1760).
+    A block also ends at the end of the output: gh prints no body line when
+    the response body is empty, so a status line followed by headers and
+    nothing else is still gh's block, never body text (`_header_block_end`
+    mirrors it for the caller; Issue #1760).
     """
     index = start + 1
     if index >= len(lines) or not (
@@ -120,10 +109,9 @@ def _header_block_end(lines: list[str], start: int) -> int | None:
 def response_parts(output: str | None) -> tuple[int | None, int | None, str]:
     """Split gh's output into (status, x-ratelimit-remaining, body).
 
-    Every header block is removed from the body, including the ones gh
-    prints between the pages of a `--paginate` read (the JSON separator
-    shares the line with the next page's status line). The LAST block wins:
-    a failed paginated request ends on the response that failed.
+    Every header block is removed, including the ones between the pages of
+    a `--paginate` read; the LAST block wins, so a failed paginated request
+    ends on the response that failed.
     """
     lines = str(output or "").splitlines()
     statuses: list[int] = []
@@ -161,8 +149,7 @@ def failed_request(
 ) -> GitHubRequestFailed:
     """Return `exc` carrying the status of the response it received.
 
-    An already structured error is returned unchanged, so the wrapper can
-    re-raise without losing the status.
+    An already structured error is returned unchanged.
     """
     if isinstance(exc, GitHubRequestFailed):
         return exc
@@ -182,11 +169,9 @@ def transient_command(failure: GitHubRequestFailed) -> bool:
 
     The response status decides whenever gh printed one — a permission
     failure is never retried. A `gh` subcommand other than `gh api`
-    prints no response headers, so it keeps GitHub's own server
-    sentences: there is no status to read, and dropping that signal would
-    turn a GitHub-side 5xx on a plain scan read back into the crashed
-    tick the bounded retry exists to prevent (Issue #738). A retried
-    mutation stays guarded by the caller's `already_applied` check.
+    prints no response headers, so it keeps GitHub's own server sentences
+    (Issue #738); a retried mutation stays guarded by the caller's
+    `already_applied` check.
     """
     if failure.status is not None or failure.authentication_required:
         return transient(failure)
@@ -198,6 +183,21 @@ def transient_command(failure: GitHubRequestFailed) -> bool:
 def status_of(exc: BaseException | None) -> int | None:
     """The HTTP status a failed gh request carried, or None."""
     return exc.status if isinstance(exc, GitHubRequestFailed) else None
+
+
+def not_found(exc: BaseException | None) -> bool:
+    """Whether a failed request is GitHub's 404 (the ONE missing-path rule).
+
+    The response status decides whenever the request carried one; only a
+    status-less `gh` subcommand falls back to GitHub's own 404 wording.
+    """
+    status = status_of(exc) or response_parts(
+        getattr(exc, "stdout", None))[0]
+    if status is not None:
+        return status == 404
+    detail = " ".join(
+        str(getattr(exc, name, "") or "") for name in ("stderr", "stdout"))
+    return _NOT_FOUND_RE.search(detail) is not None
 
 
 def authentication_required(exc: BaseException) -> bool:
