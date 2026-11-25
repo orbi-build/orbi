@@ -315,6 +315,15 @@ Rules of the chain:
   `origin/<base>` on the task branch (conflicts resolved manually),
   followed by a full test rerun. No force push, no auto conflict
   resolution, no push of the protected branch.
+- A head whose checks are RED and that only lacks the base (GitHub reports
+  the PR mergeable, so there is no conflict) is absorbed and pushed by the
+  Runner BEFORE the review session starts (Issue #2423): no session runs on
+  that stale head, no round is counted, no failure comment is posted, and
+  the next tick reviews the new head. A red check the base has already
+  fixed therefore no longer ends the delivery — re-queuing the ticket with
+  `ai-fix-needed` picks the fix up. A head that already contains the base,
+  or one GitHub reports as conflicting, keeps the paths above: the review
+  runs on the red head, and a conflicting head is absorbed in the session.
 - Absorb contract (Issue #877, machine-checked by the Runner): a review
   round that starts with the head behind `origin/<base>` or facing a
   merge conflict must end in one of two states — the branch contains

@@ -258,6 +258,13 @@ branch、base、head、精确 URL 校验全部保留，#45/#89 的防串 PR 语�
 - base 前进由 task branch 上对最新 `origin/<base>` 的普通 `git merge`
   吸收（冲突手工解决），然后重跑完整测试。不 force push、不自动解决
   冲突、不 push 保护分支。
+- 检查为红、且只是缺少 base（GitHub 报告 PR 可合并，即没有冲突）的 head，
+  会在评审 session 启动前由 Runner 直接吸收并推送（Issue #2423）：不会在
+  这个过期 head 上启动 session，不计数评审轮，不发失败评论，下一 tick 评审
+  新的 head。base 已经修好的红检查因此不再让交付结束——用
+  `ai-fix-needed` 重新排队就会带上这个修复。已经包含 base 的 head，或
+  GitHub 报告为冲突的 head，仍走上面的路径：评审在红 head 上运行，冲突的
+  head 在 session 内吸收。
 - 吸收契约（Issue #877，Runner 机器校验）：一轮评审开始时 head 已落后
   `origin/<base>` 或 PR 有冲突时，该轮结束必须满足二者之一——分支包含
   `origin/<base>`（`git merge-base --is-ancestor` 为真），或 verdict 为

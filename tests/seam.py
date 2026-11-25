@@ -10,6 +10,7 @@ does exactly that: reading resolves the current binding (monkeypatch's
 old-value capture) and writing fans the value out to all bindings, so
 monkeypatch's teardown fans the original back.
 """
+import orbi.base_absorb as base_absorb
 import orbi.base_ci_fix as base_ci_fix
 import orbi.base_ci_red as base_ci_red
 import orbi.blocked_comment as blocked_comment
@@ -94,7 +95,8 @@ _MODULES = (
     draft, draft_marker, draft_author, branch_reclaim, failure_report,
     suggest, cli,
     blocked_comment, stop_comment,
-    base_ci_red, base_ci_fix, cli_commands, cli_doctor, check_permission,
+    base_absorb, base_ci_red, base_ci_fix, cli_commands, cli_doctor,
+    check_permission,
     split_command, amend_command, acceptance_section, clarify_stop,
     answer, merge_blocked, steering, stopped_scans,
 )
