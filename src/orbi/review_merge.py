@@ -318,8 +318,8 @@ def _round_preflight_phase(work: _Round) -> bool:
         and work.issue_body_sha256 == work.review_record[1]
         and pr["head_oid"] == work.review_record[0]
     )
-    work.absorb_required = False
-    if not work.merge_only and not work.merge_only_from_record:
+    if (not work.merge_only and not work.merge_only_from_record
+            and not scene.parsed.external):
         try:
             absorbed = base_absorb.absorb_red_behind_head(
                 worktree, pr, work.base_branch, repo_dir=config.repo_dir,
