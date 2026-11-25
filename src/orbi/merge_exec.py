@@ -27,10 +27,10 @@ import time
 from pathlib import Path
 
 from orbi import answer as answer_domain
+from orbi import base_absorb
 from orbi import config as config_domain
 from orbi import (
-    failure_report, github, gitops, human_review, language, review_wait,
-    run_state,
+    failure_report, github, human_review, language, review_wait, run_state,
 )
 from orbi.branch_reclaim import delete_merged_delivery_branch
 from orbi.checks import classify_checks, render_check
@@ -206,41 +206,17 @@ def merge_gate(worktree: Path, pr: dict, base_branch: str,
         mergeable=mergeable if mergeable == "MERGEABLE" else None,
     )
     if freshness is run_state.BaseFreshness.ABSORBABLE and mergeable == "MERGEABLE":
-        base_sha = run_command(
-            ["git", "rev-parse", f"origin/{base_branch}"], cwd=worktree,
-        )
-        try:
-            run_command(["git", "merge", f"origin/{base_branch}"], cwd=worktree)
-        except subprocess.CalledProcessError as exc:
-            run_command(["git", "merge", "--abort"], cwd=worktree)
-            event(
-                "base_merge_conflict", level=logging.ERROR,
-                base_branch=base_branch, base_sha=base_sha,
-                pr=pr["number"], head=pr["head_oid"],
-                returncode=exc.returncode,
-                stderr=(exc.stderr or "").strip(),
-            )
-            raise RecoverableMergeGateError(
-                f"PR #{pr['number']} cannot absorb origin/{base_branch} "
-                f"({base_sha}); resolve the merge conflict and retry"
-            ) from None
         pre_absorb_head = pr["head_oid"]
-        absorbed_head = run_command(["git", "rev-parse", "HEAD"], cwd=worktree)
-        run_git_network_command(
-            ["git", "push", "origin", f"HEAD:{pr['head_ref']}"],
-            cwd=worktree,
-        )
-        remote_head = gitops.remote_branch_head(pr["head_ref"], cwd=worktree)
-        if remote_head != absorbed_head:
-            raise RuntimeError(
-                f"remote head {remote_head} does not match absorbed head "
-                f"{absorbed_head} after push origin {pr['head_ref']}"
+        try:
+            absorbed_head, base_sha = base_absorb.absorb_origin_base(
+                worktree, base_branch, pr["head_ref"],
+                pr=pr["number"], head=pr["head_oid"],
             )
-        event(
-            "base_absorbed", base_branch=base_branch,
-            base_sha=base_sha, pr=pr["number"],
-            old_head=pr["head_oid"], head=absorbed_head,
-        )
+        except base_absorb.BaseMergeConflict as exc:
+            # The merge was rolled back (the absorb logs the conflict).
+            raise RecoverableMergeGateError(
+                f"PR #{pr['number']} {exc}",
+            ) from None
         pr = {**pr, "head_oid": absorbed_head}
         # The push starts a new CI run whose checks may not be registered
         # yet, and an empty rollup counts as neither pending nor failed.

@@ -501,6 +501,12 @@ def fake_deliver_run(command, **kwargs):
         return ""
     if command[:3] == ["git", "merge-base", "--is-ancestor"]:
         return ""
+    if (command[:2] == ["git", "rev-parse"]
+            and command[2].startswith("origin/")):
+        # The base merge primitive names the base SHA it could not absorb
+        # (Issue #2423: one merge implementation for gate, review tick and
+        # closeout).
+        return FAKE_HEAD_TREE_SHA
     if command[:3] == ["git", "merge", "origin/main"]:
         return ""
     if command[:3] == ["git", "merge", "--abort"]:

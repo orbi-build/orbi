@@ -1,6 +1,6 @@
 ## scenario: clean-merge
 answer: True
-command ["gh", "pr", "view", "4", "--json", "mergeable"]
+command ["gh", "pr", "view", "4", "--json", "state,mergeable,headRefOid,statusCheckRollup"]
 command ["git", "rev-parse", "HEAD"]
 command ["git", "rev-list", "--count", "m1^1..m1^2"]
 label {"remove": "ai-pr-opened", "repo": "owner/repo"}
@@ -30,7 +30,7 @@ journal:
 
 ## scenario: findings
 answer: False
-command ["gh", "pr", "view", "4", "--json", "mergeable"]
+command ["gh", "pr", "view", "4", "--json", "state,mergeable,headRefOid,statusCheckRollup"]
 command ["git", "rev-parse", "HEAD"]
 comment
   <!-- orbi:run=a1b2c3d4 -->
@@ -54,7 +54,7 @@ journal:
 
 ## scenario: gate-failure
 answer: False
-command ["gh", "pr", "view", "4", "--json", "mergeable"]
+command ["gh", "pr", "view", "4", "--json", "state,mergeable,headRefOid,statusCheckRollup"]
 command ["git", "rev-parse", "HEAD"]
 comment
   <!-- orbi:run=a1b2c3d4 -->
@@ -74,7 +74,7 @@ journal:
 
 ## scenario: handoff
 answer: False
-command ["gh", "pr", "view", "4", "--json", "mergeable"]
+command ["gh", "pr", "view", "4", "--json", "state,mergeable,headRefOid,statusCheckRollup"]
 command ["git", "rev-parse", "HEAD"]
 label {"add": "ai-awaiting-merge", "remove": "ai-pr-opened", "repo": "owner/repo"}
 comment
@@ -95,7 +95,7 @@ journal:
 
 ## scenario: deferred
 answer: False
-command ["gh", "pr", "view", "4", "--json", "mergeable"]
+command ["gh", "pr", "view", "4", "--json", "state,mergeable,headRefOid,statusCheckRollup"]
 command ["git", "rev-parse", "HEAD"]
 merge_gate: [{"base": "main", "head": "h1", "issue": 4, "language": "en", "pr": 4, "repo_dir": "<worktree>", "run_id": "a1b2c3d4"}]
 journal:

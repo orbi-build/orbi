@@ -37,6 +37,7 @@ from enum import Enum
 from pathlib import Path
 
 from orbi import answer as answer_domain
+from orbi import base_absorb
 from orbi import config as config_domain
 from orbi import failure_report, merge_exec, pi_session, review_wait, run_state
 from orbi.blocked_comment import post_blocked_comment
@@ -59,7 +60,6 @@ from orbi.github import (
     issue_comments,
     issue_labels,
     issue_priority,
-    pr_view,
 )
 from orbi.github_feedback import check_summaries, pr_delivery_rollup
 from orbi import base_ci_red, language, question, user_summary, waiting_checks
@@ -255,6 +255,7 @@ class _Round:
     pr: dict = field(default_factory=dict)
     merge_only_from_record: bool = False
     absorb_required: bool = False
+    absorbed_head: str | None = None
     publisher: ProgressPublisher | None = None
     publish: Callable[..., None] | None = None
     round_update: Callable[..., None] | None = None
@@ -265,8 +266,8 @@ class _Round:
     refrozen: dict = field(default_factory=dict)
 
 
-def _round_preflight_phase(work: _Round) -> None:
-    """Open the round: budget, PR freeze, absorb arm, push adoption.
+def _round_preflight_phase(work: _Round) -> bool:
+    """Open the round: budget, PR freeze, absorb arms, push adoption.
 
     The budget is the scene's count of COMPLETED rounds with a maintainer's
     blocked -> ai-fix-needed recovery reset applied, owned by
@@ -274,9 +275,12 @@ def _round_preflight_phase(work: _Round) -> None:
     reports share one number; an exhausted budget is a human decision and
     fails fast. A recorded pass whose head and Issue-body hash still match
     authorizes this tick to merge without a session (Issue #1626), the
-    absorb arm needs GitHub's CONFLICTING read (Issue #877), and a remote
-    head this worktree's own session pushed is adopted into the push
+    absorb arm needs GitHub's CONFLICTING read (Issue #877), a red,
+    behind-only head is absorbed before any session (Issue #2423), and a
+    remote head this worktree's own session pushed is adopted into the push
     history so the merge record never counts it as external (Issue #833).
+    True means the tick ends here: a red, behind-only head was absorbed, or
+    its merge conflicted (no session, no round).
     """
     worktree, branch = work.worktree, work.branch
     config, scene = work.config, work.scene
@@ -317,11 +321,15 @@ def _round_preflight_phase(work: _Round) -> None:
     work.absorb_required = False
     if not work.merge_only and not work.merge_only_from_record:
         try:
-            work.absorb_required = pr_view(
-                pr["number"], "mergeable", cwd=worktree,
-            ).get("mergeable") == "CONFLICTING"
-        except (subprocess.CalledProcessError, ValueError, TypeError):
-            work.absorb_required = False
+            absorbed = base_absorb.absorb_red_behind_head(
+                worktree, pr, work.base_branch, repo_dir=config.repo_dir,
+            )
+        except base_absorb.BaseMergeConflict as exc:
+            _round_gate_failure_phase(
+                work, str(exc), ci_failure=False, absorb_abandoned=True)
+            return True
+        work.absorbed_head, work.absorb_required = (
+            absorbed.head, absorbed.conflicting)
     if (not scene.parsed.external
             and read_pushed_head(worktree) != pr["head_oid"]
             and pr["head_oid"] == run_command(
@@ -334,6 +342,7 @@ def _round_preflight_phase(work: _Round) -> None:
     if recovered:
         # Check the latest PR CI before spending the granted budget.
         log_recovery_ci_status(pr, source_repo)
+    return work.absorbed_head is not None
 
 
 def _round_verdict_phase(work: _Round) -> bool:
@@ -901,7 +910,8 @@ def _review_and_merge_round(worktree: Path, branch: str, base_branch: str,
         issue_body_sha256=issue_body_sha256,
         keep_review_record=keep_review_record,
     )
-    _round_preflight_phase(work)
+    if _round_preflight_phase(work):
+        return False
     if _round_verdict_phase(work):
         return False
     if _round_refreeze_phase(work):

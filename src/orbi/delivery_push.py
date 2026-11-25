@@ -35,7 +35,7 @@ import logging
 import subprocess
 from pathlib import Path
 
-from orbi import gitops, run_state
+from orbi import base_absorb, gitops, run_state
 from orbi.gitops import fetch_base_ref
 from orbi.journal import event, run_command, run_git_network_command
 from orbi.pr_head_sync import DeliveryBranchChangedError, fetch_delivery_branch
@@ -71,18 +71,15 @@ def absorb_advanced_base(worktree: Path, base_branch: str, branch: str,
     if freshness is run_state.BaseFreshness.FRESH:
         return
     try:
-        run_command(
-            ["git", "merge", f"origin/{base_branch}"], cwd=worktree,
+        # The ONE base merge (orbi.base_absorb, Issue #2423): a conflict is
+        # rolled back and journaled there, and the PR opens on the agent's
+        # head.
+        base_absorb.merge_origin_base(
+            worktree, base_branch, branch=branch,
         )
-        event("base_absorbed", base_branch=base_branch, branch=branch)
-    except subprocess.CalledProcessError as exc:
-        run_command(["git", "merge", "--abort"], cwd=worktree)
-        event(
-            "base_merge_conflict", level=logging.ERROR,
-            base_branch=base_branch, branch=branch,
-            returncode=exc.returncode,
-            stderr=(exc.stderr or "").strip(),
-        )
+    except base_absorb.BaseMergeConflict:
+        return
+    event("base_absorbed", base_branch=base_branch, branch=branch)
 
 
 def absorb_pushed_commits(worktree: Path, branch: str, *,
