@@ -166,6 +166,13 @@ file, the Issue templates, and the Runner's own output—not a CI gate.
 - When two designs both satisfy the requirements, choose the simpler one: fewer concepts, fewer files.
 - The MVP scope stays unchanged: no database, queue, DAG, daemon, risk engine or fallback.
 
+## One operation, one entry point
+
+- Each operation has exactly one implementation that every caller uses: turning an Issue (title, body, trusted comments, attachments, images) into a model session's input; downloading or parsing Issue attachments; reading comments and deciding trust; starting a model session; reading or writing Orbi's own comment markers; resolving labels and repository policy; GitHub calls with pagination and retry; the failure stop.
+- Before writing code that does something the engine already does somewhere, find that implementation and call it. If it does not fit, change it (with its callers' tests); never add a second copy for one caller.
+- A fix or a feature for an operation lands in its entry point, so every caller gets it, even when the Issue names only one caller.
+- Review: a diff that adds a second implementation of an existing operation is a blocker, even when its tests pass (2026-11-25: Issue images reached three sessions but not the clarify gate, because each session built Issue content on its own).
+
 ## Before filing: could this be deliberate?
 
 When something looks wrong, first check whether it is a product decision, a
