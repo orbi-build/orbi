@@ -20,8 +20,10 @@ Runtime context supplied by the runner:
 - Base sync lock: `{{BASE_SYNC_LOCK}}`
 - Review round: `{{ROUND}}`
 
-Current Issue body (fresh for this review round; authoritative acceptance
-criteria):
+Current Issue title and body (fresh for this review round; authoritative
+acceptance criteria):
+
+Issue title: {{ISSUE_TITLE}}
 
 {{ISSUE_BODY}}
 

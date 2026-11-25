@@ -23,6 +23,7 @@ import hashlib
 import logging
 import re
 
+from orbi import issue_material
 from orbi.github import (
     authenticated_github_login, issue_comments, strip_bot_suffix,
 )
@@ -49,11 +50,8 @@ _CLARIFY_STOP_RE = re.compile(
 
 
 def build_context(issue: dict) -> str:
-    """Return the judgment payload: the raw ticket text."""
-    return (
-        f"Issue #{issue['number']}: {issue['title']}\n\n"
-        f"{issue.get('body') or ''}"
-    )
+    """Return the judgment payload: the one shared ticket text renderer."""
+    return issue_material.text(issue)
 
 
 def judged_digest(issue: dict) -> str:

@@ -13,6 +13,7 @@ from orbi import config as config_domain
 from orbi.delivery_scene import RunContext
 from orbi.pi_process import PiWatchOptions
 from seam import seam
+from tests.fakes.bootstrap_pi import make_fake_pi
 
 
 @pytest.fixture(autouse=True)
@@ -84,6 +85,29 @@ def _new_steering_comment():
     future = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() + 10))
     return {"id": "new", "createdAt": future, "author": {"login": "alice"},
             "body": "correct this"}
+
+
+def test_a_steering_image_that_cannot_be_read_stops_the_session(tmp_path):
+    """Issue #2390: an unreadable correction is the attachment stop.
+
+    The poll never swallows it as a bypass: the session fails so the
+    delivery's failure path reports the ONE `attachment_unavailable` stop.
+    """
+    from orbi import issue_images
+
+    def check():
+        raise issue_images.Unreadable(("shot",))
+
+    with pytest.raises(issue_images.Unreadable, match="shot"):
+        pi_session.stream_pi(
+            make_fake_pi(tmp_path, session_records=[], sleep=0.2),
+            ctx=RunContext("abc12345", 2, "branch", tmp_path, "o/r"),
+            cwd=tmp_path, timeout=10,
+            watch=PiWatchOptions(
+                poll_interval=0.01, steering_poll_seconds=0.001,
+                steering_check=check,
+            ),
+        )
 
 
 def test_run_pi_steering_callback_filters_and_deduplicates(monkeypatch, tmp_path):

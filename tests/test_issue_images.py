@@ -9,16 +9,21 @@ from __future__ import annotations
 import functools
 import json
 import logging
+import time
 import urllib.error
 from pathlib import Path
 
 import pytest
 
+from conftest import rendered_prompt
+
 import orbi.attachments as attachments
+import orbi.clarify as clarify
 import orbi.failure as failure
 import orbi.failure_report as failure_report
 import orbi.language as language
 import orbi.issue_images as issue_images
+import orbi.issue_material as issue_material
 import orbi.model_catalog as model_catalog
 import orbi.pi_session as pi_session
 import orbi.draft_marker as draft_marker
@@ -79,6 +84,24 @@ def drafted(body: str, *, section: str = "") -> str:
     )
 
 
+def session_images(
+    issue: dict, *, config, repo: str, worktree: Path, review: bool = False,
+) -> attachments.Attached:
+    """The images ONE session receives, through the ONE shared entry point.
+
+    Issue #2390: `orbi.issue_material.material` is the only builder of an
+    Issue session's material, so these image assertions read the image half
+    of exactly what every session is handed. `with_comments=False` keeps the
+    text half out — it is the same shape a session whose prompt already
+    carries `{{ISSUE_COMMENTS}}` gets, and the images still read the trusted
+    comments.
+    """
+    return issue_material.material(
+        issue, config, repo=repo, directory=worktree, review=review,
+        with_comments=False,
+    ).images
+
+
 # --- the sources ---------------------------------------------------------
 
 def test_an_attachments_section_image_is_downloaded_with_no_token(
@@ -87,7 +110,7 @@ def test_an_attachments_section_image_is_downloaded_with_no_token(
     """Acceptance 5: the section's own address, fetched directly."""
     address = "https://cdn.example.test/shot.png"
     body = drafted(BODY, section=f"## Attachments\n\n![shot.png]({address})")
-    attached = issue_images.for_session(
+    attached = session_images(
         {"number": 1, "body": body}, config=image_input_config(), repo=REPO,
         worktree=worktree,
     )
@@ -108,7 +131,7 @@ def test_an_attachments_section_image_is_requested_as_orbi(
     """
     address = "https://beta.orbi.build/api/attachments/key"
     body = drafted(BODY, section=f"## Attachments\n\n![shot.png]({address})")
-    issue_images.for_session(
+    session_images(
         {"number": 1, "body": body}, config=image_input_config(), repo=REPO,
         worktree=worktree,
     )
@@ -129,7 +152,7 @@ def test_a_403_on_the_section_image_still_stops_the_delivery(
     with caplog.at_level(logging.WARNING), pytest.raises(
         issue_images.Unreadable, match="shot.png",
     ) as raised:
-        issue_images.for_session(
+        session_images(
             {"number": 1, "body": body}, config=image_input_config(),
             repo=REPO, worktree=worktree,
         )
@@ -142,7 +165,7 @@ def test_a_native_image_in_the_body_is_read_through_the_markdown_render(
 ):
     """Acceptance 5: rendered, then the signed address downloads with no token."""
     body = drafted(f"{BODY}\n\n![shots]({NATIVE})")
-    issue_images.for_session(
+    session_images(
         {"number": 1, "body": body}, config=image_input_config(), repo=REPO,
         worktree=worktree,
     )
@@ -165,7 +188,7 @@ def test_a_private_issue_receives_its_section_and_body_native_images(
     """
     section = f"## Attachments\n\n![shot]({NATIVE})"
     body = drafted(f"{BODY}\n\n![pasted]({NATIVE_2})", section=section)
-    attached = issue_images.for_session(
+    attached = session_images(
         {"number": 1, "body": body}, config=image_input_config(), repo=REPO,
         worktree=worktree,
     )
@@ -191,7 +214,7 @@ def test_the_render_asks_for_gfm_mode_with_the_repository_as_context(
     without it the render keeps the bare native address.
     """
     body = drafted(f"{BODY}\n\n![shot]({NATIVE})")
-    issue_images.for_session(
+    session_images(
         {"number": 1, "body": body}, config=image_input_config(), repo=REPO,
         worktree=worktree,
     )
@@ -205,7 +228,7 @@ def test_a_native_image_of_a_trusted_comment_is_read(gh, downloads, worktree):
     gh.add_issue(1, body=drafted(BODY))
     gh.collaborators["maintainer"] = "write"
     gh.comment(1, f"look: ![shot]({NATIVE})", login="maintainer")
-    issue_images.for_session(
+    session_images(
         {"number": 1, "body": gh.issues[1]["body"]}, config=image_input_config(),
         repo=REPO, worktree=worktree,
     )
@@ -219,7 +242,7 @@ def test_a_link_in_an_untrusted_comment_is_never_fetched(
     gh.add_issue(1, body=drafted(BODY))
     gh.collaborators["stranger"] = "read"
     gh.comment(1, f"look: ![shot]({NATIVE})", login="stranger")
-    attached = issue_images.for_session(
+    attached = session_images(
         {"number": 1, "body": gh.issues[1]["body"]}, config=image_input_config(),
         repo=REPO, worktree=worktree,
     )
@@ -232,7 +255,7 @@ def test_an_image_repeated_in_two_places_is_read_once(gh, downloads, worktree):
     """The same native image in the body and in the section is one file."""
     section = f"## Attachments\n\n![shot]({NATIVE})"
     body = drafted(f"{BODY}\n\n![shot]({NATIVE})", section=section)
-    attached = issue_images.for_session(
+    attached = session_images(
         {"number": 1, "body": body}, config=image_input_config(), repo=REPO,
         worktree=worktree,
     )
@@ -245,7 +268,7 @@ def test_a_body_without_a_marker_still_offers_its_images(
 ):
     """A hand-written Issue has no marker: its native images still arrive."""
     body = f"{BODY}\n\n![shot]({NATIVE})"
-    attached = issue_images.for_session(
+    attached = session_images(
         {"number": 1, "body": body}, config=image_input_config(), repo=REPO,
         worktree=worktree,
     )
@@ -258,7 +281,7 @@ def test_a_downloaded_image_keeps_its_own_suffix(gh, downloads, worktree):
     address = "https://cdn.example.test/shot.jpg"
     downloads.answers[address] = b"\xff\xd8\xff\xe0" + b"0" * 8
     body = drafted(BODY, section=f"## Attachments\n\n![shot]({address})")
-    attached = issue_images.for_session(
+    attached = session_images(
         {"number": 1, "body": body}, config=image_input_config(), repo=REPO,
         worktree=worktree,
     )
@@ -275,7 +298,7 @@ def test_a_download_that_is_not_an_image_is_unreadable(
     with caplog.at_level(logging.WARNING), pytest.raises(
         issue_images.Unreadable, match="shot",
     ):
-        issue_images.for_session(
+        session_images(
             {"number": 1, "body": body}, config=image_input_config(),
             repo=REPO, worktree=worktree,
         )
@@ -296,7 +319,7 @@ def test_an_unreadable_image_stops_and_names_the_file(
     with caplog.at_level(logging.WARNING), pytest.raises(
         issue_images.Unreadable, match="gone",
     ) as raised:
-        issue_images.for_session(
+        session_images(
             {"number": 1, "body": body}, config=image_input_config(),
             repo=REPO, worktree=worktree,
         )
@@ -312,7 +335,7 @@ def test_a_failed_comment_read_leaves_the_body_images(
     body = drafted(f"{BODY}\n\n![shot]({NATIVE})")
     gh.comment_read_failure = "gh: HTTP 502"
     with caplog.at_level(logging.WARNING):
-        attached = issue_images.for_session(
+        attached = session_images(
             {"number": 1, "body": body}, config=image_input_config(),
             repo=REPO, worktree=worktree,
         )
@@ -329,7 +352,7 @@ def test_the_signed_address_is_never_logged(
     with caplog.at_level(logging.DEBUG), pytest.raises(
         issue_images.Unreadable,
     ):
-        issue_images.for_session(
+        session_images(
             {"number": 1, "body": body}, config=image_input_config(),
             repo=REPO, worktree=worktree,
         )
@@ -338,6 +361,20 @@ def test_the_signed_address_is_never_logged(
 
 
 # --- the sessions -------------------------------------------------------
+
+def test_a_model_without_image_input_reads_no_image(
+    gh, downloads, worktree,
+):
+    """Acceptance 2: a text-only model neither reads nor names an image."""
+    body = drafted(f"{BODY}\n\n![shot]({NATIVE})")
+    attached = session_images(
+        {"number": 1, "body": body}, config=RunnerConfig(), repo=REPO,
+        worktree=worktree,
+    )
+    assert attached.files == ()
+    assert gh.markdown_calls == []
+    assert downloads.urls() == []
+
 
 def test_the_implement_session_receives_the_issue_images(
     gh, downloads, worktree, monkeypatch,
@@ -364,6 +401,32 @@ def test_the_implement_session_receives_the_issue_images(
     context = Path(command[-1].removeprefix("@")).read_text("utf-8")
     assert "The person attached: 1.png = shot" in context
     assert staged.read_bytes() == draft_fakes.PNG_BYTES
+
+
+def test_the_ticket_agent_receives_the_issue_images(
+    gh, downloads, worktree, monkeypatch,
+):
+    """Issue #2390: the ticket-only/clarify launcher uses the same entry.
+
+    'run_ticket_agent' is the one no-tools launcher: the clarify gate and the
+    ticket-only content agent both read the Issue through it. It stages and
+    names the images exactly like the implement/review sessions, so no session
+    path assembles the Issue's text and images on its own.
+    """
+    body = drafted(f"{BODY}\n\n![shot]({NATIVE})")
+    gh.add_issue(4, title="Tag a note", body=body)
+    calls = draft_fakes.stub_stream_pi_with_context(monkeypatch, "content")
+    config = image_input_config(source_repos=(REPO,))
+    pi_session.run_ticket_agent(
+        {"number": 4, "title": "Tag a note", "body": body}, config, REPO,
+    )
+    command = calls[0]["command"]
+    assert command[-2].startswith("@")
+    assert command[-2].endswith(".png")
+    assert command[-1].startswith("@")
+    assert "The person attached: 1.png = shot" in calls[0]["context"]
+    assert gh.markdown_calls == [NATIVE]
+    assert downloads.urls() == [SIGNED]
 
 
 def test_the_review_session_reads_the_body_and_comment_images_every_round(
@@ -668,3 +731,142 @@ def test_the_naming_line_and_arguments_follow_the_declaration(tmp_path):
     assert attachments.with_arguments(
         ["pi", "--system-prompt", "p.md", "@ctx"], ["@img"],
     ) == ["pi", "--system-prompt", "p.md", "@img", "@ctx"]
+
+
+# --- Issue #2390: ONE material for every Issue session --------------------
+
+NATIVE_4 = "https://github.com/user-attachments/assets/jkl-012"
+SECTION_IMAGE = "https://cdn.example.test/section.png"
+HTML_BLOCK = (
+    "<details><summary>spec.html</summary>\n\n"
+    "```html\n<p>the spec</p>\n```\n\n</details>"
+)
+
+
+def _material_issue(gh) -> dict:
+    """One Issue shaped the way `orbi draft --create` writes it.
+
+    The Attachments section, a pasted body image, one trusted comment with
+    an image and one untrusted comment with an image: every session must
+    receive the same title, body, trusted text and the first three images,
+    never the outsider's.
+    """
+    body = drafted(
+        f"{BODY}\n\n![pasted]({NATIVE})",
+        section=(
+            f"## Attachments\n\n![section]({SECTION_IMAGE})\n\n{HTML_BLOCK}"
+        ),
+    )
+    gh.add_issue(4, title="Tag a note", body=body)
+    gh.collaborators["maintainer"] = "write"
+    gh.collaborators["stranger"] = "read"
+    gh.comment(4, f"spec: ![spec]({NATIVE_2})", login="maintainer")
+    gh.comment(4, f"outside: ![bad]({NATIVE_3})", login="stranger")
+    return {"number": 4, "title": "Tag a note", "body": body}
+
+
+def _assert_shared_material(text: str, *, header: bool = True) -> None:
+    """The title, body, trusted text and the HTML block every session sees."""
+    assert "Tag a note" in text
+    if header:
+        assert "Issue #4: Tag a note" in text
+    assert BODY in text
+    assert "maintainer" in text and "spec: ![spec]" in text
+    assert "<p>the spec</p>" in text
+    assert "outside:" not in text and "bad" not in text
+
+
+def _assert_three_images(command: list[str]) -> None:
+    """Exactly the section, body and trusted-comment images travel."""
+    images = [
+        item for item in command
+        if item.startswith("@") and item.endswith(".png")
+    ]
+    assert len(images) == 3
+    assert command[-1].startswith("@")
+
+
+def test_every_issue_session_receives_the_same_material(
+    gh, downloads, worktree, monkeypatch,
+):
+    """Acceptance 1: clarify, ticket-only, implement, both review rounds and
+    a steering restart all read the ONE Issue material.
+
+    The fixture is the creation shape: title, body with an Attachments
+    section image and a native image, a trusted comment with an image, an
+    untrusted comment with an image and an HTML block. The untrusted link is
+    never rendered by GitHub nor downloaded.
+    """
+    issue = _material_issue(gh)
+    gh.add_pr(9, head="b", url="https://x/pull/9")
+    config = image_input_config(
+        prompt=worktree / "prompt.md", prompt_review=worktree / "prompt_review.md",
+        source_repos=(REPO,), workspace_root=worktree,
+    )
+    (worktree / "prompt.md").write_text(
+        "SYSTEM {{ISSUE_TITLE}} {{ISSUE_BODY}} {{ISSUE_COMMENTS}}", "utf-8",
+    )
+    (worktree / "prompt_review.md").write_text(
+        "REVIEW {{ISSUE_TITLE}} {{ISSUE_BODY}} {{ISSUE_COMMENTS}}", "utf-8",
+    )
+    ctx = RunContext(
+        run_id=RUN_ID, issue=4, branch="b", worktree=worktree,
+        source_repo=REPO,
+    )
+    pr = {"number": 9, "url": "https://x/pull/9", "base_oid": "b1",
+          "head_oid": "h1", "head_ref": "h"}
+
+    # 1. The clarify gate, through the shared no-tools launcher.
+    clarify_sessions = draft_fakes.stub_stream_pi_with_context(monkeypatch)
+    clarify.judge_issue_body(issue, config, REPO, RUN_ID)
+    _assert_shared_material(clarify_sessions[0]["context"])
+    _assert_three_images(clarify_sessions[0]["command"])
+
+    # 2. The ticket-only content run, through the same launcher.
+    ticket_sessions = draft_fakes.stub_stream_pi_with_context(monkeypatch)
+    pi_session.run_ticket_agent(issue, config, REPO)
+    _assert_shared_material(ticket_sessions[0]["context"])
+    _assert_three_images(ticket_sessions[0]["command"])
+
+    # 3. Implementation (and ops: the same run_pi build point).
+    implement = draft_fakes.stub_stream_pi(monkeypatch, "done")
+    pi_session.run_pi(issue, ctx, config)
+    prompt = rendered_prompt(implement[0]["command"])
+    _assert_shared_material(prompt, header=False)
+    context = Path(implement[0]["command"][-1].removeprefix("@")).read_text("utf-8")
+    assert "The person attached: 1.png = section" in context
+    _assert_three_images(implement[0]["command"])
+
+    # 4. Every review and fix round.
+    for round_number in (1, 2):
+        reviews = draft_fakes.stub_stream_pi(monkeypatch, "REVIEW_VERDICT: pass")
+        pi_session.run_review(ctx, pr, config, round_number)
+        prompt = rendered_prompt(reviews[0]["command"])
+        _assert_shared_material(prompt, header=False)
+        _assert_three_images(reviews[0]["command"])
+
+    # 5. A steering restart, with a NEW trusted image attached mid-session.
+    draft_fakes.stub_steering_snapshot(monkeypatch)
+    steering = draft_fakes.stub_stream_pi(monkeypatch, "done")
+    pi_session.run_pi(issue, ctx, config)
+    gh.comment(4, f"later: ![later]({NATIVE_4})", login="maintainer")
+    soon = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() + 10))
+    gh.issues[4]["comments"][-1]["createdAt"] = soon
+    request = steering[0]["watch"].steering_check()
+    assert request is not None
+    _assert_shared_material(request.context)
+    assert "later: ![later]" in request.context
+    assert (
+        "The person attached: 1.png = section, 2.png = pasted, "
+        "3.png = spec, 4.png = later"
+    ) in request.context
+    assert request.command is not None
+    assert len([
+        item for item in request.command
+        if item.startswith("@") and item.endswith(".png")
+    ]) == 4
+    assert request.command[-1].startswith("@")
+
+    # The outsider's image never reached GitHub's renderer nor the network.
+    assert NATIVE_3 not in gh.markdown_calls
+    assert not any(NATIVE_3 in url or "bad" in url for url in downloads.urls())

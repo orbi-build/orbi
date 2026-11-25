@@ -192,6 +192,9 @@ class FakeGh:
             "baseRefName": base, "headRefOid": oid,
             "url": url or f"https://github.com/{self.repo}/pull/{number}",
             "statusCheckRollup": list(checks), "comments": [],
+            # "gh pr view --json reviews" (the review timeline read, Issue
+            # #2390's shared material includes PR feedback).
+            "reviews": [],
             "mergedAt": merged_at,
             # The fields `_query_open_prs` asks for and the review gates
             # read: the PR body (run marker / Fixes keyword) and the

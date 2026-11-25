@@ -61,6 +61,8 @@ import orbi.review_merge as review_merge
 import orbi.waiting_checks as waiting_checks
 import orbi.review_rounds as review_rounds
 import orbi.pi_session as pi_session
+import orbi.issue_images as issue_images
+import orbi.issue_material as issue_material
 import orbi.question as question
 import orbi.steering as steering
 import orbi.stopped_scans as stopped_scans
@@ -80,6 +82,7 @@ _MODULES = (
     ops_delivery, ticket_command,
     progress, cli_source, release, release_closeout, release_git,
     release_notes, release_run, pi_session, body_steering,
+    issue_images, issue_material,
     runner, implementation_delivery, review_merge, review_ci_status,
     merge_exec, waiting_checks,
     review_rounds, run_state, claim,

@@ -24,10 +24,12 @@ from orbi import claim, clarify, config as config_domain
 from orbi import delivery_labels, failure, failure_report, language, progress
 
 import orbi.acceptance_section as acceptance_section
+import orbi.issue_images as issue_images
 import orbi.runner as runner
 import orbi.split_apply as split_apply
 from seam import seam
 
+from tests.fakes import draft as draft_fakes
 from tests.fakes.clarify import (
     FakeGate, fail_github, fix_run_id, install_github, interrupt_github,
     record_stop_notifications, stop_comment_entry, stub_judgment,
@@ -475,6 +477,248 @@ def test_the_gate_pi_command_loads_only_the_shipped_extension(
     assert "--no-tools" not in argv
     assert verdict == clarify.ClarifyVerdict(
         passed=False, missing=("single_outcome",),
+    )
+
+
+# --- Issue #2390: the judgment sees the Issue's images ---------------------
+
+NATIVE_IMAGE = "https://github.com/user-attachments/assets/abc-123"
+SIGNED_IMAGE = (
+    "https://private-user-images.githubusercontent.com/1/1.png?jwt=signed-1"
+)
+# The shipped provider template declares image input for its models.
+DEEPSEEK_TEMPLATE = json.loads(
+    (Path(__file__).resolve().parent.parent
+     / "templates" / "pi-providers" / "deepseek.json").read_text("utf-8")
+)
+
+
+def image_config(**overrides) -> config_domain.RunnerConfig:
+    """One run whose selected model declares image input."""
+    values = {
+        "pi_provider": "deepseek", "pi_model": "deepseek-flash",
+        "pi_providers_data": DEEPSEEK_TEMPLATE, "source_repos": (REPO,),
+    }
+    values.update(overrides)
+    return config_domain.RunnerConfig(**values)
+
+
+def _image_gate_fake_pi(record_path: Path, answer: dict) -> str:
+    """A fake gate session that records what it SAW before it answers.
+
+    The session's context and staged images live in a transient directory
+    that is gone when the gate returns, so the fake reads them while it
+    runs — exactly what the real model receives (Issue #2390).
+    """
+    payload = json.dumps(answer)
+    return (
+        "#!/usr/bin/env python3\n"
+        "import json, os, sys\n"
+        f"record = {str(record_path)!r}\n"
+        "argv = sys.argv[1:]\n"
+        "context = ''\n"
+        "images = []\n"
+        "if argv and argv[-1].startswith('@'):\n"
+        "    context = open(argv[-1][1:], encoding='utf-8').read()\n"
+        "for arg in argv:\n"
+        "    if arg.startswith('@') and arg.endswith('.png'):\n"
+        "        images.append(list(open(arg[1:], 'rb').read()))\n"
+        "with open(record, 'w', encoding='utf-8') as handle:\n"
+        "    json.dump({'argv': argv, 'context': context,\n"
+        "               'images': images}, handle)\n"
+        "with open(os.environ['ORBI_CLARIFY_OUT'], 'w',\n"
+        "          encoding='utf-8') as handle:\n"
+        f"    handle.write({payload!r})\n"
+        "sys.stdout.write('verdict sent')\n"
+    )
+
+
+def _screenshot_issue(gh: FakeGh) -> dict:
+    """The repro's shape: the text points at the screenshot, the image
+    states the result and the acceptance."""
+    body = (
+        "The option described in the attached screenshot works.\n\n"
+        f"![shot]({NATIVE_IMAGE})"
+    )
+    gh.add_issue(7, title="Screenshot option", body=body)
+    return {"number": 7, "title": "Screenshot option", "body": body}
+
+
+def test_the_gate_judges_the_issue_with_its_image_in_view(
+    monkeypatch, tmp_path,
+):
+    """Acceptance 1 (Issue #2390): the image reaches the clarify session.
+
+    The repro (xqliu/orbi-e2e-new-2611242209#3) put the flag and its output
+    in the screenshot; the gate read only the text and stopped the ticket.
+    The session now receives the staged image as a Pi file argument and the
+    ticket's images are named in its context, so a passing verdict is
+    reachable and the gate does not stop the ticket.
+    """
+    record = tmp_path / "session.json"
+    install_fake_pi(
+        monkeypatch, tmp_path, _image_gate_fake_pi(record, {"missing": []}),
+    )
+    gh = FakeGh(REPO, login="orbi-bot")
+    draft_fakes.install_gh(monkeypatch, gh)
+    downloads = draft_fakes.install_downloads(monkeypatch)
+    issue = _screenshot_issue(gh)
+
+    verdict = clarify.judge_issue_body(issue, image_config(), REPO, RUN_ID)
+
+    assert verdict == clarify.ClarifyVerdict(passed=True, missing=())
+    session = json.loads(record.read_text(encoding="utf-8"))
+    staged = [arg for arg in session["argv"] if arg.endswith(".png")]
+    assert len(staged) == 1
+    # The image rides in front of the context file, as Pi's file form.
+    assert session["argv"][-2] == staged[0]
+    assert session["argv"][-1].startswith("@")
+    assert session["images"] == [list(draft_fakes.PNG_BYTES)]
+    assert "The person attached: 1.png = shot" in session["context"]
+    assert "The option described in the attached screenshot works." in (
+        session["context"]
+    )
+    # A private Issue's native image downloads through GitHub's gfm render.
+    assert gh.markdown_calls == [NATIVE_IMAGE]
+    assert downloads.urls() == [SIGNED_IMAGE]
+    # Nothing was stopped: no comment, no label swap.
+    assert gh.issues[7]["comments"] == []
+
+
+def test_a_model_without_image_input_judges_the_text_alone(
+    monkeypatch, tmp_path,
+):
+    """Acceptance 2: an image cannot reach a text-only model.
+
+    The same Issue is judged exactly as today — no download, no naming line
+    and no file argument — so the behavior of a text-only deployment is
+    unchanged.
+    """
+    record = tmp_path / "session.json"
+    install_fake_pi(
+        monkeypatch, tmp_path, _image_gate_fake_pi(record, {"missing": []}),
+    )
+    gh = FakeGh(REPO, login="orbi-bot")
+    draft_fakes.install_gh(monkeypatch, gh)
+    downloads = draft_fakes.install_downloads(monkeypatch)
+    issue = _screenshot_issue(gh)
+
+    verdict = clarify.judge_issue_body(
+        issue, config_domain.RunnerConfig(source_repos=(REPO,)), REPO, RUN_ID,
+    )
+
+    assert verdict == clarify.ClarifyVerdict(passed=True, missing=())
+    session = json.loads(record.read_text(encoding="utf-8"))
+    assert not [arg for arg in session["argv"] if arg.endswith(".png")]
+    assert "The person attached" not in session["context"]
+    assert issue["body"] in session["context"]
+    assert gh.markdown_calls == []
+    assert downloads.urls() == []
+
+
+def test_an_unreadable_image_stops_the_gate_as_an_attachment_stop(
+    monkeypatch, tmp_path,
+):
+    """Acceptance 3: the existing unreadable-attachment rule, not a verdict.
+
+    An unreadable file cannot become readable by itself, so the gate never
+    judges without it and never reports "missing details": the stop carries
+    the attachment_unavailable failure record, which the delivery's failure
+    handler already reports once.
+    """
+    record = tmp_path / "session.json"
+    install_fake_pi(
+        monkeypatch, tmp_path,
+        _image_gate_fake_pi(record, {"missing": ["observable_result"]}),
+    )
+    gh = FakeGh(REPO, login="orbi-bot")
+    draft_fakes.install_gh(monkeypatch, gh)
+    downloads = draft_fakes.install_downloads(monkeypatch)
+    downloads.failures[SIGNED_IMAGE] = OSError("no route")
+    issue = _screenshot_issue(gh)
+
+    with pytest.raises(issue_images.Unreadable, match="shot") as raised:
+        clarify.judge_issue_body(issue, image_config(), REPO, RUN_ID)
+
+    assert raised.value.failure_record.reason_code == "attachment_unavailable"
+    assert failure_report.is_unrecoverable_failure(raised.value) is True
+    # The judgment never ran and the gate wrote nothing (no thin stop).
+    assert not record.exists()
+    assert gh.issues[7]["comments"] == []
+
+
+def test_enforce_never_turns_an_unreadable_image_into_a_thin_stop(
+    monkeypatch, tmp_path,
+):
+    """Acceptance 3 at the gate's entry point: the stop is not a verdict.
+
+    enforce lets the unreadable attachment out to the failure-stop path
+    instead of writing the missing-details comment: an unreadable image is
+    repaired by the FILE, never by editing the ticket text.
+    """
+    record = tmp_path / "session.json"
+    install_fake_pi(
+        monkeypatch, tmp_path, _image_gate_fake_pi(record, {"missing": []}),
+    )
+    gh = FakeGh(REPO, login="orbi-bot")
+    draft_fakes.install_gh(monkeypatch, gh)
+    downloads = draft_fakes.install_downloads(monkeypatch)
+    downloads.failures[SIGNED_IMAGE] = OSError("no route")
+    issue = _screenshot_issue(gh)
+    gate = FakeGate(monkeypatch, judge=False)
+
+    with pytest.raises(issue_images.Unreadable):
+        clarify.enforce(issue, image_config(), REPO, RUN_ID)
+
+    assert not record.exists()
+    assert gate.comments == []
+    assert gate.edits == []
+    assert gate.notified == []
+
+
+def test_a_thin_issue_with_an_image_still_stops(monkeypatch, tmp_path):
+    """Acceptance 4: an image carrying no result or acceptance changes none.
+
+    The image reaches the session and the verdict still fails, so the ticket
+    is stopped with the same ONE missing-details comment and label swap.
+    """
+    record = tmp_path / "session.json"
+    install_fake_pi(
+        monkeypatch, tmp_path,
+        _image_gate_fake_pi(
+            record,
+            {"missing": ["observable_result", "acceptance_condition"]},
+        ),
+    )
+    gh = FakeGh(REPO, login="orbi-bot")
+    draft_fakes.install_gh(monkeypatch, gh)
+    downloads = draft_fakes.install_downloads(monkeypatch)
+    issue = _screenshot_issue(gh)
+    gate = FakeGate(monkeypatch, judge=False)
+
+    assert clarify.enforce(issue, image_config(), REPO, RUN_ID) is False
+
+    session = json.loads(record.read_text(encoding="utf-8"))
+    assert [arg for arg in session["argv"] if arg.endswith(".png")]
+    assert "The person attached: 1.png = shot" in session["context"]
+    assert downloads.urls() == [SIGNED_IMAGE]
+    assert len(gate.comments) == 1
+    assert gate.edits == [(
+        7, REPO, delivery_labels.NEEDS_DETAIL_LABEL, delivery_labels.READY_LABEL,
+    )]
+    body = gate.comments[0][2]
+    assert clarify.missing_text("observable_result", "en") in body
+    assert clarify.missing_text("acceptance_condition", "en") in body
+
+
+def test_the_gate_prompt_judges_the_attached_images():
+    """Issue #2390: the prompt names the images as part of the ticket.
+
+    With "judge only the Issue text" a model could ignore the screenshot the
+    ticket points at, so the judgment names both halves of the Issue.
+    """
+    assert "its text and the images attached to it" in (
+        clarify.CLARIFY_SYSTEM_PROMPT
     )
 
 
