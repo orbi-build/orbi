@@ -453,4 +453,10 @@ def test_local_absorb_conflict_rolls_back_and_marks_the_delivery(
     assert any("ai-fix-needed" in edit for edit in fake.label_edits)
     assert any("cannot absorb origin/main" in body
                for body in fake.issue_comments)
+    # The failure comment states what happened: a local merge conflict.
+    # The #877 absorb-violation text would be a false claim here (it
+    # names a session that ran to a `pass` verdict and left the base
+    # unmerged; no session ran in this tick).
+    assert not any("Absorb contract violated" in body
+                   for body in fake.issue_comments)
     assert "base_merge_conflict" in caplog.text

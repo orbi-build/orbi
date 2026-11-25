@@ -281,14 +281,16 @@ def write_run_state_file(worktree: Path, state: dict) -> None:
 def record_pushed_head(worktree: Path, head: str) -> None:
     """Record `head` as the last engine-pushed head of this delivery.
 
-    The three write points are the Runner's own branch-push evidence:
+    The four write points are the Runner's own branch-push evidence:
     the delivery push in `deliver_pr` (the PR-open head), the review
-    session's fix push (the re-frozen advanced head), and the
+    session's fix push (the re-frozen advanced head), the
     round-start adoption of a head a previous session pushed but whose
     round ended before the re-freeze record (a findings verdict or a
-    malformed verdict head). An external push never passes through any
-    of them, which is exactly the distinction the merge record's
-    `external_commits` needs. Recording is bypass-safe (Issue #73):
+    malformed verdict head), and the review tick's own base absorb
+    (`base_absorb.absorb_red_behind_head`, Issue #2423). An external
+    push never passes through any of them, which is exactly the
+    distinction the merge record's `external_commits` needs.
+    Recording is bypass-safe (Issue #73):
     the fields only feed the merge record, so a missing or corrupt
     state file — a recreated worktree, for instance — logs
     `pushed_head_unrecorded` and continues; the merge record degrades

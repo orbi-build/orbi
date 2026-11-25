@@ -325,8 +325,8 @@ def _round_preflight_phase(work: _Round) -> bool:
                 worktree, pr, work.base_branch, repo_dir=config.repo_dir,
             )
         except base_absorb.BaseMergeConflict as exc:
-            _round_gate_failure_phase(
-                work, str(exc), ci_failure=False, absorb_abandoned=True)
+            # Rolled back, unpushed, no session: the #877 text would lie.
+            _round_gate_failure_phase(work, str(exc), ci_failure=False)
             return True
         work.absorbed_head, work.absorb_required = (
             absorbed.head, absorbed.conflicting)
