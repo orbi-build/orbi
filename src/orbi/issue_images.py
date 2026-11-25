@@ -222,12 +222,17 @@ def _signed(url: str, *, repo: str) -> str:
     """The address GitHub's Markdown rendering signs for one native image.
 
     POST /markdown with the installation token renders the image into an
-    address that downloads with no token; a rendering that carries no image
-    falls back to the native url, which still downloads when public.
+    address that downloads with no token, and it does so ONLY in `gfm` mode:
+    the endpoint's default `markdown` mode ignores `context`, keeps the bare
+    github.com address, and that address answers 404 to a download carrying
+    no person's token (Issue #2387, measured 2026-11-25). A rendering that
+    carries no image falls back to the native url, which still downloads
+    when the repository is public.
     """
     html = run_gh_write_command([
         "gh", "api", "--method", "POST", "/markdown",
         "-f", f"text=![image]({url})",
+        "-f", "mode=gfm",
         "-f", f"context={repo}",
     ])
     match = _SRC_RE.search(html)

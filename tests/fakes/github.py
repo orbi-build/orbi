@@ -110,8 +110,12 @@ class FakeGh:
         # Issue with the rest and exits non-zero.
         self.refuse_attachments: set[str] = set()
         # Every uploaded attachment and every Markdown rendering, in order.
+        # `markdown_fields` is the request behind each rendering: GitHub's
+        # endpoint only signs a native image for `mode=gfm` with `context`
+        # (Issue #2387), so a test pins those fields.
         self.uploads: list[str] = []
         self.markdown_calls: list[str] = []
+        self.markdown_fields: list[dict[str, str]] = []
         # `gh issue create` failing outright (no Issue, no URL printed).
         self.create_failure: str | None = None
         # A failed `gh issue view --json comments` read (Issue #2364).
@@ -709,12 +713,15 @@ class FakeGh:
     # --- api verbs -----------------------------------------------------------
 
     def _markdown(self, args: list[str]) -> str:
-        """`POST /markdown`: one native image rendered to a signed address.
+        """`POST /markdown`: GitHub's documented render of one native image.
 
-        The documented way an installation token reads a native attachment
-        (Issue #2364): the answer carries the image as a private-user-images
-        address whose query IS the credential. Only the
-        `-f text=... -f context=...` shape is modelled.
+        Only a `gfm` render WITH the repository as `context` signs the
+        image into a private-user-images address whose query IS the
+        credential (Issue #2364); the endpoint's default `markdown` mode
+        ignores `context` and leaves the bare
+        `github.com/user-attachments/assets/...` src, which answers 404 to a
+        download carrying no person's token (Issue #2387, its measurement of
+        2026-11-25). A request naming another field is not modelled.
         """
         fields: dict[str, str] = {}
         index = 0
@@ -726,17 +733,23 @@ class FakeGh:
             key, _, value = args[index + 1].partition("=")
             fields[key] = value
             index += 2
-        if set(fields) != {"text", "context"}:
+        if "text" not in fields or set(fields) - {"text", "mode", "context"}:
             return self._unsupported(
                 ["gh", "api", "--method", "POST", "/markdown", *args]
             )
-        self._repo_or_fail(fields["context"])
         match = re.search(r"\((\S+)\)", fields["text"])
         if match is None:
             return self._unsupported(
                 ["gh", "api", "--method", "POST", "/markdown", *args]
             )
-        self.markdown_calls.append(match.group(1))
+        url = match.group(1)
+        self.markdown_calls.append(url)
+        self.markdown_fields.append(dict(fields))
+        if fields.get("mode") != "gfm" or "context" not in fields:
+            # The default `markdown` mode renders the text as written: the
+            # native address stays bare and `context` is not even read.
+            return f'<p><img src="{url}" alt="image" /></p>'
+        self._repo_or_fail(fields["context"])
         number = len(self.markdown_calls)
         return (
             '<p><img src="https://private-user-images.githubusercontent.com/'

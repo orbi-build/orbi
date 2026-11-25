@@ -31,7 +31,12 @@ from tests.fakes.github import FakeGh
 REPO = "acme/app"
 RUN_ID = "a1b2c3d4"
 NATIVE = "https://github.com/user-attachments/assets/abc-123"
+NATIVE_2 = "https://github.com/user-attachments/assets/def-456"
+NATIVE_3 = "https://github.com/user-attachments/assets/ghi-789"
 SIGNED = "https://private-user-images.githubusercontent.com/1/1.png?jwt=signed-1"
+SIGNED_2 = (
+    "https://private-user-images.githubusercontent.com/1/2.png?jwt=signed-2"
+)
 DEEPSEEK = json.loads(
     (Path(__file__).resolve().parent.parent
      / "templates" / "pi-providers" / "deepseek.json").read_text("utf-8")
@@ -146,6 +151,53 @@ def test_a_native_image_in_the_body_is_read_through_the_markdown_render(
     # No credential of ours: the signed address IS the credential.
     assert "headers" not in downloads.requests[0].kwargs
     assert "data" not in downloads.requests[0].kwargs
+
+
+def test_a_private_issue_receives_its_section_and_body_native_images(
+    gh, downloads, worktree,
+):
+    """Acceptance 1: a private repository's native images arrive, no stop.
+
+    The fake signs an image only for the documented `gfm` render with
+    `context`, and answers the bare native address with HTTP 404 (a
+    download carrying no credential) — the measurement in Issue #2387, whose
+    delivery stopped with `attachment_unavailable` without the mode.
+    """
+    section = f"## Attachments\n\n![shot]({NATIVE})"
+    body = drafted(f"{BODY}\n\n![pasted]({NATIVE_2})", section=section)
+    attached = issue_images.for_session(
+        {"number": 1, "body": body}, config=image_input_config(), repo=REPO,
+        worktree=worktree,
+    )
+    assert gh.markdown_calls == [NATIVE, NATIVE_2]
+    # Only the rendered addresses were fetched: the bare ones answer 404.
+    assert downloads.urls() == [
+        "https://private-user-images.githubusercontent.com/1/1.png"
+        "?jwt=signed-1",
+        "https://private-user-images.githubusercontent.com/1/2.png"
+        "?jwt=signed-2",
+    ]
+    assert [file.source for file in attached.files] == ["shot", "pasted"]
+    assert [file.path.name for file in attached.files] == ["1.png", "2.png"]
+
+
+def test_the_render_asks_for_gfm_mode_with_the_repository_as_context(
+    gh, downloads, worktree,
+):
+    """Acceptance 1 / Issue #73: the request is GitHub's documented one.
+
+    POST /markdown reads `context` only in `gfm` mode
+    (https://docs.github.com/en/rest/markdown/markdown#render-a-markdown-document);
+    without it the render keeps the bare native address.
+    """
+    body = drafted(f"{BODY}\n\n![shot]({NATIVE})")
+    issue_images.for_session(
+        {"number": 1, "body": body}, config=image_input_config(), repo=REPO,
+        worktree=worktree,
+    )
+    assert gh.markdown_fields == [{
+        "text": f"![image]({NATIVE})", "mode": "gfm", "context": REPO,
+    }]
 
 
 def test_a_native_image_of_a_trusted_comment_is_read(gh, downloads, worktree):
@@ -314,15 +366,21 @@ def test_the_implement_session_receives_the_issue_images(
     assert staged.read_bytes() == draft_fakes.PNG_BYTES
 
 
-def test_the_review_session_reads_the_images_again_every_round(
+def test_the_review_session_reads_the_body_and_comment_images_every_round(
     gh, downloads, worktree, monkeypatch,
 ):
-    """Acceptance 5: each review round re-reads them."""
+    """Acceptance 2: every round rebuilds the body's and comment's images.
+
+    The review session re-reads the Issue for each round, so a trusted
+    writer's native image and the body's native image both arrive again.
+    """
     (worktree / "prompt_review.md").write_text(
         "REVIEW {{ISSUE_BODY}}", "utf-8",
     )
     body = drafted(f"{BODY}\n\n![shot]({NATIVE})")
     gh.add_issue(4, title="Tag a note", body=body)
+    gh.collaborators["maintainer"] = "write"
+    gh.comment(4, f"spec: ![spec]({NATIVE_2})", login="maintainer")
     calls = draft_fakes.stub_stream_pi(monkeypatch, "REVIEW_VERDICT: pass")
     config = image_input_config(
         prompt_review=worktree / "prompt_review.md", source_repos=(REPO,),
@@ -336,10 +394,93 @@ def test_the_review_session_reads_the_images_again_every_round(
           "head_oid": "h1", "head_ref": "h"}
     pi_session.run_review(ctx, pr, config, 1)
     pi_session.run_review(ctx, pr, config, 2)
-    staged = worktree / ".orbi" / "attachments" / "1.png"
+    staged = [
+        worktree / ".orbi" / "attachments" / f"{position}.png"
+        for position in (1, 2)
+    ]
+    assert len(calls) == 2
     for call in calls:
-        assert call["command"][-2] == f"@{staged}"
-    assert len(downloads.requests) == 2
+        assert call["command"][-3:-1] == [f"@{path}" for path in staged]
+        context = Path(call["command"][-1].removeprefix("@")).read_text("utf-8")
+        assert "1.png = shot" in context
+        assert "2.png = spec" in context
+    # The fake numbers each render, so the second round signs 3 and 4.
+    assert downloads.urls() == [
+        SIGNED, SIGNED_2,
+        "https://private-user-images.githubusercontent.com/1/3.png"
+        "?jwt=signed-3",
+        "https://private-user-images.githubusercontent.com/1/4.png"
+        "?jwt=signed-4",
+    ]
+
+
+def test_the_implement_session_receives_section_body_and_comment_images(
+    gh, downloads, worktree, monkeypatch,
+):
+    """Acceptance 1 + 2: a private Issue's native images reach the session.
+
+    The Attachments section, the pasted body image and a trusted
+    maintainer's comment image all arrive as staged '@' arguments and are
+    named in the context; the fake signs only the documented gfm render, so
+    a bare native address would have stopped the session.
+    """
+    (worktree / "prompt.md").write_text("SYSTEM", "utf-8")
+    section = f"## Attachments\n\n![shot]({NATIVE})"
+    body = drafted(f"{BODY}\n\n![pasted]({NATIVE_2})", section=section)
+    gh.add_issue(4, title="Tag a note", body=body)
+    gh.collaborators["maintainer"] = "write"
+    gh.comment(4, f"spec: ![spec]({NATIVE_3})", login="maintainer")
+    calls = draft_fakes.stub_stream_pi(monkeypatch, "done")
+    config = image_input_config(
+        prompt=worktree / "prompt.md", source_repos=(REPO,),
+        workspace_root=worktree,
+    )
+    pi_session.run_pi(
+        {"number": 4, "title": "Tag a note", "body": body},
+        RunContext(run_id=RUN_ID, issue=4, branch="b", worktree=worktree,
+                   source_repo=REPO),
+        config,
+    )
+    command = calls[0]["command"]
+    staged = [
+        worktree / ".orbi" / "attachments" / f"{position}.png"
+        for position in (1, 2, 3)
+    ]
+    assert command[-4:-1] == [f"@{path}" for path in staged]
+    context = Path(command[-1].removeprefix("@")).read_text("utf-8")
+    assert "1.png = shot" in context
+    assert "2.png = pasted" in context
+    assert "3.png = spec" in context
+    assert gh.markdown_calls == [NATIVE, NATIVE_2, NATIVE_3]
+
+
+def test_an_untrusted_comment_image_never_reaches_the_session(
+    gh, downloads, worktree, monkeypatch,
+):
+    """Acceptance 2: an outsider's native image is still not fetched."""
+    (worktree / "prompt.md").write_text("SYSTEM", "utf-8")
+    body = drafted(f"{BODY}\n\n![shot]({NATIVE})")
+    gh.add_issue(4, title="Tag a note", body=body)
+    gh.collaborators["stranger"] = "read"
+    gh.comment(4, f"look: ![outsider]({NATIVE_2})", login="stranger")
+    calls = draft_fakes.stub_stream_pi(monkeypatch, "done")
+    config = image_input_config(
+        prompt=worktree / "prompt.md", source_repos=(REPO,),
+        workspace_root=worktree,
+    )
+    pi_session.run_pi(
+        {"number": 4, "title": "Tag a note", "body": body},
+        RunContext(run_id=RUN_ID, issue=4, branch="b", worktree=worktree,
+                   source_repo=REPO),
+        config,
+    )
+    command = calls[0]["command"]
+    staged = worktree / ".orbi" / "attachments" / "1.png"
+    assert command[-2] == f"@{staged}"
+    context = Path(command[-1].removeprefix("@")).read_text("utf-8")
+    assert "1.png = shot" in context
+    assert "outsider" not in context
+    assert gh.markdown_calls == [NATIVE]
 
 
 def test_an_unreadable_image_stops_before_any_session(
