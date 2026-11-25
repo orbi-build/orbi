@@ -1638,7 +1638,7 @@ LOCALE_REPO = "o/r"
 PROMPT_WITHOUT_LOCALE = (
     "Propose deliverable GitHub Issues for o/r.\n\n"
     "1. Read /run/context.json with your read tool. It is JSON: the "
-    "repository's open Issues and open PRs (number, title, body, "
+    "repository's open Issues and open PRs (number, title, text, "
     "labels), plus the batches earlier runs proposed "
     "(already_suggested, when it is there).\n"
     "2. Read the repository itself under /repo by absolute "

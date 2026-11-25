@@ -50,7 +50,8 @@ class FakeGate:
                  body_error: Exception | None = None,
                  comment_errors: int = 0,
                  runner_login: str = RUNNER_LOGIN,
-                 login_error: Exception | None = None):
+                 login_error: Exception | None = None,
+                 judge: bool = True):
         self.history = [] if history is None else history
         self.history_error = history_error
         self.edit_error = edit_error
@@ -65,7 +66,11 @@ class FakeGate:
         self.bodies: list = []
         self.notified: list = []
         monkeypatch.setattr(seam, "issue_comments", self._issue_comments)
-        monkeypatch.setattr(seam, "judge_issue_body", self._judge)
+        if judge:
+            # A test that exercises the REAL judgment leaves the model call in
+            # place: it only stands in for the gate's GitHub writes and reads
+            # (Issue #2390), so the image/attachment path is the real one.
+            monkeypatch.setattr(seam, "judge_issue_body", self._judge)
         monkeypatch.setattr(seam, "comment_issue", self._comment)
         monkeypatch.setattr(seam, "edit_issue", self._edit)
         monkeypatch.setattr(seam, "write_body", self._write_body)

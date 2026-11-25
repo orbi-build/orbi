@@ -5,10 +5,13 @@ A confident delivery against a vague `ai-ready` ticket is worse than no
 delivery: it burns a run, opens a PR nobody can accept and buries the
 real question. Before the claim starts any work, one Pi session with no
 built-in tools — the shipped `clarify_verdict` tool is its only answer
-path (Issue #1955) — judges the ticket body against the three pieces
+path (Issue #1955) — judges the ticket against the three pieces
 every deliverable needs — an **observable result**, an **acceptance
 condition** and a **single outcome** — and a failing verdict either
-applies the proposal it carries or stops the ticket at the claim.
+applies the proposal it carries or stops the ticket at the claim. The
+judgment reads the ticket the way every other Issue session does
+(`issue_images.attach_to`, Issue #2390): its text AND the images attached
+to it, so a screenshot that states the result and the acceptance counts.
 
 A failing verdict whose only missing piece is the acceptance condition and
 which carries a usable `kind=criteria` proposal appends those conditions to
@@ -45,7 +48,11 @@ The gate is OFF by default (`clarify_thin_tickets = false`) and may be
 turned on per repository through `.github/orbi.toml`. It fails OPEN on
 every error path: a model error, timeout or malformed answer, or a failed
 comment/label write, logs `clarify_check_skipped` and lets the delivery
-proceed — a broken bypass must never silently lose a ticket.
+proceed — a broken bypass must never silently lose a ticket. The one
+exception is an attached image that cannot be read: it raises
+`issue_images.Unreadable`, which the delivery's failure-stop path reports
+once as `attachment_unavailable` (Issue #2364), so the gate never turns an
+unreadable image into a "missing details" stop.
 
 A stop is recorded ONCE per ticket text (Issue #1904): the stop comment
 carries a hidden digest of the text the gate judged, and a re-readied
@@ -76,7 +83,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from orbi import acceptance_section, draft_author, language, notify
+from orbi import acceptance_section, draft_author, issue_images, language, notify
 from orbi import split_apply, user_summary
 # The proposal domain moved to its own leaf module (Issue #2207) because this
 # one sits at its recorded size ceiling; the names stay importable HERE, the
@@ -142,9 +149,12 @@ CLARIFY_VERDICT_ENV = "ORBI_CLARIFY_OUT"
 CLARIFY_SYSTEM_PROMPT = (
     "You are Orbi's ticket gate. Before an unattended delivery starts, "
     "you decide whether this Issue states enough to deliver it. Judge "
-    "only the Issue text, and judge what it says rather than the shape "
-    "it is written in: separate template headings are optional, so a "
-    "missing heading is never a missing piece.\n\n"
+    "only the Issue itself: its text and the images attached to it. An "
+    "observable result or an acceptance condition an image states is as "
+    "much part of the ticket as a sentence of its text. Judge what the "
+    "ticket says rather than the shape it is written in: separate "
+    "template headings are optional, so a missing heading is never a "
+    "missing piece.\n\n"
     + TICKET_CHECK_CRITERIA
     + "\n\n"
     "Answer by calling the clarify_verdict tool exactly once: it is "
@@ -432,7 +442,11 @@ def judge_issue_body(issue: dict, config: RunnerConfig, source_repo: str,
     outside it, so the temp dir the session runs in can be discarded. A
     model error or an unusable answer — no file, broken JSON, an unknown
     check id — is recorded as `clarify_check_skipped` and returns `None`:
-    the gate fails open and the delivery proceeds.
+    the gate fails open and the delivery proceeds. The one exception is an
+    attached image the session cannot read (Issue #2390): it raises
+    `issue_images.Unreadable`, which the caller's failure-stop path reports
+    once as `attachment_unavailable` instead of delivering a text-only
+    judgment.
     """
     with tempfile.TemporaryDirectory(prefix="orbi-clarify-") as directory:
         verdict_path = Path(directory) / "verdict.json"
@@ -446,6 +460,12 @@ def judge_issue_body(issue: dict, config: RunnerConfig, source_repo: str,
                 extension=str(CLARIFY_EXTENSION),
                 env={CLARIFY_VERDICT_ENV: str(verdict_path)},
             )
+        except issue_images.Unreadable:
+            # Issue #2390: an image the gate cannot read is the EXISTING
+            # attachment stop, never a thin-ticket verdict and never a
+            # fail-open delivery without the image (Issue #2364). The
+            # carried failure record names the file and the repair.
+            raise
         except Exception as exc:
             event(
                 "clarify_check_skipped", level=logging.WARNING,

@@ -25,18 +25,8 @@ from orbi import config as config_domain
 from orbi import language, steering
 from orbi.body_steering import ignore_untrusted_body_edit, poll_body_edit
 from orbi.delivery_scene import RunContext
-from orbi.comment_trust import (
-    comment_is_trusted,
-    trusted_issue_comments_block,
-)
-from orbi.github import (
-    issue_comments,
-    issue_view,
-    pr_comments,
-    pr_review_comments,
-    pr_reviews,
-)
-from orbi.github_feedback import normalize_pr_feedback
+from orbi.comment_trust import comment_is_trusted
+from orbi.github import issue_comments, issue_view
 from orbi.gitops import base_sync_lock_path
 from orbi.journal import LOGGER, event, issue_context, run_command
 from orbi.pi_activity import (
@@ -58,7 +48,7 @@ from orbi.pi_process import (
     stream_pi,
 )
 from orbi.pi_stream_log import log_provider_config_loaded
-from orbi import attachments, issue_images, model_catalog
+from orbi import attachments, issue_material, model_catalog
 from orbi.repo_config import validate_context_file
 from orbi.ticket_command import carries_run_marker
 
@@ -505,33 +495,25 @@ def run_pi(issue: dict, ctx: RunContext, config: config_domain.RunnerConfig, *,
         # the value stays available for custom prompt templates.
         "BASE_SYNC_LOCK": str(base_sync_lock_path(config.repo_dir)),
     }
-    # The trusted-comment timeline enters the task context
-    # only when the template carries the placeholder — a template
-    # without it keeps the exact pre-#745 behavior (no extra GitHub
-    # read, no new failure mode).
-    if "{{ISSUE_COMMENTS}}" in template:
-        prompt_values["ISSUE_COMMENTS"] = trusted_issue_comments_block(
-            issue_comments(int(issue["number"]), repo=source_repo),
-            config.issue_comments_limit, repo=source_repo,
-        )
-    # The comment-facing natural-language fields this session produces
-    # follow the run's bound message language (Issue #1660). The
-    # instruction is appended AFTER the template is rendered, so a custom
-    # prompt template receives exactly the same effective instruction.
+    # One material for every Issue session (Issues #2364, #2390).
+    with_comments = "{{ISSUE_COMMENTS}}" in template
+    material = issue_material.material(
+        issue, config, repo=source_repo, directory=worktree,
+        with_comments=with_comments,
+    )
+    if with_comments:
+        prompt_values["ISSUE_COMMENTS"] = material.comment_text
+    # The session's natural-language fields follow the run's language
+    # (Issue #1660), appended AFTER the template is rendered.
     system_prompt = language.with_model_instruction(
         render_prompt(template, prompt_values), language.of(config),
     )
-    # Issue #2364: the Issue's images, staged before the session starts.
-    images = issue_images.for_session(
-        issue, config=config, repo=source_repo, worktree=worktree,
+    instruction = (
+        f"Worktree: {worktree}\nComplete the delivery process in the "
+        "system prompt."
     )
-    context = (
-        f"Issue #{issue['number']}: {issue['title']}\n\n"
-        f"Issue body:\n{issue.get('body', '')}\n\n"
-        + (f"{images.naming()}\n" if images.files else "")
-        + f"Worktree: {worktree}\n"
-    )
-    context += "Complete the delivery process in the system prompt."
+    context = material.decorate(f"{material.text()}\n\n{instruction}",
+                                comments=False)
     if resume_context:
         context += f"\n{resume_context}"
     steering_seen: set[str] = set()
@@ -541,13 +523,14 @@ def run_pi(issue: dict, ctx: RunContext, config: config_domain.RunnerConfig, *,
     steering_limit_notice_logged = False
     # Begin with the body already in the prompt (Issue #1094).
     steering_body = issue.get("body", "")
+    material_body = material.body  # the last TRUSTED body (#1094)
     # `resume_context` is also the public parameter name of this function;
     # keep an unshadowed reference for the restart callback below.
     build_resume_context = globals()["resume_context"]
 
     def check_steering() -> SteeringRequest | None:
         nonlocal steering_rounds, steering_limit_logged
-        nonlocal steering_limit_notice_logged, steering_body
+        nonlocal steering_limit_notice_logged, steering_body, material_body
         limit_reached = steering_rounds >= config.steering_max_rounds
         if limit_reached and not steering_limit_logged:
             steering_limit_logged = True
@@ -577,12 +560,7 @@ def run_pi(issue: dict, ctx: RunContext, config: config_domain.RunnerConfig, *,
         )
         body_changed = edit is not None and edit.trusted
         fresh: list[dict] = []
-        # This poll's trust decisions, committed to `steering_seen` only
-        # once the poll completes (Issue #1996): a permission read that
-        # raises propagates to the poller, which logs
-        # `steering_poll_failed` and DISCARDS this poll's result — a
-        # comment decided earlier in the same poll would otherwise be seen
-        # without ever having steered.
+        # Commit decisions only after every trust read succeeds (#1996).
         decided: set[str] = set()
         # GitHub exposes comment timestamps only to whole seconds. Round
         # the boundary up so a comment created in the startup second is not
@@ -598,19 +576,10 @@ def run_pi(issue: dict, ctx: RunContext, config: config_domain.RunnerConfig, *,
                 decided.add(identifier)
                 continue
             if carries_run_marker(comment):
-                # Engine output never steers the session it runs in (Issue
-                # #2221): the answer's own receipt is such a comment, and a
-                # maintainer sharing the runner account is still read as a
-                # person -- only the engine's marked write is skipped.
+                # Engine output never steers its own session (#2221).
                 decided.add(identifier)
                 continue
-            # The trust decision comes BEFORE the seen mark (Issue #1996):
-            # the permission read raises on a transient GitHub failure and
-            # propagates to the poller (the `steering_poll_failed` bypass).
-            # Marking the comment first would consume it for good and the
-            # maintainer would have to post it again. A decided comment —
-            # trusted or not — is seen; one whose read raised is not, so
-            # the next poll decides it.
+            # The trust decision comes BEFORE the seen mark (#1996).
             trusted = comment_is_trusted(comment, repo=source_repo)
             decided.add(identifier)
             if trusted:
@@ -621,10 +590,7 @@ def run_pi(issue: dict, ctx: RunContext, config: config_domain.RunnerConfig, *,
         steering_seen.update(decided)
         if edit is not None and not edit.trusted:
             steering_body = ignore_untrusted_body_edit(edit, issue, source_repo)
-        # Issue #2221: an answer to the stop question steers like a
-        # correction -- the body change it implies is written here, so the
-        # restart below is the ONE restart it causes (the engine's own write
-        # never reads back as a second, person-made correction).
+        # An answer to the stop question steers like a correction (#2221).
         amended = steering.answer_body(
             fresh, issue=issue, repo=source_repo, comments=comments,
             body=edit.body if body_changed else steering_body,
@@ -646,6 +612,8 @@ def run_pi(issue: dict, ctx: RunContext, config: config_domain.RunnerConfig, *,
             authors.append(author.get("login") if isinstance(author, dict) else "unknown")
         if edit is not None and edit.trusted and amended is None:
             steering_body = edit.body
+        if body_changed:
+            material_body = steering_body
         resume = build_resume_context(
             worktree, fresh,
             body_revision=(
@@ -653,8 +621,19 @@ def run_pi(issue: dict, ctx: RunContext, config: config_domain.RunnerConfig, *,
                 if body_changed else None
             ),
         ) or ""
+        # Rebuild the SAME material from this poll's snapshot (#2390).
+        fresh_material = issue_material.material(
+            {"number": issue["number"], "title": issue["title"],
+             "body": material_body}, config, repo=source_repo,
+            directory=worktree, comments=comments,
+        )
         return SteeringRequest(
-            context=f"{context}\n{resume}",
+            context=fresh_material.decorate(
+                f"{fresh_material.text()}\n\n{instruction}\n{resume}",
+            ),
+            command=attachments.with_arguments(
+                base_command, fresh_material.images.arguments(),
+            ),
             comment_ids=tuple(str(item["id"]) for item in fresh),
             author=", ".join(authors),
             body_revision=body_changed,
@@ -666,7 +645,8 @@ def run_pi(issue: dict, ctx: RunContext, config: config_domain.RunnerConfig, *,
         tools=True, extensions=True,
     )
     # Issue #2364: the images go before the context file, which stays last.
-    command = attachments.with_arguments(command, images.arguments())
+    base_command = command
+    command = attachments.with_arguments(base_command, material.images.arguments())
     # The provider file (baseUrl / api / apiKey / models)
     # reaches Pi through the materialized per-run agent dir, never
     # through the command line or the log (the redacted command keeps
@@ -743,30 +723,6 @@ def rendered_issue_body_sha256(prompt_review: Path, issue_body: str) -> str:
     return issue_body_sha256(issue_body)
 
 
-def _review_timeline(issue: int, pr: dict, config: config_domain.RunnerConfig,
-                     source_repo: str) -> str:
-    """The review session's ONE bounded trusted timeline (Issue #1626).
-
-    The Issue's comments plus the PR's feedback, oldest first. A failed
-    feedback read is logged and leaves the Issue's own timeline in place.
-    """
-    comments = issue_comments(issue, repo=source_repo)
-    try:
-        feedback = pr_comments(pr["number"], repo=source_repo)
-        feedback += pr_reviews(pr["number"], repo=source_repo)
-        feedback += pr_review_comments(pr["number"], repo=source_repo)
-        comments += normalize_pr_feedback(feedback)
-        comments.sort(key=lambda item: str(item.get("createdAt") or ""))
-    except Exception:
-        LOGGER.exception(
-            "pr_review_feedback_read_failed repo=%s pr=%s",
-            source_repo, pr["number"],
-        )
-    return trusted_issue_comments_block(
-        comments, config.issue_comments_limit, repo=source_repo,
-    )
-
-
 def run_review(ctx: RunContext, pr: dict, config: config_domain.RunnerConfig, round: int,
                timeout: int | None = None,
                progress: Callable[[dict], None] | None = None) -> ReviewSessionResult:
@@ -793,14 +749,19 @@ def run_review(ctx: RunContext, pr: dict, config: config_domain.RunnerConfig, ro
     (worktree / ".orbi").mkdir(exist_ok=True)
     started = time.monotonic()
     review_template = config.prompt_review.read_text(encoding="utf-8")
-    # Acceptance criteria are mutable review input. Read the Issue body for
-    # every round, rather than relying on the reviewer's initiative or on a
-    # body captured by an earlier run. Custom templates that do not consume
-    # it retain their historical GitHub-read behavior.
-    issue_body = ""
-    if "{{ISSUE_BODY}}" in review_template:
-        issue_data = issue_view(issue, "body", repo=source_repo)
+    # Acceptance criteria are mutable review input. Read the Issue body and
+    # title for every round, rather than relying on the reviewer's initiative
+    # or on a body captured by an earlier run. Custom templates that do not
+    # consume them retain their historical GitHub-read behavior.
+    issue_body = issue_title = ""
+    if "{{ISSUE_BODY}}" in review_template or "{{ISSUE_TITLE}}" in review_template:
+        issue_data = issue_view(
+            issue,
+            "body,title" if "{{ISSUE_TITLE}}" in review_template else "body",
+            repo=source_repo,
+        )
         issue_body = issue_data.get("body") or ""
+        issue_title = issue_data.get("title") or ""
         if not isinstance(issue_body, str):
             raise ValueError("issue body must be a string")
     review_values = {
@@ -817,27 +778,26 @@ def run_review(ctx: RunContext, pr: dict, config: config_domain.RunnerConfig, ro
         # run under it (flock <lock> git fetch origin <base>).
         "BASE_SYNC_LOCK": str(base_sync_lock_path(config.repo_dir)),
     }
-    # The review path sees one bounded trusted timeline. PR feedback is input
-    # only: delivery state remains on the Issue and the current PR is the sole
-    # PR source selected by this call.
-    if "{{ISSUE_COMMENTS}}" in review_template:
-        review_values["ISSUE_COMMENTS"] = _review_timeline(
-            issue, pr, config, source_repo,
-        )
-    # Substitute the body last so placeholder-shaped text in the body remains
-    # verbatim instead of being recursively interpreted as a prompt variable.
-    review_values["ISSUE_BODY"] = issue_body
-    # The review session is a session boundary too (Issue #1660): its
-    # comment-facing natural-language fields (summary, note, fix) follow
-    # the same bound language, appended after the rendered template.
+    # The one material, re-read each round; PR feedback is added on top.
+    with_comments = "{{ISSUE_COMMENTS}}" in review_template
+    material = issue_material.material(
+        {"number": issue, "title": issue_title, "body": issue_body},
+        config, repo=source_repo, directory=worktree, review=True,
+        extra_comments=(
+            issue_material.review_feedback(pr, repo=source_repo)
+            if with_comments else ()
+        ),
+        with_comments=with_comments,
+    )
+    review_values["ISSUE_TITLE"] = material.title
+    if with_comments:
+        review_values["ISSUE_COMMENTS"] = material.comment_text
+    # The body goes last so placeholder-shaped text stays verbatim.
+    review_values["ISSUE_BODY"] = material.body
+    # The review session is a language boundary too (Issue #1660).
     system_prompt = language.with_model_instruction(
         render_prompt(review_template, review_values),
         language.of(config),
-    )
-    # Every review round reads the Issue's images again (Issue #2364).
-    images = issue_images.for_session(
-        {"number": issue, "body": issue_body}, config=config,
-        repo=source_repo, worktree=worktree, review=True,
     )
     context = (
         f"Independently review PR #{pr['number']} ({pr['url']}) of "
@@ -847,14 +807,14 @@ def run_review(ctx: RunContext, pr: dict, config: config_domain.RunnerConfig, ro
         "task branch) and end with a single REVIEW_VERDICT line carrying "
         "the head it covers."
     )
-    context = issue_images.with_context(context, images)
+    context = material.decorate(context, comments=False)
     command, log_command = build_pi_command(
         config, ROLE_REVIEW, REVIEW_EXCLUDED_SKILLS,
         worktree / ".pi-session", system_prompt, context,
         context_placeholder="<review-context-redacted>",
         tools=True, extensions=True,
     )
-    command = attachments.with_arguments(command, images.arguments())
+    command = attachments.with_arguments(command, material.images.arguments())
     # The review session uses its role-specific provider selection,
     # falling back to the implementer selection when no override exists.
     agent_dir = prepare_pi_agent_dir(worktree, config, role=ROLE_REVIEW)
@@ -901,6 +861,17 @@ def run_review(ctx: RunContext, pr: dict, config: config_domain.RunnerConfig, ro
     )
 
 
+TICKET_SYSTEM_PROMPT = (
+    "You are a ticket-only content agent. Produce the requested "
+    "final content as your complete stdout response. Do not "
+    "create or modify files, branches, commits, pull requests, "
+    "tests, or use git/gh tools."
+)
+TICKET_CONTENT_INSTRUCTION = (
+    "Return only the final content to post on this Issue."
+)
+
+
 def run_ticket_agent(
     issue: dict, config: config_domain.RunnerConfig, source_repo: str, *,
     system_prompt: str | None = None,
@@ -915,7 +886,11 @@ def run_ticket_agent(
 
     The ONE no-tools launcher: the ticket-only content agent (#209) and
     the thin-ticket clarify judgment (#1088) share this body and differ
-    only in the prompt, context and run identity. `system_prompt` and
+    only in the prompt, context and run identity. Both read the Issue
+    through `issue_material.material` (Issue #2390), the same entry point
+    the implementer and reviewer use, so each receives the same title,
+    body, trusted comments and images; an unreadable image raises
+    `issue_images.Unreadable` before the session starts. `system_prompt` and
     `context` default to the ticket-only wording; `run_id` defaults to
     `config.run_id`; `timeout` bounds the session (the clarify gate
     passes a small fixed one — a timeout fails open through the
@@ -937,23 +912,21 @@ def run_ticket_agent(
     """
     started = time.monotonic()
     if system_prompt is None:
-        system_prompt = (
-            "You are a ticket-only content agent. Produce the requested "
-            "final content as your complete stdout response. Do not "
-            "create or modify files, branches, commits, pull requests, "
-            "tests, or use git/gh tools."
-        )
-    if context is None:
-        context = (
-            f"Issue #{issue['number']}: {issue['title']}\n\n"
-            f"Issue body:\n{issue.get('body', '')}\n\n"
-            "Return only the final content to post on this Issue."
-        )
+        system_prompt = TICKET_SYSTEM_PROMPT
     # Pi's session is transient OS state, not a task worktree or repository
     # artifact. Its output and all terminal evidence are kept on the Issue.
     with tempfile.TemporaryDirectory(prefix="orbi-ticket-") as directory:
         ticket_dir = Path(directory)
         session_dir = ticket_dir / ".pi-session"
+        # Issue #2390: the ticket-only content agent and the thin-ticket gate
+        # receive the SAME material as every other Issue session, staged in
+        # this transient session dir.
+        material = issue_material.material(
+            issue, config, repo=source_repo, directory=ticket_dir,
+        )
+        if context is None:
+            context = f"{material.text()}\n\n{TICKET_CONTENT_INSTRUCTION}"
+        context = material.decorate(context)
         command, log_command = build_pi_command(
             config, ROLE_TICKET, IMPLEMENT_EXCLUDED_SKILLS, session_dir,
             system_prompt, context,
@@ -961,6 +934,9 @@ def run_ticket_agent(
             tools=False, extensions=extension is None,
             only_extension=extension,
             no_builtin_tools=extension is not None,
+        )
+        command = attachments.with_arguments(
+            command, material.images.arguments(),
         )
         # Startup phase: the provider config is loaded and resolved
         # before the spawn; a configured provider file is materialized

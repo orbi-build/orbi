@@ -160,7 +160,7 @@ def test_the_pre_work_check_prompt_is_byte_identical_after_sharing():
         clarify.CLARIFY_SYSTEM_PROMPT.encode("utf-8"),
     ).hexdigest()
     assert digest == (
-        "755f4a3be1b4209c73ea95ab29448de915ee859f04534700a39960a979933646"
+        "41c3cb5b282458112b713fa97ee65f989866cb06a76149a880f23990e228691b"
     )
 
 

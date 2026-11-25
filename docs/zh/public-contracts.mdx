@@ -644,11 +644,23 @@ session 用 `read` 读取 HTML 与文本，而无工具的保真检查同样以 
 算作已创建，命令会打印未上传的图片以及修复方式（把它们贴进 Issue，或以你自己的身份
 运行 `gh auth login`）。
 
-交付与审查 session（审查每一轮都重新读取）会收到 Attachment 小节里的图片，以及正文
-或可信评论中任何原生 GitHub 图片
-（`github.com/user-attachments/assets/...`，经 GitHub 的 Markdown 渲染读出、下载时
-不带任何 token），并使用同一行说明。读不出来即停止：读不到附件的起草轮会失败并指出
-文件名；交付或审查 session 不会启动，停止走失败报告路径，原因码为
+每一个读取 Issue 的模型 session——薄 ticket 闸门、ticket-only 内容 agent、实现者、
+steering 重启与审查者（审查每一轮都重新读取）——都经由同一个共享函数
+（`orbi.issue_material.material`）拿到**同一份** Issue 材料：标题、正文
+（HTML 与文本附件已经作为内联块写在正文里）、同一套信任判据与同一个数量上限下的
+可信评论，以及 Issue 的图片（Attachment 小节，加上正文或可信评论中任何原生
+GitHub 图片——`github.com/user-attachments/assets/...`，经 GitHub 的 Markdown
+渲染读出、下载时不带任何 token），并在 session 的模型声明支持图片输入时使用同一行
+说明。审查者在材料之上追加当前 PR 的反馈。因此没有任何 session 只凭正文就判定或
+交付 Issue：截图里写着结果与验收条件时，闸门看到的内容与交付 session 完全相同。
+`orbi suggest` 用同一个文本渲染器逐条渲染开放 Issue，但不读评论、不带图片
+（最多读取 200 个开放 Issue）。
+
+附件只有一个读取器（`orbi.attachments.copied`）和一个下载器
+（`orbi.attachments.download`），`orbi draft` 与交付共用：请求携带
+`orbi.build` 要求的 `orbi` User-Agent，声明为图片但字节不是图片的文件会被拒绝。
+读不出来即停止：读不到附件的起草轮会失败并指出文件名；Issue session 不会启动，
+停止走失败报告路径，原因码为
 `attachment_unavailable`（记录定义见[工作流](/zh/workflow)），
 因此 Issue 停在 `ai-blocked`，只有一条评论指出读不出的图片与修复方式（重新上传它，
 或把它从 Issue 中删除，然后去掉 `ai-blocked`：没有打开的 PR 时加 `ai-ready`，

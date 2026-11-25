@@ -728,7 +728,7 @@ def test_prompt_review_md_keeps_the_variable_set_unchanged():
     assert found == {
         "SOURCE_REPO", "PR_NUMBER", "PR_URL", "BASE_BRANCH", "BASE_SHA",
         "HEAD_SHA", "HEAD_REF", "ROUND", "BASE_SYNC_LOCK", "ISSUE_BODY",
-        "ISSUE_COMMENTS",
+        "ISSUE_COMMENTS", "ISSUE_TITLE",
     }, f"prompt_review.md prompt variables drifted: {found}"
 
 
@@ -1076,6 +1076,7 @@ REVIEW_PROMPT_VALUES = {
     "BASE_SYNC_LOCK": "/tmp/base-sync.lock",
     "ISSUE_BODY": "Issue #2264 body",
     "ISSUE_COMMENTS": "trusted comments",
+    "ISSUE_TITLE": "Issue #2264 title",
 }
 
 

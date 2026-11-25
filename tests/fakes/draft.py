@@ -14,7 +14,7 @@ import urllib.request
 from pathlib import Path
 from types import SimpleNamespace
 
-from orbi import clarify, draft
+from orbi import clarify, draft, pi_session
 from seam import seam
 
 from tests.fakes.github import FakeGh
@@ -380,6 +380,42 @@ def stub_stream_pi(monkeypatch, output: str = "") -> list[dict]:
 
     monkeypatch.setattr(seam, "stream_pi", stream)
     return calls
+
+
+def stub_stream_pi_with_context(monkeypatch, output: str = "") -> list[dict]:
+    """Like 'stub_stream_pi', and read the context the session was handed.
+
+    An Issue session's context file lives in a transient directory that is
+    gone once the session returns, so the text is captured while it runs
+    (Issue #2390 pins what the clarify/ticket session actually sees).
+    """
+    calls: list[dict] = []
+
+    def stream(command, **kwargs):
+        context_path = Path(command[-1].removeprefix("@"))
+        calls.append({
+            "command": command,
+            "context": context_path.read_text(encoding="utf-8"),
+            **kwargs,
+        })
+        return output
+
+    monkeypatch.setattr(seam, "stream_pi", stream)
+    return calls
+
+
+def stub_steering_snapshot(monkeypatch) -> None:
+    """A steering poll sees no changed file and no previous session.
+
+    The steering restart test drives the real `run_pi` callback; this keeps
+    its resume section to the new correction alone (Issue #2390).
+    """
+    monkeypatch.setitem(
+        pi_session.__dict__, "changed_files", lambda *a, **k: [],
+    )
+    monkeypatch.setitem(
+        pi_session.__dict__, "activity_snapshot", lambda *a, **k: None,
+    )
 
 
 def stub_agent_dir(monkeypatch, path: Path) -> None:

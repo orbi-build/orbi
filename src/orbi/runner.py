@@ -1035,33 +1035,11 @@ def process_ticket_only(issue: dict, config: config_domain.RunnerConfig, source_
         return "ticket-only"
     except Exception as exc:
         LOGGER.exception("issue=%s ticket-only failed", number)
-        detail = failure_detail(exc)
-        ready_label = delivery_labels.queue_label(config.dispatch_label)
-        try:
-            post_blocked_comment(
-                number, repo=source_repo,
-                body=user_summary.notice(
-                    run_marker(run_id), "runner.ticket_only_failed",
-                    language_code=language.of(config), issue=number,
-                    status_url=config.status_url, title=issue.get("title"),
-                    detail=detail, run_info=run_info.text(), run_id=run_id,
-                ),
-                current_labels={delivery_labels.IN_PROGRESS_LABEL, ready_label},
-                language_code=language.of(config), ready_label=ready_label)
-            publish(
-                action=lambda: publisher.milestone(language.text(
-                    language.of(config),
-                    "runner.ticket_only_blocked_milestone",
-                    detail=sanitize(detail), run_info=run_info.text(),
-                )),
-            )
-        except Exception:
-            LOGGER.exception("issue=%s ticket-only failure reporting failed", number)
+        implementation_delivery.report_ticket_only_failure(
+            issue, config, source_repo, run_id, run_info, publisher,
+            publish, exc,
+        )
         raise
-
-
-
-
 
 
 def _agent_delivery_boundary(worktree: Path) -> tuple[str, str]:

@@ -227,7 +227,7 @@ def test_an_http_source_is_downloaded_the_same_way(
     """Acceptance 2: an http(s) src is downloaded, then staged."""
     draft_fakes.judge_passing(monkeypatch)
     sessions.queue_draft(*ONE_ISSUE)
-    downloads.answers["https://cdn.example.test/shot.png"] = b"PNGDATA"
+    downloads.answers["https://cdn.example.test/shot.png"] = draft_fakes.PNG_BYTES
     code, out, err = run_round_cli(
         config,
         {"message": "tags", "attachments": [
@@ -238,8 +238,51 @@ def test_an_http_source_is_downloaded_the_same_way(
     assert code == 0, err
     file = sessions.calls[0].attached.files[0]
     assert (file.name, file.source) == ("1.png", "shot.png")
-    assert file.path.read_bytes() == b"PNGDATA"
+    assert file.path.read_bytes() == draft_fakes.PNG_BYTES
     assert downloads.urls() == ["https://cdn.example.test/shot.png"]
+
+
+def test_a_draft_download_uses_the_delivery_downloader(
+    config, sessions, monkeypatch, tmp_path, downloads,
+):
+    """Acceptance 5: ONE downloader — the orbi User-Agent and the image check.
+
+    orbi.build answers urllib's default User-Agent with HTTP 403, so
+    `orbi draft` sends the same request a delivery sends; an attachment
+    declared as an image whose bytes are not one is refused here too.
+    """
+    draft_fakes.judge_passing(monkeypatch)
+    sessions.queue_draft(*ONE_ISSUE)
+    address = "https://beta.orbi.build/api/attachments/key"
+    downloads.answers[address] = draft_fakes.PNG_BYTES
+    code, out, err = run_round_cli(
+        config,
+        {"message": "tags", "attachments": [
+            {"name": "shot.png", "src": address},
+        ]},
+        tmp_path / "session",
+    )
+    assert code == 0, err
+    paths = downloads.urls()
+    assert paths == [address]
+    assert downloads.requests[0].headers.get("User-agent") == "orbi"
+
+
+def test_a_download_that_is_not_an_image_is_refused(
+    config, tmp_path, downloads,
+):
+    """Acceptance 5: the bytes decide, exactly as they do in a delivery."""
+    address = "https://cdn.example.test/not-an-image.png"
+    downloads.answers[address] = b"<html>not an image</html>"
+    failure = refused(
+        config,
+        {"message": "tags", "attachments": [
+            {"name": "shot.png", "src": address},
+        ]},
+        tmp_path,
+    )
+    assert failure["code"] == "invalid_input"
+    assert "not an image" in failure["detail"]
 
 
 def test_a_name_that_climbs_out_stays_inside(

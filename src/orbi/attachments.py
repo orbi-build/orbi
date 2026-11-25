@@ -47,7 +47,17 @@ DOWNLOAD_TIMEOUT_SECONDS = 60
 # caller accounting the session (docs/public-contracts.mdx) finds them there.
 DIRECTORY = "attachments"
 SECTION_HEADING = "## Attachments"
+# The ONE downloader every attachment source uses (Issues #2377, #2390):
+# orbi.build and beta.orbi.build answer urllib's default
+# `Python-urllib/3.x` User-Agent with HTTP 403 and Orbi's own value with
+# 200 (measured 2026-11-23), so `orbi draft` and a delivery share it.
+USER_AGENT = "orbi"
+DOWNLOAD_TIMEOUT_SECONDS = 60
 _URL_RE = re.compile(r"^https?://", re.IGNORECASE)
+_MAGIC = (
+    (b"\x89PNG", ".png"), (b"\xff\xd8", ".jpg"),
+    (b"GIF8", ".gif"), (b"RIFF", ".webp"),
+)
 _TICK_RUN_RE = re.compile("[\u0060]+")
 _ATTACHMENTS_HEADING_RE = re.compile(
     r"^##[ \t]+Attachments[ \t]*$", re.MULTILINE,
@@ -400,7 +410,14 @@ def _staged(
         megabytes = MAX_FILE_BYTES // (1024 * 1024)
         if len(data) > MAX_FILE_BYTES:
             raise AttachmentError(f"{entry.name} is larger than {megabytes} MB")
-        if not image:
+        if image:
+            try:
+                suffix = image_suffix(data)
+            except ValueError:
+                raise AttachmentError(
+                    f"{entry.name}: the file's bytes are not an image"
+                ) from None
+        else:
             characters += len(data.decode("utf-8", errors="replace"))
             if characters > MAX_TEXT_CHARACTERS:
                 raise AttachmentError(
@@ -456,14 +473,39 @@ def _kind(name: str) -> tuple[str, bool]:
     )
 
 
+def download(address: str) -> bytes:
+    """One http(s) attachment's bytes, through the ONE downloader.
+
+    The request names `orbi` instead of urllib, because an orbi.build
+    address answers the default User-Agent with HTTP 403 (Issue #2377).
+    """
+    request = urllib.request.Request(
+        address, headers={"User-Agent": USER_AGENT},
+    )
+    with urllib.request.urlopen(
+        request, timeout=DOWNLOAD_TIMEOUT_SECONDS,
+    ) as response:
+        return response.read()
+
+
+def image_suffix(data: bytes) -> str:
+    """One downloaded file's image suffix, from its own magic bytes.
+
+    Anything else is not an image: `orbi draft` refuses it, and a delivery
+    counts it as unreadable rather than guessing a type from the name
+    (Issues #2364, #2390).
+    """
+    for magic, suffix in _MAGIC:
+        if data.startswith(magic):
+            return suffix
+    raise ValueError("not an image")
+
+
 def _read(entry: Attachment) -> tuple[bytes, str]:
     """One entry's bytes and, for a downloaded file, its address."""
     if _URL_RE.match(entry.src):
         try:
-            with urllib.request.urlopen(
-                entry.src, timeout=DOWNLOAD_TIMEOUT_SECONDS,
-            ) as response:
-                return response.read(), entry.src
+            return download(entry.src), entry.src
         except Exception as exc:  # noqa: BLE001 - reported with its reason
             raise AttachmentError(
                 f"{entry.name}: could not be downloaded from {entry.src}: "
