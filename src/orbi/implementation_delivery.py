@@ -34,6 +34,7 @@ from orbi import claim_race
 from orbi import config as config_domain
 from orbi import (
     failure_report,
+    issue_images,
     language,
     merge_exec,
     notify,
@@ -42,7 +43,9 @@ from orbi import (
     plan_milestone,
     recoverable_failure,
     run_state,
+    user_summary,
 )
+from orbi.blocked_comment import post_blocked_comment
 from orbi.checks import test_status
 from orbi.delivery_comment import opened_pr_comment_body, started_pi_comment_body
 from orbi.delivery_labels import EVENT_CLAIM, EVENT_PR_OPENED
@@ -70,7 +73,8 @@ from orbi.journal import (
     set_active_run,
     set_run_id,
 )
-from orbi.pi_activity import activity_snapshot
+from orbi.pi_activity import activity_snapshot, sanitize
+from orbi.pi_command import ROLE_TICKET
 from orbi.pi_process import (
     ROLE_IMPLEMENT,
     ModelWaitDeadError,
@@ -81,6 +85,7 @@ from orbi.progress import (
     ProgressPublisher,
     progress_body_with_outcome,
     progress_state,
+    run_marker,
     safe_publish,
 )
 from orbi.run_fields import RunFields
@@ -885,4 +890,65 @@ def _report_terminal_failure(attempt: _Attempt, exc: Exception) -> None:
             and attempt.publisher.comment_id is not None
         ),
         publisher=attempt.publisher,
+    )
+
+
+def report_ticket_only_failure(
+    issue: dict, config: config_domain.RunnerConfig, source_repo: str,
+    run_id: str, run_info: RunFields, publisher, publish,
+    exc: BaseException,
+) -> None:
+    """Report the ticket-only run's failure; an unreadable image stops as the
+    SAME `attachment_unavailable` rule every other path follows (Issue
+    #2390), while every other error keeps the ticket-only comment."""
+    if isinstance(exc, issue_images.Unreadable):
+        _report_attachment_stop(issue, config, source_repo, run_id, exc)
+        return
+    number = int(issue["number"])
+    detail = failure_detail(exc)
+    ready_label = delivery_labels.queue_label(config.dispatch_label)
+    try:
+        post_blocked_comment(
+            number, repo=source_repo,
+            body=user_summary.notice(
+                run_marker(run_id), "runner.ticket_only_failed",
+                language_code=language.of(config), issue=number,
+                status_url=config.status_url, title=issue.get("title"),
+                detail=detail, run_info=run_info.text(), run_id=run_id,
+            ),
+            current_labels={delivery_labels.IN_PROGRESS_LABEL, ready_label},
+            language_code=language.of(config), ready_label=ready_label)
+        publish(
+            action=lambda: publisher.milestone(language.text(
+                language.of(config),
+                "runner.ticket_only_blocked_milestone",
+                detail=sanitize(detail), run_info=run_info.text(),
+            )),
+        )
+    except Exception:
+        LOGGER.exception("issue=%s ticket-only failure reporting failed", number)
+
+
+def _report_attachment_stop(issue: dict, config: config_domain.RunnerConfig,
+                            source_repo: str, run_id: str,
+                            exc: BaseException) -> None:
+    """The ticket-only run's unreadable-attachment stop (Issue #2390).
+
+    ONE failure comment names the file and its repair, and `ai-blocked` is
+    alone — the same rule the implementer and the review round follow.
+    """
+    language_code = language.of(config)
+    ready_label = delivery_labels.queue_label(config.dispatch_label)
+    failure_report.report_delivery_failure(
+        exc, issue=issue, source_repo=source_repo, run_id=run_id,
+        pr_url=None, worktree=None, branch="-", role=ROLE_TICKET,
+        language_code=language_code, status_url=config.status_url,
+        milestone=config.active_milestone, ready_label=ready_label,
+        action=failure_report.terminal_action(
+            failure_report._classify_failure(exc, outcome="blocked"),
+            language_code,
+        ),
+        reason=failure_detail(exc),
+        classify=False, evidence=False, finish=False,
+        current_labels={delivery_labels.IN_PROGRESS_LABEL, ready_label},
     )

@@ -15,10 +15,12 @@ import fcntl
 import json
 import os
 import subprocess
+from unittest.mock import Mock
 
 import pytest
 
 import orbi.failure_report as failure_report
+import orbi.runner as runner
 import orbi.review_merge as review_merge
 import orbi.gitops as gitops
 from tests.fakes.gitops import remote_head_answer
@@ -32,6 +34,26 @@ RELEASE_663 = {
     "blockedBy": {"nodes": [], "totalCount": 0},
     "milestone": {"title": "v0.4.2"},
 }
+
+
+def install_ticket_only_runtime(monkeypatch) -> list:
+    """The ticket-only path's run identity, writes and publisher.
+
+    Returns the comments it posted, so a test asserts the ONE comment a
+    failed ticket produces (Issue #2390: the ticket-only run follows the
+    same attachment stop as every other path).
+    """
+    comments: list = []
+    monkeypatch.setattr(seam, "new_run_id", lambda: "a1b2c3d4")
+    monkeypatch.setattr(seam, "set_run_id", lambda run_id: None)
+    monkeypatch.setattr(seam, "edit_issue", lambda *a, **k: None)
+    monkeypatch.setattr(
+        seam, "comment_issue",
+        lambda number, **kwargs: comments.append((number, kwargs)),
+    )
+    monkeypatch.setattr(runner, "ProgressPublisher", Mock())
+    monkeypatch.setattr(seam, "safe_publish", lambda **kwargs: None)
+    return comments
 
 
 def milestone_listing(title: str, open_issues: int) -> str:

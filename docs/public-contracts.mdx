@@ -782,13 +782,29 @@ Issue and exits non-zero: the creation counts as created, and the command prints
 images that did not upload with the repair (paste them into the Issue, or run
 `gh auth login` as yourself).
 
-Delivery and review sessions (review re-reads every round) receive the images of
-the Attachments section and any native GitHub image of the body or a trusted comment
-(`github.com/user-attachments/assets/...`, read through GitHub's Markdown rendering
-and downloaded with no token), with the same naming line. Unreadable means stop: a
-drafting round that cannot read an attachment fails and names the file, and a
-delivery or review session does not start — the stop goes through the failure-stop
-path with the reason code `attachment_unavailable` (its record is defined in
+Every model session that reads an Issue — the thin-ticket clarification gate,
+the ticket-only content agent, the implementer, a steering restart and the
+reviewer (review re-reads every round) — receives the SAME Issue material from
+ONE shared function (`orbi.issue_material.material`): the title, the body
+(HTML and text attachments are already inline blocks in it), the trusted
+comments under ONE trust rule and ONE count limit, and the Issue's images — the
+Attachments section plus any native GitHub image of the body or a trusted
+comment (`github.com/user-attachments/assets/...`, read through GitHub's
+Markdown rendering and downloaded with no token) — when the session's model
+declares image input, with the same naming line. The reviewer adds the current
+PR's feedback on top of that material. So no session judges or delivers an
+Issue from its text alone: the gate sees a screenshot that states the result and
+the acceptance just as the delivery session does. `orbi suggest` renders each
+open Issue with the same text renderer, without comments or images (it reads up
+to 200 open Issues).
+
+Attachments have ONE reader (`orbi.attachments.copied`) and ONE downloader
+(`orbi.attachments.download`), shared by `orbi draft` and delivery: the request
+names the `orbi` User-Agent `orbi.build` requires, and a file declared as an
+image whose bytes are not one is refused. Unreadable means stop: a drafting
+round that cannot read an attachment fails and names the file, and an Issue
+session does not start — the stop goes through the failure-stop path with the
+reason code `attachment_unavailable` (its record is defined in
 [Workflow](/workflow#failure-record-orbifailurev1)), so
 the Issue ends `ai-blocked` with ONE comment naming the image and the repair (upload
 it again, or remove it from the Issue, then remove `ai-blocked` and add

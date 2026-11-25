@@ -45,7 +45,7 @@ from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-from orbi import journal
+from orbi import issue_material, journal
 from orbi.claim import _repo_scan_keys
 from orbi.config import RunnerConfig
 from orbi.delivery_labels import label_names
@@ -387,7 +387,7 @@ def _prompt(context_path: Path, repo_dir: Path, repo: str,
     return (
         f"Propose deliverable GitHub Issues for {repo}.\n\n"
         f"1. Read {context_path} with your read tool. It is JSON: the "
-        "repository's open Issues and open PRs (number, title, body, "
+        "repository's open Issues and open PRs (number, title, text, "
         "labels), plus the batches earlier runs proposed "
         "(already_suggested, when it is there).\n"
         f"2. Read the repository itself under {repo_dir} by absolute "
@@ -469,7 +469,7 @@ def _gather_context(repo: str) -> dict:
             {
                 "number": issue.get("number"),
                 "title": issue.get("title", ""),
-                "body": issue.get("body", ""),
+                "text": issue_material.text(issue),
                 "state": issue.get("state"),
                 "url": issue.get("url"),
                 "labels": label_names(issue),

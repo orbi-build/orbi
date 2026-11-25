@@ -23,10 +23,12 @@ import pytest
 
 import orbi.claim as claim
 import orbi.failure_report as failure_report
+import orbi.issue_images as issue_images
 import orbi.runner as runner
 import orbi.pi_session as pi_session
 
 import orbi.release_run as release_run
+from tests.fakes.bootstrap_delivery import install_ticket_only_runtime
 from tests.fakes.bootstrap_preflight import GROQ_PROVIDERS, _user_agent_dir
 from seam import seam
 from orbi.delivery_scene import RunContext
@@ -722,3 +724,55 @@ def test_runner_main_pins_bot_git_identity(monkeypatch, tmp_path):
     )
     assert os.environ["GIT_COMMITTER_NAME"] == "orbi-build[bot]"
 
+
+
+def test_process_ticket_only_stops_on_an_unreadable_issue_image(monkeypatch):
+    """Acceptance 3 (Issue #2390): the ticket-only run follows the ONE rule.
+
+    An Issue image that cannot be read is the existing
+    attachment_unavailable stop: no session starts and exactly one failure
+    comment names the file and its repair.
+    """
+    from tests.fakes import draft as draft_fakes
+    from tests.fakes.github import FakeGh
+
+    native = "https://github.com/user-attachments/assets/abc-123"
+    signed = (
+        "https://private-user-images.githubusercontent.com/1/1.png"
+        "?jwt=signed-1"
+    )
+    gh = FakeGh("o/r", login="orbi-bot")
+    gh.add_issue(
+        99, title="Launch thread",
+        body=f"## Attachments\n\n![shot]({native})",
+        labels=("ai-content-only",),
+    )
+    draft_fakes.install_gh(monkeypatch, gh)
+    downloads = draft_fakes.install_downloads(monkeypatch)
+    downloads.failures[signed] = OSError("no route")
+    sessions = draft_fakes.stub_stream_pi(monkeypatch, "copy")
+    issue = {
+        "number": 99, "title": "Launch thread",
+        "body": f"## Attachments\n\n![shot]({native})",
+        "labels": [{"name": "ai-content-only"}],
+    }
+    comments = install_ticket_only_runtime(monkeypatch)
+    _answer_terminal_labels(monkeypatch, ["ai-in-progress"])
+    deepseek = json.loads(
+        (Path(__file__).resolve().parent.parent
+         / "templates" / "pi-providers" / "deepseek.json").read_text("utf-8"),
+    )
+    config = config_domain.RunnerConfig(
+        repo_dir=Path("/repo"), pi_provider="deepseek",
+        pi_model="deepseek-flash", pi_providers_data=deepseek,
+    )
+    from orbi import model_catalog
+    assert model_catalog.declares_image_input(config) is True
+    with pytest.raises(issue_images.Unreadable, match="shot"):
+        runner.process_ticket_only(issue, config, "o/r")
+    assert sessions == []
+    [comment] = comments
+    body = comment[1]["body"]
+    assert '"reason_code":"attachment_unavailable"' in body
+    assert "shot" in body
+    assert "could not be read" in body

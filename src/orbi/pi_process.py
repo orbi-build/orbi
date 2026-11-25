@@ -135,6 +135,8 @@ class SteeringRequest:
     comment_ids: tuple[str, ...]
     author: str
     body_revision: bool = False
+    # The restarted argv when the material changed (Issue #2390).
+    command: list[str] | None = None
 
 
 @dataclasses.dataclass(frozen=True)
@@ -169,10 +171,7 @@ class SteeringRequested(RuntimeError):
 
     def __init__(self, request: SteeringRequest, round: int, phase: str):
         super().__init__(request.context)
-        self.context = request.context
-        self.comment_ids = request.comment_ids
-        self.author = request.author
-        self.body_revision = request.body_revision
+        self.request = request
         self.round = round
         self.killed_phase = phase
 
@@ -555,17 +554,17 @@ def stream_pi(
                 steering_round=steering_round,
             )
         except SteeringRequested as exc:
-            # Issue #2032: `build_pi_command` ends every argv with Pi's own
-            # file argument `@<session_dir>/task-context.md` (one argv string
-            # is capped at MAX_ARG_STRLEN), so the restart rewrites that FILE
-            # and never argv — the command shape stays the first run's.
+            # The restart rewrites the context FILE; changed material
+            # (Issue #2390) replaces argv too, still ending with that file.
+            command = exc.request.command or command
             Path(command[-1].removeprefix("@")).write_text(
-                exc.context, encoding="utf-8")
+                exc.request.context, encoding="utf-8")
             steering_round = exc.round
             event(
                 "delivery_steered", issue=issue_ref, role=role,
-                comment_ids=exc.comment_ids, author=exc.author,
-                body_revision=exc.body_revision,
+                comment_ids=exc.request.comment_ids,
+                author=exc.request.author,
+                body_revision=exc.request.body_revision,
                 round=exc.round, killed_phase=exc.killed_phase,
             )
             continue
@@ -766,6 +765,9 @@ def _stream_pi_once(
                 try:
                     request = steering_check()
                 except Exception as exc:
+                    # An unreadable correction is the attachment stop (#2390).
+                    if getattr(exc, "failure_record", None) is not None:
+                        raise
                     event(
                         "steering_poll_failed", level=logging.WARNING,
                         issue=issue_ref, reason=type(exc).__name__,

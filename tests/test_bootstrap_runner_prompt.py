@@ -312,7 +312,7 @@ def test_run_pi_injects_trusted_issue_comments_into_the_prompt(
     # the agent through the template placeholder, nowhere else — and it
     # travels as Pi's file argument (Issue #1997).
     assert task_context(command) == (
-        "Issue #4: Fix title\n\nIssue body:\nFix body\n\nWorktree: "
+        "Issue #4: Fix title\n\nFix body\n\nWorktree: "
         + str(tmp_path) + "\n"
         "Complete the delivery process in the system prompt."
     )
@@ -565,7 +565,7 @@ def test_run_pi_injects_base_branch_sha_and_run_id_into_prompt(monkeypatch, tmp_
         "main abc123def456 run1 "
         + str(tmp_path / "checkout" / ".orbi" / "base-sync.lock")
     ) in system_prompt
-    assert task_context(command) == "Issue #4: Fix title\n\nIssue body:\nFix body\n\nWorktree: " + str(tmp_path) + "\nComplete the delivery process in the system prompt."
+    assert task_context(command) == "Issue #4: Fix title\n\nFix body\n\nWorktree: " + str(tmp_path) + "\nComplete the delivery process in the system prompt."
     assert kwargs["cwd"] == tmp_path
     assert kwargs["timeout"] is None
     assert kwargs["ctx"].run_id == "run1"
@@ -620,7 +620,7 @@ def test_run_pi_keeps_the_fresh_context_without_a_resume_context(
     pi_session.run_pi({"number": 5, "title": "t", "body": "b"}, RunContext(run_id=config.run_id, issue={"number": 5, "title": "t", "body": "b"}["number"], branch="orbi/owner-repo-issue-5", worktree=tmp_path, source_repo="owner/repo"), config)
     command = calls[0]
     assert task_context(command) == (
-        "Issue #5: t\n\nIssue body:\nb\n\nWorktree: "
+        "Issue #5: t\n\nb\n\nWorktree: "
         + str(tmp_path) + "\n"
         "Complete the delivery process in the system prompt."
     )
@@ -653,7 +653,7 @@ def test_run_pi_appends_the_resume_context_to_the_context_argument(
     command = calls[0]
     context = task_context(command)
     assert context.startswith(
-        "Issue #5: t\n\nIssue body:\nb\n\nWorktree: " + str(tmp_path),
+        "Issue #5: t\n\nb\n\nWorktree: " + str(tmp_path),
     )
     assert context.endswith(resume)
 
