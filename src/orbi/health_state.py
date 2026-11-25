@@ -23,8 +23,6 @@ from pathlib import Path
 
 from orbi.journal import event
 
-LOGGER = logging.getLogger("orbi.health")
-
 STATE_FILENAME = "health.json"
 HEALTH_LOCK_TIMEOUT_S = 5.0
 
