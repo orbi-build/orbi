@@ -23,6 +23,7 @@ import pytest
 from orbi import branch_reclaim
 from orbi import claim
 from orbi import config as config_domain
+from orbi import github
 from orbi import runner
 from seam import seam
 
@@ -33,6 +34,13 @@ def _config(repo_dir="."):
     """The minimal config `reclaim_merged_delivery_branches` reads."""
     return config_domain.RunnerConfig(
         repo_dir=repo_dir, source_repos=("owner/repo",),
+    )
+
+
+def _reclaim(config):
+    """Run the pass with the github module's ONE PR listing (Issue #2394)."""
+    return branch_reclaim.reclaim_merged_delivery_branches(
+        config, list_prs=github.list_pull_requests,
     )
 
 
@@ -122,7 +130,7 @@ def test_deletes_only_this_repos_merged_delivery_branch(monkeypatch, caplog):
     )
     monkeypatch.setattr(seam, "run_command", remote)
     with caplog.at_level(logging.INFO, logger=LOGGER_NAME):
-        branch_reclaim.reclaim_merged_delivery_branches(_config())
+        _reclaim(_config())
     assert remote.deleted_branches() == ["orbi/owner-repo-issue-7"]
     assert set(remote.heads) == {
         "orbi/owner-repo-issue-8", "orbi/owner-repo-issue-9",
@@ -158,10 +166,10 @@ def test_per_tick_cap_of_25_drains_over_ticks(monkeypatch, caplog):
     monkeypatch.setattr(seam, "run_command", remote)
     config = _config()
     with caplog.at_level(logging.INFO, logger=LOGGER_NAME):
-        branch_reclaim.reclaim_merged_delivery_branches(config)
+        _reclaim(config)
         assert len(remote.deleted_branches()) == 25
         assert len(remote.heads) == 5
-        branch_reclaim.reclaim_merged_delivery_branches(config)
+        _reclaim(config)
     assert len(remote.deleted_branches()) == 30
     assert remote.heads == {}
     counts = [
@@ -186,7 +194,7 @@ def test_reopened_issue_new_oid_is_not_deleted(monkeypatch):
         ],
     )
     monkeypatch.setattr(seam, "run_command", remote)
-    branch_reclaim.reclaim_merged_delivery_branches(_config())
+    _reclaim(_config())
     assert remote.deleted_branches() == []
     assert remote.heads == {"orbi/owner-repo-issue-5": "new-oid"}
 
@@ -215,7 +223,7 @@ def test_single_delete_failure_warns_and_continues(monkeypatch, caplog):
     )
     monkeypatch.setattr(seam, "run_command", remote)
     with caplog.at_level(logging.INFO, logger=LOGGER_NAME):
-        branch_reclaim.reclaim_merged_delivery_branches(_config())
+        _reclaim(_config())
     assert remote.deleted_branches() == [
         "orbi/owner-repo-issue-1", "orbi/owner-repo-issue-2",
     ]
@@ -238,7 +246,7 @@ def test_read_failure_deletes_nothing_and_warns(monkeypatch, caplog):
     remote.read_failure = RuntimeError("git is down")
     monkeypatch.setattr(seam, "run_command", remote)
     with caplog.at_level(logging.WARNING, logger=LOGGER_NAME):
-        branch_reclaim.reclaim_merged_delivery_branches(_config())
+        _reclaim(_config())
     assert remote.deleted_branches() == []
     assert "branch_reclaim_failed" in caplog.text
     assert "deleting nothing" in caplog.text
@@ -249,7 +257,7 @@ def test_no_orbi_branches_skips_the_pr_read(monkeypatch):
     somehow returned) makes no `gh` call at all."""
     remote = FakeRemote({"feature/x": "x"}, [])
     monkeypatch.setattr(seam, "run_command", remote)
-    branch_reclaim.reclaim_merged_delivery_branches(_config())
+    _reclaim(_config())
     assert all(
         not _starts_with(command, ["gh", "pr", "list"])
         for command in remote.calls

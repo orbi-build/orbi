@@ -72,7 +72,9 @@ from orbi.draft_prompt import (
     draft_system_prompt,
 )
 from orbi.failure import failure_detail
-from orbi.github import edit_issue, issue_view, list_issues, list_milestones
+from orbi.github import (
+    edit_issue, issue_view, list_issues, milestone_by_title,
+)
 from orbi.journal import LOGGER, event, run_command
 from orbi.pi_command import (
     IMPLEMENT_EXCLUDED_SKILLS,
@@ -771,13 +773,9 @@ def _drafted_body(issue: DraftIssue, header: str) -> str:
 
 def _open_milestone(repo: str, milestone: str | None) -> str | None:
     """`milestone` when it is one of the OPEN milestones, else None."""
-    if milestone is None:
+    if milestone is None or milestone_by_title(repo, milestone) is None:
         return None
-    titles = {
-        entry.get("title") for entry in list_milestones(repo)
-        if entry.get("state") == "open"
-    }
-    return milestone if milestone in titles else None
+    return milestone
 
 
 def _existing_positions(repo: str, key: str) -> dict[int, int]:

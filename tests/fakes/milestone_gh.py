@@ -18,9 +18,14 @@ from __future__ import annotations
 
 import base64
 import json
+import re
 
 REPO = "owner/repo"
-_MILESTONES_PATH = f"repos/{REPO}/milestones?state=all&per_page=100"
+# The Milestone LIST read: `state=all` for the sweep, `state=open` for the
+# one title lookup and the open-issue counter (Issue #2394).
+_MILESTONES_PATH = re.compile(
+    rf"repos/{REPO}/milestones[?]state=(all|open)&per_page=100"
+)
 _POLICY_PATH = f"repos/{REPO}/contents/.github/orbi.toml"
 _TEMPLATE_PATH = f"repos/{REPO}/contents/.github/release-ticket-template.md"
 
@@ -52,8 +57,14 @@ class FakeMilestoneGh:
 
     def run(self, command: list[str], **kwargs) -> str:
         self.commands.append(command)
-        if command[:3] == ["gh", "api", _MILESTONES_PATH]:
-            return json.dumps([list(self.milestones)])
+        match = _MILESTONES_PATH.fullmatch(command[2]) if command[:
+            2] == ["gh", "api"] else None
+        if match is not None:
+            state = match.group(1)
+            return json.dumps([[
+                milestone for milestone in self.milestones
+                if state == "all" or milestone["state"] == state
+            ]])
         if command[:4] == ["gh", "api", "--method", "POST"]:
             self.milestones.append({
                 "title": command[command.index("-f") + 1][len("title="):],

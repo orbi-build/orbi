@@ -241,3 +241,50 @@ def test_rate_limited_needs_both_the_403_and_the_empty_quota():
     assert gh_response.GitHubRequestFailed(
         1, ["gh", "api"], status=403, ratelimit_remaining=None,
     ).rate_limited is False
+
+
+# --- the ONE missing-path rule (Issue #2394) ---------------------------------
+
+
+def test_not_found_reads_the_response_status_before_any_text():
+    """A 403 whose sentence says "not found" is NOT a 404, and a status
+    404 IS a 404 whatever the sentence says."""
+    forbidden = gh_response.GitHubRequestFailed(
+        1, ["gh", "api"], status=403,
+        stderr="gh: Resource not found for this token (HTTP 403)",
+    )
+    missing = gh_response.GitHubRequestFailed(
+        1, ["gh", "api"], status=404, stderr="gh: whatever",
+    )
+    assert gh_response.not_found(forbidden) is False
+    assert gh_response.not_found(missing) is True
+
+
+@pytest.mark.parametrize("stdout, stderr", [
+    # gh subcommands other than `gh api` print no response status line;
+    # GitHub's own wording is then the only signal, and it must NAME 404.
+    ('{"message": "Not Found", "status": "404"}', ""),
+    ("", "gh: Not Found (HTTP 404)"),
+    ("", "gh: status 404"),
+])
+def test_not_found_falls_back_to_an_explicit_404_marker(stdout, stderr):
+    assert gh_response.not_found(subprocess.CalledProcessError(
+        1, ["gh", "issue", "view", "3"], output=stdout, stderr=stderr,
+    )) is True
+
+
+@pytest.mark.parametrize("stdout, stderr", [
+    ("", "gh: Resource not found for this token (HTTP 403)"),
+    ("", "gh: Something went wrong while executing your query (HTTP 500)"),
+    ('{"message": "Not Found", "status": "403"}', ""),
+    ("", "gh: no such label"),
+])
+def test_not_found_is_never_read_from_the_bare_phrase(stdout, stderr):
+    assert gh_response.not_found(subprocess.CalledProcessError(
+        1, ["gh", "issue", "view", "3"], output=stdout, stderr=stderr,
+    )) is False
+
+
+def test_not_found_of_no_error_is_false():
+    assert gh_response.not_found(None) is False
+

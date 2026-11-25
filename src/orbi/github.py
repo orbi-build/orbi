@@ -20,16 +20,15 @@ import logging
 import re
 import subprocess
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from pathlib import Path
 from urllib.parse import quote
 
-from orbi import checks, gh_response, notify, terminal_labels
+from orbi import checks, gh_response, merge_gate_reads, notify, terminal_labels
 from orbi.delivery_labels import label_name_set, label_patch
 from orbi import delivery_labels
 from orbi.journal import LOGGER, event, run_command, single_line
 from orbi.milestone_errors import MilestoneReconcileError, classify_milestone_error
-from orbi.merge_gate import classify_protection
 from orbi.progress import format_status_comment
 
 GH_READ_MAX_ATTEMPTS = 3
@@ -53,114 +52,22 @@ GH_READ_SUBCOMMANDS = {
     ("auth", "status"), ("auth", "token"),
 }
 RESUME_PR_STATE_TIMEOUT_SECONDS = 30
-
-
-def _not_found(exc: subprocess.CalledProcessError) -> bool:
-    """Whether a failed GitHub read was an HTTP 404."""
-    return re.search(r"(?:http|status) ?404|not found", " ".join(
-        str(part or "") for part in (exc.stderr, exc.stdout)
-    ), re.IGNORECASE) is not None
-
-
-def _is_ruleset_plan_limit(exc: subprocess.CalledProcessError) -> bool:
-    """Whether a failed branch-rules read hit GitHub's plan limitation.
-
-    GitHub answers the branch-rules endpoint of a private repository on
-    a plan without rulesets with a documented 403, and its message is
-    the only thing that separates it from a permission 403 (Issue
-    #1361): the status alone cannot.
-    """
-    return "upgrade to github pro" in " ".join(
-        str(part or "") for part in (exc.stderr, exc.stdout)
-    ).lower()
-
-
-def _merge_gate_api(
-    repo: str, path: str, *, timeout: int = 30,
-    failure_log_level: int = logging.ERROR,
-) -> object:
-    """Read one merge-gate endpoint through the read-only gh seam."""
-    suffix = f"/{path}" if path else ""
-    raw = run_gh_read_command(
-        ["gh", "api", f"repos/{repo}{suffix}"], timeout=timeout,
-        failure_log_level=failure_log_level,
-    )
-    return json.loads(raw)
+# The one wall-clock bound of a creating/closing Issue write (Issue #2394):
+# a hung `gh` fails fast instead of stalling the tick.
+ISSUE_TIMEOUT_SECONDS = 30
 
 
 def merge_gate_preflight(repo: str, branch: str) -> list[str]:
     """Classify protection visible to the configured GitHub token.
 
-    GitHub uses the same classic-protection 404 for "not protected" and for
-    protection hidden from the token.  The branch resource's documented
-    ``protected`` boolean distinguishes those cases before the detailed read;
-    an empty branch-rules response alone is not sufficient (Issue #1174).
-    The reads and the token's failure handling live here; the rule that
-    turns what they returned into blocker lines is
-    `orbi.merge_gate.classify_protection`.
+    The reads and their failure handling live in `orbi.merge_gate_reads`
+    (extracted unchanged, Issue #2394); the rule that turns the payloads
+    into blocker lines is `orbi.merge_gate.classify_protection`. The `gh`
+    read seam is handed in, so the retry and response-status rule stays
+    this module's.
     """
-    encoded_branch = quote(branch, safe="")
-    try:
-        branch_info = _merge_gate_api(repo, f"branches/{encoded_branch}")
-    except (subprocess.CalledProcessError, json.JSONDecodeError,
-            TypeError, ValueError):
-        return ["merge_gate: UNKNOWN cannot read target branch"]
-    if (not isinstance(branch_info, dict)
-            or not isinstance(branch_info.get("protected"), bool)):
-        return ["merge_gate: UNKNOWN branch protection state is not a boolean"]
-
-    classic: dict | None = None
-    classic_unreadable = False
-    if branch_info["protected"]:
-        try:
-            value = _merge_gate_api(
-                repo, f"branches/{encoded_branch}/protection",
-            )
-            if not isinstance(value, dict):
-                return ["merge_gate: UNKNOWN protection response is not an object"]
-            classic = value
-        except subprocess.CalledProcessError as exc:
-            if not _not_found(exc):
-                return ["merge_gate: UNKNOWN cannot read branch protection; "
-                        "requires repository administration permission"]
-            classic_unreadable = True
-        except (json.JSONDecodeError, TypeError, ValueError):
-            return ["merge_gate: UNKNOWN cannot parse branch protection response"]
-
-    try:
-        rules = _merge_gate_api(
-            repo, f"rules/branches/{encoded_branch}",
-            failure_log_level=logging.DEBUG,
-        )
-    except subprocess.CalledProcessError as exc:
-        if _is_ruleset_plan_limit(exc):
-            # The plan cannot carry rulesets, so none can block this
-            # merge and the classic result above stands (Issue #1361).
-            event("merge_gate_rulesets_unavailable", reason="plan")
-            rules = []
-        else:
-            # The read logged at DEBUG because a plan limit is expected
-            # here; every other failure keeps its raw ERROR line.
-            event(
-                "command_failed", level=logging.ERROR,
-                returncode=exc.returncode,
-                stdout=(exc.stdout or "").rstrip(),
-                stderr=(exc.stderr or "").rstrip(),
-            )
-            if _not_found(exc):
-                return ["merge_gate: UNKNOWN protection is unreadable; "
-                        "grant the token repository administration permission"]
-            return ["merge_gate: UNKNOWN cannot read rulesets; "
-                    "requires repository administration permission"]
-    except (json.JSONDecodeError, TypeError, ValueError):
-        return ["merge_gate: UNKNOWN cannot parse ruleset response"]
-    if not isinstance(rules, list) or not all(
-            isinstance(rule, dict) for rule in rules):
-        return ["merge_gate: UNKNOWN ruleset response is not an object array"]
-
-    return classify_protection(
-        repo, branch, classic=classic, rules=rules,
-        classic_unreadable=classic_unreadable,
+    return merge_gate_reads.merge_gate_preflight(
+        repo, branch, read=run_gh_read_command,
     )
 
 
@@ -392,10 +299,11 @@ def milestone_issues(repo: str, milestone_number: int,
             if isinstance(item, dict)]
 
 
-def list_milestones(repo: str, *, timeout: int | None = None) -> list[dict]:
+def list_milestones(repo: str, *, state: str = "all",
+                    timeout: int | None = None) -> list[dict]:
     try:
         raw = run_gh_read_command([
-            "gh", "api", f"repos/{repo}/milestones?state=all&per_page=100",
+            "gh", "api", f"repos/{repo}/milestones?state={state}&per_page=100",
             "--paginate", "--slurp",
         ], timeout=timeout, failure_log_level=logging.DEBUG)
     except subprocess.CalledProcessError as exc:
@@ -403,32 +311,33 @@ def list_milestones(repo: str, *, timeout: int | None = None) -> list[dict]:
     return parse_paginated_issue_array(raw)
 
 
-def milestone_open_issue_count(repo: str, milestone_title: str) -> int:
-    """Return the Open-Issue count of one open Milestone, all pages.
+def milestone_by_title(repo: str, title: str, *, state: str = "open",
+                       timeout: int | None = None) -> dict | None:
+    """The one Milestone whose title is exactly `title` in `state`, or None.
 
-    GitHub's own `open_issues` counter is the authority on whether the
-    Milestone still has unfinished work. Unlike the search-based ready
-    scans it does not depend on the search index and it is not affected
-    by a delivery-state label, so an Issue temporarily outside the ready
-    queue (`ai-blocked`, `ai-pr-opened`, or not yet indexed) still
-    counts.
-
-    The open-Milestone list is read paginated and the title is matched in
-    Python (Issue #1994): a target beyond the first REST page is found,
-    and a title carrying a `"` can never break the query the way a
-    `--jq` program built from the title did. No match is a failed
-    check, never a silent 0 (the caller must not release on it).
+    The ONE title lookup (Issue #2394): `/orbi milestone`, `orbi draft` and
+    `orbi suggest` all ask this, so a CLOSED Milestone of the same title is
+    never mistaken for a ready one. The list is read paginated and matched
+    in Python, so a target beyond the first REST page is found and a title
+    carrying a `"` cannot break the query (Issue #1994).
     """
-    raw = run_gh_read_command([
-        "gh", "api", f"repos/{repo}/milestones?state=open&per_page=100",
-        "--paginate", "--slurp",
-    ], timeout=30)
-    for milestone in parse_paginated_issue_array(raw):
-        if milestone.get("title") == milestone_title:
-            return int(milestone["open_issues"])
-    raise RuntimeError(
-        f"Milestone {milestone_title!r} not found in {repo}"
-    )
+    for milestone in list_milestones(repo, state=state, timeout=timeout):
+        if milestone.get("title") == title:
+            return milestone
+    return None
+
+
+def milestone_open_issue_count(repo: str, milestone_title: str) -> int:
+    """GitHub's own Open-Issue count of one open Milestone (Issue #663).
+
+    Unlike the search-based ready scans it does not depend on the search
+    index or a delivery-state label. No match is a failed check, never a
+    silent 0 (the caller must not release on it).
+    """
+    milestone = milestone_by_title(repo, milestone_title, timeout=30)
+    if milestone is None:
+        raise RuntimeError(f"Milestone {milestone_title!r} not found in {repo}")
+    return int(milestone["open_issues"])
 
 
 def close_milestone(repo: str, number: int) -> None:
@@ -439,18 +348,85 @@ def close_milestone(repo: str, number: int) -> None:
     ], timeout=30)
 
 
-def close_issue(number: int, *, repo: str,
-               reason: str | None = None) -> None:
-    """Close one Issue by number (the reconciliation/cleanup step).
+def close_issue(number: int, *, repo: str, reason: str | None = None,
+                comment: str | None = None) -> None:
+    """Close one Issue by number (the ONE close, Issue #2394).
 
     `reason` is `gh issue close --reason`'s documented value set
-    (`completed`, `not planned`, `duplicate` — verified with
-    `gh issue close --help`); `None` keeps GitHub's own default, completed.
+    (`completed`, `not planned`, `duplicate`); `None` keeps the completed
+    default. `comment` posts a receipt in the same write. Closing is
+    idempotent, so a transient failure is retried under the one bounded
+    timeout; with a comment the retry first proves the close landed, so a
+    lost response cannot post the receipt twice.
     """
     command = ["gh", "issue", "close", str(number), "--repo", repo]
     if reason is not None:
         command += ["--reason", reason]
-    run_command(command)
+    if comment is not None:
+        command += ["--comment", comment]
+
+    def already_closed() -> bool:
+        return issue_view(number, "state", repo=repo).get("state") == "CLOSED"
+
+    run_gh_write_command(
+        command, timeout=ISSUE_TIMEOUT_SECONDS,
+        already_applied=already_closed if comment is not None else None,
+    )
+
+
+def issue_number_from_url(url: str) -> int:
+    """The Issue number in one `gh issue create` URL (its last segment)."""
+    match = re.search(r"/issues/([0-9]+)$", str(url).strip().rstrip("/"))
+    if match is None:
+        raise ValueError(f"no issue number in URL: {url!r}")
+    return int(match.group(1))
+
+
+def create_issue(repo: str, *, title: str, body: str, labels: Sequence[str] = (),
+                 milestone: str | None = None, extra_args: Sequence[str] = (),
+                 cwd: Path | None = None, timeout: int = ISSUE_TIMEOUT_SECONDS,
+                 existing: Callable[[], int | None] | None = None,
+                 command_runner: Callable[..., str] | None = None) -> int:
+    """Create one Issue and return its number (the ONE creation, #2394).
+
+    `labels`, `milestone` and `extra_args` (gh's `--attach` flags) ride
+    along in the caller's order. Creation is NEVER blindly retried — a lost
+    response may have created the Issue — so it retries only when
+    `existing` proves an earlier attempt landed, by returning that number.
+    An attachment gh refuses still creates the Issue and prints its URL on
+    the failed call, which IS a creation (Issue #2364).
+    """
+    command = ["gh", "issue", "create", "--repo", repo,
+               "--title", title, "--body", body, *extra_args]
+    command += [item for label in labels for item in ("--label", label)]
+    if milestone is not None:
+        command += ["--milestone", milestone]
+    created: list[int] = []
+
+    def already_created() -> bool:
+        found = existing() if existing is not None else None
+        if found is None:
+            return False
+        created.append(found)
+        return True
+
+    execute = command_runner or run_command
+    try:
+        if existing is None:
+            options: dict[str, object] = {"timeout": timeout}
+            if cwd is not None:
+                options["cwd"] = cwd
+            url = execute(command, **options)
+        else:
+            url = run_gh_write_command(
+                command, cwd=cwd, timeout=timeout,
+                command_runner=command_runner, already_applied=already_created,
+            )
+    except subprocess.CalledProcessError as exc:
+        url = (exc.stdout or "").strip()
+        if not extra_args or not url.startswith("https://"):
+            raise
+    return created[0] if created else issue_number_from_url(url)
 
 
 def issue_view(number: int, fields: str, *, repo: str | None = None,
@@ -908,21 +884,52 @@ def strip_bot_suffix(login: str) -> str:
     return login[:-5] if login.endswith("[bot]") else login
 
 
+def list_pull_requests(repo: str | None, *, state: str, json_fields: str,
+                       limit: int, head: str | None = None,
+                       cwd: Path | None = None,
+                       timeout: int = RESUME_PR_STATE_TIMEOUT_SECONDS,
+                       ) -> list[dict]:
+    """Run one `gh pr list` query (the ONE PR listing, Issue #2394).
+
+    Every caller shares this read's timeout, retry and shape check: the
+    branch query (`head`), the merge/recovery scans and the orphan sweep.
+    Without `repo` the query uses the checkout `cwd` points at.
+    """
+    command = ["gh", "pr", "list", "--state", state]
+    if head is not None:
+        command += ["--head", head]
+    if repo is not None:
+        command += ["--repo", repo]
+    command += ["--json", json_fields, "--limit", str(limit)]
+    raw = run_gh_read_command(command, cwd=cwd, timeout=timeout)
+    prs = json.loads(raw) if raw.strip() else []
+    if not isinstance(prs, list):
+        raise ValueError("gh pr list returned a non-array payload")
+    return prs
+
+
 _FOREIGN_PRS_JOURNALED: set[tuple[str, str]] = set()
-def filter_same_repository_prs(prs: list, branch: str) -> list:
+def filter_same_repository_prs(prs: list, branch: str | None = None) -> list:
+    """Drop the fork PRs GitHub marks `isCrossRepository` (Issue #2234).
+
+    A fork can reuse a delivery branch name, so a branch/orphan query never
+    treats one as this repository's (Issue #2394). `orbi suggest` keeps
+    every open PR, forks included, by not calling this.
+    """
     foreign = [p for p in prs if isinstance(p, dict) and p.get("isCrossRepository") is True]
     for pr in foreign:
-        key = (branch, str(pr.get("url", "")))
-        if key not in _FOREIGN_PRS_JOURNALED: event("foreign_pr_ignored", branch=branch, pr=key[1]); _FOREIGN_PRS_JOURNALED.add(key)
+        head = branch if branch is not None else pr.get("headRefName")
+        key = (str(head), str(pr.get("url", "")))
+        if key not in _FOREIGN_PRS_JOURNALED: event("foreign_pr_ignored", branch=key[0], pr=key[1]); _FOREIGN_PRS_JOURNALED.add(key)
     return [pr for pr in prs if pr not in foreign]
 
 
 def open_pr_for_branch(repo_dir: Path | None, branch: str, *, repo: str | None = None) -> dict | None:
-    raw = run_gh_read_command(["gh", "pr", "list", "--state", "open", "--head", branch, *(["--repo", repo] if repo is not None else []), "--json", "number,url,baseRefName,headRefName,headRefOid,isCrossRepository", "--limit", "20"], cwd=repo_dir, timeout=RESUME_PR_STATE_TIMEOUT_SECONDS)
-    prs = json.loads(raw) if raw.strip() else []
-    if not isinstance(prs, list):
-        raise RuntimeError("open PR query must return an array")
-    prs = filter_same_repository_prs(prs, branch)
+    """The ONE open PR of one delivery branch, or None (Issue #2394)."""
+    prs = filter_same_repository_prs(list_pull_requests(
+        repo, state="open", head=branch, limit=20, cwd=repo_dir,
+        json_fields="number,url,baseRefName,headRefName,headRefOid,isCrossRepository",
+    ), branch)
     if len(prs) > 1:
         raise RuntimeError(f"multiple open PRs for stable delivery branch {branch}")
     return prs[0] if prs else None

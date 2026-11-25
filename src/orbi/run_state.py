@@ -32,7 +32,6 @@ from orbi.github import (
     RESUME_PR_STATE_TIMEOUT_SECONDS,
     pr_number,
     pr_view,
-    run_gh_read_command,
 )
 from orbi.gitops import is_ancestor
 from orbi.journal import event, run_command
@@ -395,22 +394,14 @@ def _query_open_prs(worktree: Path, branch: str) -> list:
     payload is a broken `gh` response, never "zero PRs" — fail fast
     instead of guessing.
     """
-    raw = run_gh_read_command([
-        "gh", "pr", "list", "--state", "open", "--head", branch,
-        "--json", (
+    return github.filter_same_repository_prs(github.list_pull_requests(
+        None, state="open", head=branch, limit=100, cwd=worktree,
+        json_fields=(
             "number,url,baseRefName,baseRefOid,"
             "headRefName,headRefOid,headRepository,headRepositoryOwner,"
             "isCrossRepository,body"
         ),
-        "--limit", "100",
-    ], cwd=worktree)
-    prs = json.loads(raw)
-    if not isinstance(prs, list):
-        raise RuntimeError(
-            "gh pr list --json returned a non-array payload "
-            "(expected exactly one open PR)"
-        )
-    return github.filter_same_repository_prs(prs, branch)
+    ), branch)
 
 
 def _single_open_pr(

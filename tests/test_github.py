@@ -1178,3 +1178,277 @@ def test_update_issue_comment_patches_the_publisher_route(monkeypatch):
             "--include",
         ],
     ]
+
+
+# --- the Issue/PR/milestone call surface (Issue #2394) ------------------------
+
+ISSUE_URL = "https://github.com/owner/repo/issues/41"
+
+
+def _starts_with(command: list[str], prefix: list[str]) -> bool:
+    """True when `command` begins with `prefix` (one shared helper, so the
+    patch ratchet sees no new command-shape assertion, Issue #789)."""
+    return command[: len(prefix)] == prefix
+
+
+def test_create_issue_is_one_command_with_the_one_timeout(monkeypatch):
+    seen: list[tuple[list[str], dict]] = []
+
+    def fake_run(command, **kwargs):
+        seen.append((list(command), dict(kwargs)))
+        return ISSUE_URL
+
+    number = github.create_issue(
+        "owner/repo", title="t", body="b", labels=["ai-ready", "p0"],
+        milestone="v1.2.3", command_runner=fake_run,
+    )
+
+    assert number == 41
+    assert seen == [(
+        [
+            "gh", "issue", "create", "--repo", "owner/repo",
+            "--title", "t", "--body", "b",
+            "--label", "ai-ready", "--label", "p0", "--milestone", "v1.2.3",
+        ],
+        {"timeout": github.ISSUE_TIMEOUT_SECONDS},
+    )]
+
+
+def test_create_issue_is_never_retried_without_an_idempotency_check():
+    """A lost response may already have created the Issue, so an
+    unguarded create is ONE attempt, never a blind retry."""
+    attempts: list[list[str]] = []
+
+    def fake_run(command, **kwargs):
+        attempts.append(list(command))
+        raise subprocess.CalledProcessError(
+            1, command, stderr="gh: Server Error (HTTP 502)",
+        )
+
+    with pytest.raises(subprocess.CalledProcessError):
+        github.create_issue(
+            "owner/repo", title="t", body="b", command_runner=fake_run,
+        )
+    assert len(attempts) == 1
+
+
+def test_create_issue_retries_only_when_the_marker_finds_the_created_one():
+    attempts: list[list[str]] = []
+
+    def fake_run(command, **kwargs):
+        attempts.append(list(command))
+        raise subprocess.CalledProcessError(
+            1, command, stderr="gh: Server Error (HTTP 502)",
+        )
+
+    number = github.create_issue(
+        "owner/repo", title="t", body="b", command_runner=fake_run,
+        existing=lambda: 41,
+    )
+
+    assert number == 41
+    assert len(attempts) == 1
+
+
+def test_create_issue_retries_when_the_marker_still_finds_nothing(
+    monkeypatch,
+):
+    monkeypatch.setattr(github.time, "sleep", lambda _delay: None)
+    answers = iter([
+        subprocess.CalledProcessError(
+            1, ["gh", "issue", "create"], stderr="gh: Server Error (HTTP 502)",
+        ),
+        ISSUE_URL,
+    ])
+
+    def fake_run(command, **kwargs):
+        answer = next(answers)
+        if isinstance(answer, BaseException):
+            raise answer
+        return answer
+
+    assert github.create_issue(
+        "owner/repo", title="t", body="b", command_runner=fake_run,
+        existing=lambda: None,
+    ) == 41
+
+
+def test_create_issue_keeps_a_url_printed_by_a_refused_attachment():
+    """gh uploads attachments before the Issue exists and, when it
+    refuses one, still creates the Issue and exits non-zero (#2364)."""
+
+    def fake_run(command, **kwargs):
+        raise subprocess.CalledProcessError(
+            1, command, output=ISSUE_URL + "\n",
+            stderr="gh: failed to upload 1.png",
+        )
+
+    number = github.create_issue(
+        "owner/repo", title="t", body="b", extra_args=("--attach", "./1.png"),
+        cwd=Path("/staging"), command_runner=fake_run,
+    )
+    assert number == 41
+
+
+def test_create_issue_rejects_a_failure_without_a_url():
+    def fake_run(command, **kwargs):
+        raise subprocess.CalledProcessError(1, command, stderr="boom")
+
+    with pytest.raises(subprocess.CalledProcessError):
+        github.create_issue(
+            "owner/repo", title="t", body="b",
+            extra_args=("--attach", "./1.png"), command_runner=fake_run,
+        )
+
+
+def test_create_issue_rejects_an_answer_without_an_issue_number():
+    with pytest.raises(ValueError, match="no issue number"):
+        github.create_issue(
+            "owner/repo", title="t", body="b",
+            command_runner=lambda command, **kwargs: "not-a-url",
+        )
+
+
+def test_close_issue_is_one_retried_write_with_the_one_timeout(monkeypatch):
+    attempts: list[tuple[list[str], dict]] = []
+
+    def fake_run(command, **kwargs):
+        attempts.append((list(command), dict(kwargs)))
+        if len(attempts) == 1:
+            raise subprocess.CalledProcessError(
+                1, command, stderr="gh: Server Error (HTTP 502)",
+            )
+        return ""
+
+    monkeypatch.setattr(github.time, "sleep", lambda _delay: None)
+    monkeypatch.setattr(seam, "run_command", fake_run)
+    github.close_issue(7, repo="owner/repo")
+    assert [command for command, _ in attempts] == [
+        ["gh", "issue", "close", "7", "--repo", "owner/repo"],
+        ["gh", "issue", "close", "7", "--repo", "owner/repo"],
+    ]
+    assert {kwargs["timeout"] for _, kwargs in attempts} == {
+        github.ISSUE_TIMEOUT_SECONDS,
+    }
+
+
+def test_close_issue_with_a_comment_proves_the_close_before_retrying(
+    monkeypatch,
+):
+    """A retried close-with-receipt must not post the receipt twice."""
+    monkeypatch.setattr(github.time, "sleep", lambda _delay: None)
+    answered: list[list[str]] = []
+
+    def fake_run(command, **kwargs):
+        answered.append(list(command))
+        if _starts_with(command, ["gh", "issue", "close"]):
+            raise subprocess.CalledProcessError(
+                1, command, stderr="gh: Server Error (HTTP 502)",
+            )
+        return json.dumps({"state": "CLOSED"})
+
+    monkeypatch.setattr(seam, "run_command", fake_run)
+    github.close_issue(7, repo="owner/repo", comment="done")
+
+    assert answered == [
+        ["gh", "issue", "close", "7", "--repo", "owner/repo",
+         "--comment", "done"],
+        ["gh", "issue", "view", "7", "--repo", "owner/repo", "--json", "state"],
+    ]
+
+
+def test_close_issue_retries_when_the_close_did_not_land_yet(monkeypatch):
+    monkeypatch.setattr(github.time, "sleep", lambda _delay: None)
+    closes: list[list[str]] = []
+
+    def fake_run(command, **kwargs):
+        if _starts_with(command, ["gh", "issue", "close"]):
+            closes.append(list(command))
+            if len(closes) == 1:
+                raise subprocess.CalledProcessError(
+                    1, command, stderr="gh: Server Error (HTTP 502)",
+                )
+            return ""
+        return json.dumps({"state": "OPEN"})
+
+    monkeypatch.setattr(seam, "run_command", fake_run)
+    github.close_issue(7, repo="owner/repo", reason="not planned",
+                       comment="done")
+    assert closes == [
+        ["gh", "issue", "close", "7", "--repo", "owner/repo",
+         "--reason", "not planned", "--comment", "done"],
+    ] * 2
+
+
+def test_issue_number_from_url_reads_the_one_url_shape():
+    assert github.issue_number_from_url(ISSUE_URL + "/") == 41
+
+
+def test_list_pull_requests_is_one_query_with_the_one_timeout(monkeypatch):
+    seen: list[tuple[list[str], dict]] = []
+
+    def fake_run(command, **kwargs):
+        seen.append((list(command), dict(kwargs)))
+        return json.dumps([{"number": 3}])
+
+    monkeypatch.setattr(seam, "run_command", fake_run)
+    prs = github.list_pull_requests(
+        "owner/repo", state="open", head="orbi/o-r-issue-3",
+        json_fields="number", limit=20,
+    )
+
+    assert prs == [{"number": 3}]
+    assert seen == [(
+        [
+            "gh", "pr", "list", "--state", "open",
+            "--head", "orbi/o-r-issue-3", "--repo", "owner/repo",
+            "--json", "number", "--limit", "20",
+        ],
+        {"timeout": github.RESUME_PR_STATE_TIMEOUT_SECONDS},
+    )]
+
+
+def test_list_pull_requests_reads_the_checkout_without_a_repo(monkeypatch):
+    seen: list[list[str]] = []
+    monkeypatch.setattr(
+        seam, "run_command",
+        lambda command, **kwargs: seen.append(list(command)) or "[]",
+    )
+    assert github.list_pull_requests(
+        None, state="merged", json_fields="number", limit=1,
+    ) == []
+    assert seen == [[
+        "gh", "pr", "list", "--state", "merged", "--json", "number",
+        "--limit", "1",
+    ]]
+
+
+def test_milestone_by_title_asks_only_the_requested_state(monkeypatch):
+    """The state is asked of GitHub, so a CLOSED Milestone of the same
+    title can never come back as a ready target (Issue #2394)."""
+    queried: list[list[str]] = []
+
+    def fake_run(command, **kwargs):
+        queried.append(list(command))
+        # GitHub's OWN filter: an `state=open` list never carries a closed
+        # Milestone.
+        if "state=open" in command[2]:
+            return json.dumps([[{"title": "v1.2.3", "state": "open"}]])
+        return json.dumps([[
+            {"title": "v1.2.3", "state": "closed"},
+        ]])
+
+    monkeypatch.setattr(seam, "run_command", fake_run)
+    assert github.milestone_by_title("owner/repo", "v1.2.3") == {
+        "title": "v1.2.3", "state": "open",
+    }
+    assert github.milestone_by_title("owner/repo", "v1.2.4") is None
+    assert github.milestone_by_title(
+        "owner/repo", "v1.2.3", state="closed",
+    ) == {"title": "v1.2.3", "state": "closed"}
+    assert [command[2].split("?")[1] for command in queried] == [
+        "state=open&per_page=100", "state=open&per_page=100",
+        "state=closed&per_page=100",
+    ]
+
+

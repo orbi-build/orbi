@@ -12,7 +12,6 @@ loading stay in the entry module; `config_hint` renders the hint text.
 from __future__ import annotations
 
 import logging
-import re
 import sys
 from pathlib import Path
 
@@ -31,13 +30,12 @@ from orbi import (
 from orbi import delivery_labels
 from orbi.cli_doctor import doctor_report
 from orbi.cli_ticket_command import command_ticket_command
+from orbi.github import create_issue
 from orbi.milestone_command import MilestoneSetError, milestone_set
 from orbi.runner import freeze_base, run_command
 from orbi.session_command import command_session
 
 LOGGER = logging.getLogger("orbi.cli")
-
-ISSUE_URL_PATTERN = re.compile(r"/issues/(\d+)$")
 
 DEFAULT_ISSUE_BODY = """## User outcome
 Describe the observable result the user should get.
@@ -83,30 +81,6 @@ NO_PROVIDER_KEY_CHECK_COMMANDS = frozenset(
 ) | _TICKET_COMMANDS
 
 
-def issue_number(url: str) -> int:
-    """Extract the Issue number from a GitHub Issue URL."""
-    match = ISSUE_URL_PATTERN.search(url)
-    if not match:
-        raise ValueError(f"no issue number in URL: {url}")
-    return int(match.group(1))
-
-
-def create_issue(repo: str, title: str, body: str, *,
-                 milestone: str | None = None) -> str:
-    """Create an Issue via gh and return its URL.
-
-    `milestone` is the optional exact Milestone title; when given it is
-    passed on the `gh issue create` call (`--milestone`), never guessed.
-    """
-    command = [
-        "gh", "issue", "create", "--repo", repo,
-        "--title", title, "--body", body,
-    ]
-    if milestone is not None:
-        command += ["--milestone", milestone]
-    return run_command(command)
-
-
 def dispatch_issue(repo: str, title: str, body: str, *,
                    label: str | None = None,
                    milestone: str | None = None) -> str:
@@ -114,15 +88,17 @@ def dispatch_issue(repo: str, title: str, body: str, *,
 
     The ONE Issue-creation path (Article 4.2): `orbi add` uses the queue
     role from `labels.toml`, `orbi suggest` the resolved `dispatch_label`.
+    The creation and its number are `github.create_issue`'s (Issue #2394);
+    `milestone` is the exact Milestone title, passed through, never guessed.
     """
     label = delivery_labels.queue_label(label)
-    url = create_issue(repo, title, body or DEFAULT_ISSUE_BODY,
-                       milestone=milestone)
+    number = create_issue(repo, title=title, body=body or DEFAULT_ISSUE_BODY,
+                          milestone=milestone)
     run_command([
-        "gh", "issue", "edit", str(issue_number(url)), "--repo", repo,
+        "gh", "issue", "edit", str(number), "--repo", repo,
         "--add-label", label,
     ])
-    return url
+    return f"https://github.com/{repo}/issues/{number}"
 
 def install_units_command(config: config_domain.RunnerConfig, installed_dir: Path | None) -> str:
     """Run the idempotent unit install and return the deployment report.

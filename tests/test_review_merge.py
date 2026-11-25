@@ -241,8 +241,10 @@ def test_query_open_prs_ignores_cross_repository_prs(monkeypatch, tmp_path):
 
 
 def test_query_open_prs_rejects_non_array_payload(monkeypatch, tmp_path):
+    """The shape check is the shared PR-listing rule (Issue #2394): one
+    broken payload raises the same error for every caller."""
     monkeypatch.setattr(seam, "run_command", lambda *a, **k: "{}")
-    with pytest.raises(RuntimeError, match="non-array payload"):
+    with pytest.raises(ValueError, match="non-array payload"):
         run_state._query_open_prs(tmp_path, "orbi/owner-repo-issue-4")
 
 

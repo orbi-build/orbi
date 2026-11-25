@@ -475,8 +475,8 @@ def _announce_merged_prs() -> None:
     if not source_repo:
         return
     path = _watermark_path()
-    from orbi import branch_reclaim, runner_health
-    lock_fd = runner_health._acquire_health_lock(path, blocking=False)
+    from orbi import branch_reclaim, health_state
+    lock_fd = health_state.acquire_health_lock(path, blocking=False)
     if lock_fd is None:
         return
     try:
@@ -541,9 +541,9 @@ def _read_watermark(path: Path) -> str:
 
 
 def _write_watermark(path: Path, value: str) -> None:
-    """Atomically store the last handled `mergedAt` (runner-health write)."""
-    from orbi import runner_health
-    runner_health.save_health_state(path, value)
+    """Atomically store the last handled `mergedAt` (health-state write)."""
+    from orbi import health_state
+    health_state.save_health_state(path, value)
 
 
 def _clear_watermark() -> None:

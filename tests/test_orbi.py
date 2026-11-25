@@ -17,6 +17,7 @@ import orbi.runner as runner
 import orbi.cli as orbi
 import orbi.cli_commands as cli_commands
 import orbi.cli_doctor as cli_doctor
+import orbi.github as github
 import orbi.cli_status as cli_status
 import orbi.scheduler as scheduler
 import orbi.session_command as session_command
@@ -39,27 +40,29 @@ def _write_prompts(tmp_path):
 
 
 def test_issue_number_extracts_number_from_github_url():
-    assert cli_commands.issue_number(
+    assert github.issue_number_from_url(
         "https://github.com/xqliu/orbi/issues/3"
     ) == 3
 
 
 def test_issue_number_rejects_url_without_issue_number():
     with pytest.raises(ValueError, match="no issue number"):
-        cli_commands.issue_number("https://github.com/xqliu/orbi")
+        github.issue_number_from_url("https://github.com/xqliu/orbi")
 
 
-def test_create_issue_runs_gh_issue_create_and_returns_url(monkeypatch):
+def test_create_issue_runs_gh_issue_create_and_returns_its_number(monkeypatch):
+    """The ONE creation leaf (Issue #2394): the `gh issue create` argv and
+    the number parsed out of the URL gh prints."""
     calls = []
     monkeypatch.setattr(
-        cli_commands, "run_command",
+        seam, "run_command",
         lambda command, **kwargs: calls.append(command)
         or "https://github.com/xqliu/orbi/issues/13",
     )
-    url = cli_commands.create_issue(
-        "xqliu/orbi", "New task", "Do it",
+    number = github.create_issue(
+        "xqliu/orbi", title="New task", body="Do it",
     )
-    assert url == "https://github.com/xqliu/orbi/issues/13"
+    assert number == 13
     assert calls == [[
         "gh", "issue", "create", "--repo", "xqliu/orbi",
         "--title", "New task", "--body", "Do it",
@@ -69,7 +72,7 @@ def test_create_issue_runs_gh_issue_create_and_returns_url(monkeypatch):
 def test_dispatch_issue_creates_issue_and_adds_ai_ready(monkeypatch):
     calls = []
     monkeypatch.setattr(
-        cli_commands, "run_command",
+        seam, "run_command",
         lambda command, **kwargs: calls.append(command)
         or "https://github.com/xqliu/orbi/issues/13",
     )
@@ -90,7 +93,7 @@ def test_dispatch_issue_creates_issue_and_adds_ai_ready(monkeypatch):
 def test_dispatch_issue_uses_english_first_body_when_body_is_omitted(monkeypatch):
     calls = []
     monkeypatch.setattr(
-        cli_commands, "run_command",
+        seam, "run_command",
         lambda command, **kwargs: calls.append(command)
         or "https://github.com/xqliu/orbi/issues/13",
     )
@@ -104,7 +107,7 @@ def test_dispatch_issue_uses_english_first_body_when_body_is_omitted(monkeypatch
 
 def test_dispatch_issue_propagates_create_failure(monkeypatch):
     monkeypatch.setattr(
-        cli_commands, "run_command",
+        seam, "run_command",
         lambda command, **kwargs: (_ for _ in ()).throw(
             runner.subprocess.CalledProcessError(1, command, stderr="nope"),
         ),

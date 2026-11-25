@@ -258,7 +258,7 @@ def test_open_pr_for_branch_rejects_malformed_and_ambiguous_results(
     monkeypatch, tmp_path,
 ):
     monkeypatch.setattr(seam, "run_command", lambda *args, **kwargs: "{}")
-    with pytest.raises(RuntimeError, match="must return an array"):
+    with pytest.raises(ValueError, match="non-array payload"):
         runner.open_pr_for_branch(tmp_path, "orbi/owner-repo-issue-3")
 
     monkeypatch.setattr(seam, "run_command", lambda *args, **kwargs: "[{}, {}]",

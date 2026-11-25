@@ -22,8 +22,9 @@ def release_stage_labels() -> tuple[str, ...]:
             delivery_labels.BLOCKED_LABEL, delivery_labels.AWAITING_MERGE_LABEL)
 from orbi.gitops import acquire_base_sync_lock
 from orbi.github import (
-    close_milestone, list_issues, list_milestones, milestone_open_issues,
-    parse_paginated_issue_array, run_gh_read_command, run_gh_write_command,
+    close_issue, close_milestone, create_issue, list_issues, list_milestones,
+    milestone_open_issues, parse_paginated_issue_array, run_gh_read_command,
+    run_gh_write_command,
 )
 from orbi.journal import LOGGER, event, run_command, single_line
 from orbi.milestone_errors import MilestoneReconcileError, classify_milestone_error
@@ -448,12 +449,9 @@ def _pending_milestone_issue(
         ]
     fd = acquire_base_sync_lock(repo_dir, 300.0)
     try:
-        existing = list_issues(
-            repo, state="all", search=f'in:body "{fingerprint}"',
-            json_fields="number", limit=1, timeout=30,
-        )
-        if existing:
-            return _issue_number(existing[0])
+        existing = _fingerprint_issue(repo, fingerprint)
+        if existing is not None:
+            return existing
         lines = list(intro)
         if waiting_state != _WAITING_RELEASE:
             lines.extend(
@@ -476,11 +474,8 @@ def _pending_milestone_issue(
                     language_code, "milestone.confirm_advance_permission",
                 ),
             ])
-        run_command([
-            "gh", "issue", "create", "--repo", repo,
-            "--title", title,
-            "--body", "\n".join(lines),
-        ], timeout=30)
+        create_issue(repo, title=title, body="\n".join(lines),
+                     existing=lambda: _fingerprint_issue(repo, fingerprint))
         open_issues = list_issues(
             repo, state="open", search=f'in:body "{fingerprint}"',
             json_fields="number", limit=200, timeout=30,
@@ -493,10 +488,7 @@ def _pending_milestone_issue(
             return None
         winner = numbered[0]
         for duplicate in numbered[1:]:
-            run_command([
-                "gh", "issue", "close", str(duplicate), "--repo", repo,
-                "--comment", f"duplicate of #{winner}",
-            ], timeout=30)
+            close_issue(duplicate, repo=repo, comment=f"duplicate of #{winner}")
         if len(numbered) > 1:
             event(
                 "pending_milestone_issue_deduplicated",
@@ -508,6 +500,18 @@ def _pending_milestone_issue(
     finally:
         fcntl.flock(fd, fcntl.LOCK_UN)
         os.close(fd)
+
+
+def _fingerprint_issue(repo: str, fingerprint: str) -> int | None:
+    """The Issue already opened for one confirmation fingerprint, or None.
+
+    The advance notice's idempotency key (Issue #2394): read before a create
+    and on a retried one, so a lost response opens no second Issue.
+    """
+    found = list_issues(
+        repo, state="all", search=f'in:body "{fingerprint}"',
+        json_fields="number", limit=1, timeout=30)
+    return _issue_number(found[0]) if found else None
 
 
 def _issue_number(issue: object) -> int | None:
@@ -598,10 +602,7 @@ def _close_stale_milestone_issues(
         )
         if comment is None:
             continue
-        run_command([
-            "gh", "issue", "close", str(issue["number"]), "--repo", repo,
-            "--comment", comment,
-        ], timeout=30)
+        close_issue(issue["number"], repo=repo, comment=comment)
         event(
             "stale_milestone_issue_closed", issue=f"#{issue['number']}",
             active=active_milestone,

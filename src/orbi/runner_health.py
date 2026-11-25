@@ -25,7 +25,6 @@ State lives in ONE JSON file in the existing state dir
 """
 from __future__ import annotations
 
-import fcntl
 import hashlib
 import json
 import logging
@@ -37,6 +36,12 @@ from typing import TYPE_CHECKING
 
 from orbi import delivery_labels
 from orbi import language
+from orbi.github import create_issue
+from orbi.health_state import (
+    STATE_FILENAME, acquire_health_lock as _acquire_health_lock,
+    fresh_state, health_state_path, load_health_state, lock_path as _lock_path,
+    save_health_state,
+)
 from orbi.repo_config import (
     RepoConfigError, load_repo_policy, merged_repo_language,
 )
@@ -52,7 +57,6 @@ LOGGER = logging.getLogger("orbi.health")
 
 LOGGER.addFilter(RunIdFilter())
 
-STATE_FILENAME = "health.json"
 CRASH_WINDOW_MINUTES = 60
 CRASH_THRESHOLD = 3
 REPEAT_FAILURE_THRESHOLD = 3
@@ -148,107 +152,6 @@ CONFIG_CAUSE_RE = re.compile(
     r"|active_milestone_missing"
     r"|ambiguous exact-title match",
 )
-
-
-def health_state_path(repo_dir: Path) -> Path:
-    """Return the health state file of one configured repo."""
-    return repo_dir / ".orbi" / STATE_FILENAME
-
-
-def fresh_state() -> dict:
-    return {"runs": [], "last_pickup_ts": None, "alerted": []}
-
-
-def load_health_state(path: Path) -> dict:
-    """Load the health state; a missing or corrupt file is a fresh state.
-
-    The health check is a bypass: corrupt observability state
-    must never fail the delivery — it is logged and replaced with fresh
-    state on the next save.
-    """
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except FileNotFoundError:
-        # No state file yet: the normal first-tick case, not an error.
-        return fresh_state()
-    except (OSError, ValueError):
-        event("health_state_unreadable", level=logging.WARNING, path=path)
-        return fresh_state()
-    if not isinstance(data, dict):
-        event("health_state_unreadable", level=logging.WARNING, path=path)
-        return fresh_state()
-    state = fresh_state()
-    runs = data.get("runs")
-    if isinstance(runs, list):
-        state["runs"] = runs
-    pickup = data.get("last_pickup_ts")
-    if isinstance(pickup, (int, float)) and not isinstance(pickup, bool):
-        state["last_pickup_ts"] = pickup
-    alerted = data.get("alerted")
-    if isinstance(alerted, list) and all(
-        isinstance(item, str) for item in alerted
-    ):
-        state["alerted"] = alerted
-    return state
-
-
-HEALTH_LOCK_TIMEOUT_S = 5.0
-
-
-def _health_lock_path(state_path: Path) -> Path:
-    return state_path.parent / (state_path.name + ".lock")
-
-
-def _acquire_health_lock(state_path: Path, *,
-                         blocking: bool) -> int | None:
-    """Take the cross-instance health-state lock; None when unavailable.
-
-    Health.json is the one state file two runner instances
-    both read and write with no other synchronization — their
-    load..save spans interleave and the last writer rolls the other's
-    updates back. This is a LEAF lock: while holding it the code never
-    acquires another lock (the check runs before slot acquisition and
-    gives up on a busy lock; the recorders run inside a delivery but
-    only do plain file I/O), so no ordering hazard exists with the
-    slot or base-sync flocks even though the recorders may take this
-    lock while holding the slot. The returned fd owns the flock —
-    closing it releases.
-
-    `blocking=False` bounds the wait at HEALTH_LOCK_TIMEOUT_S and gives
-    up for the tick: the check is a documented pure bypass, so a busy
-    lock skips this tick's check with the same semantics as a check
-    failure.
-    """
-    lock_path = _health_lock_path(state_path)
-    lock_path.parent.mkdir(parents=True, exist_ok=True)
-    fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o644)
-    if blocking:
-        fcntl.flock(fd, fcntl.LOCK_EX)
-        return fd
-    deadline = time.monotonic() + HEALTH_LOCK_TIMEOUT_S
-    while True:
-        try:
-            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            return fd
-        except OSError:
-            if time.monotonic() >= deadline:
-                os.close(fd)
-                return None
-            time.sleep(0.05)
-
-
-def save_health_state(path: Path, state: dict) -> None:
-    """Write the health state atomically (tmp file + rename).
-
-    The tmp name is pid-scoped: a shared `health.tmp` let two instances
-    interleave truncate/write into torn JSON that the read side took as
-    fresh state (a silent reset of every alert/counter). A unique tmp
-    makes each writer's rename all-or-nothing.
-    """
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
-    tmp.write_text(json.dumps(state, indent=2), encoding="utf-8")
-    tmp.replace(path)
 
 
 def failure_fingerprint(exc: BaseException) -> str:
@@ -552,14 +455,12 @@ def create_health_issue(
         "",
         closing,
     ])
-    command = [
-        "gh", "issue", "create",
-        "--repo", repo, "--title", f"Runner 健康巡检告警: {check}",
-        "--body", body, "--label", delivery_labels.BUG_LABEL,
-    ]
-    if dispatchable:
-        command += ["--label", dispatch_label]
-    run_command(command, timeout=GH_TIMEOUT_SECONDS)
+    create_issue(
+        repo, title=f"Runner 健康巡检告警: {check}", body=body,
+        labels=[delivery_labels.BUG_LABEL]
+        + ([dispatch_label] if dispatchable else []),
+        command_runner=run_command, timeout=GH_TIMEOUT_SECONDS,
+    )
     return None
 
 

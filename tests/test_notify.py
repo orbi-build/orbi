@@ -33,6 +33,7 @@ from orbi import (
     config as config_domain,
     failure,
     github,
+    health_state,
     journal,
     language,
     notify,
@@ -1493,8 +1494,8 @@ def test_a_busy_watermark_lock_skips_the_tick(monkeypatch, tmp_path):
     path = tmp_path / ".orbi" / "notify-merged-since"
     # Make the bounded non-blocking wait expire at once (Issue #95 guard):
     # the lock stays held for the whole test, so no 5 s real wait.
-    monkeypatch.setitem(runner_health.__dict__, "HEALTH_LOCK_TIMEOUT_S", -1.0)
-    holder = runner_health._acquire_health_lock(path, blocking=True)
+    monkeypatch.setitem(health_state.__dict__, "HEALTH_LOCK_TIMEOUT_S", -1.0)
+    holder = health_state.acquire_health_lock(path, blocking=True)
     try:
         with TelegramEndpoint() as endpoint:
             endpoint.point(monkeypatch)

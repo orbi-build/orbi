@@ -52,7 +52,9 @@ from orbi.delivery_labels import label_names
 from orbi import delivery_labels
 from orbi.delivery_scene import RunContext
 from orbi.draft import draft_repo_view
-from orbi.github import list_issues, list_milestones
+from orbi.github import (
+    list_issues, list_pull_requests, milestone_by_title,
+)
 from orbi.journal import event, run_command
 from orbi.pi_command import (
     IMPLEMENT_EXCLUDED_SKILLS,
@@ -440,14 +442,18 @@ def _understanding_prompt(repo_dir: Path,
 
 
 def _list_open_prs(repo: str) -> list[dict]:
-    raw = run_command([
-        "gh", "pr", "list", "--repo", repo, "--state", "open",
-        "--json", "number,title,body", "--limit", str(CONTEXT_LIMIT),
-    ])
-    data = json.loads(raw)
-    if not isinstance(data, list):
-        raise SuggestError("gh pr list returned a non-array payload")
-    return data
+    """The repository's open PRs, forks included — they are context here.
+
+    The read is the github module's one PR listing (Issue #2394); unlike
+    the branch/orphan queries, `orbi suggest` does NOT drop a fork PR —
+    an outside contribution is exactly the context a suggestion needs.
+    """
+    try:
+        return list_pull_requests(
+            repo, state="open", json_fields="number,title,body",
+            limit=CONTEXT_LIMIT)
+    except ValueError as exc:
+        raise SuggestError(str(exc)) from exc
 
 
 def _gather_context(repo: str) -> dict:
@@ -795,14 +801,9 @@ def _build_document(config: RunnerConfig, repo: str, run_id: str,
 
 def _open_milestone_arg(repo: str, milestone: str | None) -> str | None:
     """Return the Milestone title only when it is one of the open ones."""
-    if milestone is None:
+    if milestone is None or milestone_by_title(repo, milestone) is None:
         return None
-    titles = {
-        entry.get("title")
-        for entry in list_milestones(repo)
-        if entry.get("state") == "open"
-    }
-    return milestone if milestone in titles else None
+    return milestone
 
 
 def _log_failure(repo: str, exc) -> None:

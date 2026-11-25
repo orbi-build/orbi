@@ -23,10 +23,12 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 from urllib.parse import quote
 
-from orbi import gitops
+from orbi import gh_response, gitops
 from orbi.journal import GIT_NETWORK_TIMEOUT_SECONDS, event, run_command
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     # Annotation-only: `config` reaches `notify` through `release` and
     # `github`, so a runtime import here would close a cycle once `notify`
     # imports this module (the `read_merged_pull_requests` scan, #1674).
@@ -77,16 +79,15 @@ def delete_remote_branch(source_repo: str, branch: str) -> None:
 def _reference_missing(exc: subprocess.CalledProcessError) -> bool:
     """Whether a failed DELETE means the ref is already gone (404/422).
 
-    The repository's own "Automatically delete head branches" can remove
-    the head before this call; GitHub answers 404 / 422 ("Reference does
-    not exist") in that case, which is the desired end state, not a
-    failure.
+    GitHub's own "Automatically delete head branches" can remove the head
+    before this call, and GitHub then answers 404 or 422 ("Reference does
+    not exist") — the desired end state, not a failure. The 404 half is the
+    shared rule (Issue #2394); the 422 half its documented second answer.
     """
     text = " ".join(str(part or "") for part in (exc.stderr, exc.stdout))
-    return re.search(
-        r"reference does not exist|(?:http|status) ?(?:404|422)|not found",
-        text, re.IGNORECASE,
-    ) is not None
+    return (gh_response.not_found(exc) or gh_response.status_of(exc) == 422
+            or re.search(r"reference does not exist|(?:http|status) ?422",
+                         text, re.IGNORECASE) is not None)
 
 
 def delete_merged_delivery_branch(
@@ -176,7 +177,10 @@ def read_merged_pull_requests(source_repo: str) -> list[dict]:
     return [node for node in nodes if isinstance(node, dict)]
 
 
-def reclaim_merged_delivery_branches(config: config_domain.RunnerConfig) -> None:
+def reclaim_merged_delivery_branches(
+    config: config_domain.RunnerConfig, *,
+    list_prs: Callable[..., list[dict]],
+) -> None:
     """Delete this repo's remote delivery branches whose PR has MERGED.
 
     A merged delivery leaves its `orbi/<slug>-issue-<n>` branch on the
@@ -194,7 +198,9 @@ def reclaim_merged_delivery_branches(config: config_domain.RunnerConfig) -> None
     pass would delete the live branch and GitHub would close its PR. A
     branch whose only PR is OPEN, CLOSED-unmerged or absent is never in
     the merged map and is never touched. A read failure deletes nothing;
-    one delete failure is a warning and the pass continues.
+    one delete failure is a warning and the pass continues. `list_prs` is
+    `github.list_pull_requests`, handed in by `runner`: the one `gh pr
+    list` query lives in the github module (Issue #2394).
     """
     repo_dir = Path(config.repo_dir)
     source_repo = config.source_repos[0]
@@ -210,16 +216,10 @@ def reclaim_merged_delivery_branches(config: config_domain.RunnerConfig) -> None
         }
         if not heads:
             return
-        merged_raw = run_command(
-            [
-                "gh", "pr", "list", "--repo", source_repo,
-                "--state", "merged",
-                "--json", "number,headRefName,headRefOid",
-                "--limit", "1000",
-            ],
-            timeout=GIT_NETWORK_TIMEOUT_SECONDS,
-        )
-        merged = _merged_pr_heads(json.loads(merged_raw))
+        merged = _merged_pr_heads(list_prs(
+            source_repo, state="merged", limit=1000,
+            json_fields="number,headRefName,headRefOid",
+        ))
     except Exception as exc:
         event(
             "branch_reclaim_failed", level=logging.WARNING,

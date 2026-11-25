@@ -34,7 +34,10 @@ from urllib.parse import quote
 from orbi import config as config_domain
 from orbi import language
 from orbi import delivery_labels
-from orbi.github import list_issues, list_milestones, run_gh_read_command
+from orbi.github import (
+    create_issue, list_issues, list_milestones, milestone_by_title,
+    run_gh_read_command,
+)
 from orbi.journal import run_command
 from orbi.release_git import RELEASE_VERSION_FILE_OPTIONS
 from orbi.repo_config import RepoConfigError, RepoPolicy, read_repo_config
@@ -251,11 +254,12 @@ def _detect_version_file(repo: str, base_branch: str) -> str | None:
 
 
 def _ensure_command_milestone(repo: str, version: str) -> None:
-    milestones = list_milestones(repo, timeout=30)
-    if any(
-        isinstance(item, dict) and item.get("title") == version
-        for item in milestones
-    ):
+    """Create the version's Milestone unless an OPEN one carries its title.
+
+    A CLOSED Milestone of the same title is not "ready" — its release is
+    over (Issue #2394).
+    """
+    if milestone_by_title(repo, version) is not None:
         return
     # Documented route: POST /repos/{owner}/{repo}/milestones ("Create a
     # milestone"); `title` is the only required field and a new milestone is
@@ -298,14 +302,9 @@ def _ensure_command_release_ticket(
     )
     # `--milestone <name>` attaches the ticket to the version's Milestone;
     # without it the release gate would never find its own scope.
-    run_command([
-        "gh", "issue", "create", "--repo", repo,
-        "--title", f"release {version}",
-        "--body", body,
-        "--label", delivery_labels.RELEASE_LABEL,
-        "--label", dispatch_label,
-        "--milestone", version,
-    ], timeout=30)
+    create_issue(repo, title=f"release {version}", body=body,
+                 labels=[delivery_labels.RELEASE_LABEL, dispatch_label],
+                 milestone=version)
 
 
 def _write_policy_active_milestone(
