@@ -58,9 +58,10 @@ def _transient(status: str = "gh: Server Error (HTTP 502)"):
 
 # --- 1. one implementation: the verbs live in the github module only ---------
 
-def test_the_issue_and_pr_verbs_live_only_in_the_github_module():
-    offenders = {}
-    for path in sorted(SRC.glob("*.py")):
+def _verb_offenders(src_dir: Path) -> dict[str, list[str]]:
+    """Every module in `src_dir` that still assembles one of the verbs."""
+    offenders: dict[str, list[str]] = {}
+    for path in sorted(src_dir.glob("*.py")):
         if path.name == "github.py":
             continue
         source = path.read_text(encoding="utf-8")
@@ -69,10 +70,25 @@ def test_the_issue_and_pr_verbs_live_only_in_the_github_module():
         ]
         if found:
             offenders[path.name] = found
-    assert offenders == {}, (
+    return offenders
+
+
+def test_the_issue_and_pr_verbs_live_only_in_the_github_module():
+    assert _verb_offenders(SRC) == {}, (
         "these modules assemble a gh Issue/PR command instead of calling "
-        f"orbi.github: {offenders}"
+        f"orbi.github: {_verb_offenders(SRC)}"
     )
+
+
+def test_the_verb_scan_catches_a_second_implementation(tmp_path):
+    """The positive control: the guard above is not vacuous."""
+    (tmp_path / "github.py").write_text(
+        '"gh", "issue", "create"\n', encoding="utf-8",
+    )
+    (tmp_path / "rogue.py").write_text(
+        '"gh", "pr", "list"\n', encoding="utf-8",
+    )
+    assert _verb_offenders(tmp_path) == {"rogue.py": [GH_VERB_PATTERNS[2]]}
 
 
 # --- 2. every closer shares the ONE retried close ----------------------------
@@ -135,10 +151,8 @@ def test_the_stale_notice_close_retries_under_the_one_timeout(monkeypatch):
 
 # --- 3. PR listing: one query, and a fork is never Orbi's -------------------
 
-def _pr_list_fake(prs, calls=None):
+def _pr_list_fake(prs):
     def fake_run(command, **kwargs):
-        if calls is not None:
-            calls.append(list(command))
         return json.dumps(prs)
     return fake_run
 
@@ -200,23 +214,18 @@ def test_suggest_keeps_a_fork_pr_among_the_repositorys_open_prs(monkeypatch):
 # --- 4. a CLOSED Milestone is not a ready target ----------------------------
 
 def _milestone_fake(closed_only: bool = True, calls: list | None = None):
-    """GitHub's own state filter: the OPEN list never carries a closed
-    Milestone, the ALL list carries everything."""
+    """The open-Milestone list read, filtered the way GitHub filters it.
+
+    `closed_only` seeds the same title in state "closed" — which an OPEN
+    list never carries, so no caller may see it.
+    """
     def fake_run(command, **kwargs):
         if calls is not None:
             calls.append(list(command))
-        match = MILESTONES_PATH.search(command[2])
-        if match is None:
-            return "{}"
-        state = match.group(1)
-        milestones = [{"title": "v1.2.3", "state": "closed", "number": 1}]
-        if not closed_only:
-            milestones = [{"title": "v1.2.3", "state": "open", "number": 1}]
-        if state == "open":
-            milestones = [
-                m for m in milestones if m["state"] == "open"
-            ]
-        return json.dumps([milestones])
+        assert MILESTONES_PATH.search(command[2]).group(1) == "open", command
+        return json.dumps([[] if closed_only else [
+            {"title": "v1.2.3", "state": "open", "number": 1},
+        ]])
     return fake_run
 
 
@@ -260,11 +269,6 @@ def test_the_milestone_command_creates_over_a_closed_milestone(monkeypatch):
 
 def test_the_milestone_command_reuses_an_open_milestone(monkeypatch):
     created: list[list[str]] = []
-
-    def fake_run(command, **kwargs):
-        created.append(list(command))
-        return "{}"
-
     monkeypatch.setattr(
         seam, "run_command", _milestone_fake(closed_only=False, calls=created),
     )

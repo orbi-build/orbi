@@ -1,13 +1,13 @@
 """Merge-gate policy: the blocker lines that rule a merge (Issue #1361).
 
-The pure half of the merge-gate preflight. `orbi.github` reads the
-target branch, its classic protection and the branch rules through the
-`gh` seam, and owns how a failed read is reported; this module turns
-the payloads it read into the report the user sees — one line per
-blocker, each naming the merge gate's own repair, or the single PASS
-line. No I/O, no subprocess, no environment: one deterministic
-function over already-read data (Article 3.3's pure-module model,
-`delivery_labels.py` being the original).
+The pure half of the merge-gate preflight. `orbi.merge_gate_reads`
+reads the target branch, its classic protection and the branch rules
+through the `gh` seam `orbi.github` hands in, and owns how a failed read
+is reported; this module turns those payloads into the report the user
+sees — one line per blocker naming the merge gate's own repair, or the
+single PASS line. No I/O, no subprocess, no environment: one
+deterministic function over already-read data (Article 3.3's pure-module
+model, `delivery_labels.py` being the original).
 """
 from __future__ import annotations
 
