@@ -20,6 +20,7 @@ import json
 import logging
 import os
 import subprocess
+import urllib.error
 from pathlib import Path
 
 import pytest
@@ -49,6 +50,7 @@ from orbi.delivery_labels import (
 from orbi.progress import format_status_comment
 from seam import resume_deps, seam
 
+from tests.fakes import draft as draft_fakes
 from tests.fakes.github import FakeGh
 
 
@@ -1167,24 +1169,77 @@ def test_the_fake_closes_a_pull_request_once(fake_gh):
 # The attachment surfaces (Issue #2364)
 # --------------------------------------------------------------------------
 
+MARKDOWN = ["gh", "api", "--method", "POST", "/markdown"]
+NATIVE_ASSET = "https://github.com/user-attachments/assets/abc-123"
+
+
 def test_the_fake_refuses_a_markdown_request_it_does_not_model(fake_gh):
-    """Only the `-f text=... -f context=...` shape renders (Issue #2364)."""
-    base = ["gh", "api", "--method", "POST", "/markdown"]
+    """Only `text` (with an image), `mode` and `context` render."""
     assert_fails_with(
-        lambda: fake_gh([*base, "bare-token"]),
+        lambda: fake_gh([*MARKDOWN, "bare-token"]),
         "unsupported command",
     )
     assert_fails_with(
-        lambda: fake_gh([*base, "-f", "text=![x](./1.png)"]),
+        lambda: fake_gh([*MARKDOWN, "-f", "text=no image here"]),
         "unsupported command",
     )
     assert_fails_with(
         lambda: fake_gh([
-            *base, "-f", "text=no image here", "-f",
-            "context=owner/repo",
+            *MARKDOWN, "-f", f"text=![x]({NATIVE_ASSET})", "-f",
+            "flavour=x",
         ]),
         "unsupported command",
     )
+
+
+def test_the_fake_signs_only_a_gfm_render_with_context(fake_gh):
+    """GitHub's documented render (Issue #2387).
+
+    `mode` defaults to `markdown`, which ignores `context` and leaves the
+    bare native address: that address answers 404 to a download with no
+    person's token, which is the stop Issue #2387 repaired. Only
+    `gfm` + `context` returns the signed private-user-images address.
+    """
+    text = f"text=![x]({NATIVE_ASSET})"
+    bare = fake_gh([*MARKDOWN, "-f", text, "-f", "context=owner/repo"])
+    assert f'src="{NATIVE_ASSET}"' in bare
+    plain = fake_gh([
+        *MARKDOWN, "-f", text, "-f", "context=owner/repo", "-f",
+        "mode=markdown",
+    ])
+    assert f'src="{NATIVE_ASSET}"' in plain
+    gfm = fake_gh([
+        *MARKDOWN, "-f", text, "-f", "mode=gfm", "-f", "context=owner/repo",
+    ])
+    assert "https://private-user-images.githubusercontent.com/" in gfm
+    assert "jwt=" in gfm
+    assert fake_gh.markdown_calls == [NATIVE_ASSET, NATIVE_ASSET,
+                                      NATIVE_ASSET]
+    # A `gfm` render DOES read `context`, so a wrong repository fails.
+    assert_fails_with(
+        lambda: fake_gh([
+            *MARKDOWN, "-f", text, "-f", "mode=gfm", "-f",
+            "context=other/repo",
+        ]),
+        "repository mismatch",
+    )
+
+
+def test_the_downloads_fake_404s_the_bare_native_address(monkeypatch):
+    """The downloader models the measured private-asset answer (Issue #2387).
+
+    A native image downloads only through GitHub's rendered
+    private-user-images address, whose query IS the credential; the bare
+    github.com address answers 404 to a download carrying no person's
+    token. Without this, a fake that forgets `mode=gfm` still passes.
+    """
+    downloads = draft_fakes.install_downloads(monkeypatch)
+    bare = f"{draft_fakes.FakeDownloads.BARE_NATIVE_PREFIX}abc-123"
+    signed = "https://private-user-images.githubusercontent.com/1/1.png?jwt=s"
+    with pytest.raises(urllib.error.HTTPError) as raised:
+        downloads.urlopen(bare)
+    assert raised.value.code == 404
+    assert downloads.urlopen(signed).read() == draft_fakes.PNG_BYTES
 
 
 def test_the_fake_can_answer_a_comment_read_as_a_failure(fake_gh):

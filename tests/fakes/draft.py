@@ -9,6 +9,7 @@ from __future__ import annotations
 import contextlib
 import json
 import subprocess
+import urllib.error
 import urllib.request
 from pathlib import Path
 from types import SimpleNamespace
@@ -413,6 +414,12 @@ class FakeResponse:
 class FakeDownloads:
     """The network boundary of an attached-image download (Issue #2364)."""
 
+    # A native attachment's BARE address answers 404 to a download carrying
+    # no person's token; only GitHub's rendered private-user-images address
+    # carries one (measured 2026-11-25, Issue #2387). A test that wants a
+    # public native asset answered puts the address in `answers`.
+    BARE_NATIVE_PREFIX = "https://github.com/user-attachments/assets/"
+
     def __init__(self) -> None:
         self.requests: list[SimpleNamespace] = []
         self.answers: dict[str, bytes] = {}
@@ -430,7 +437,11 @@ class FakeDownloads:
         ))
         if address in self.failures:
             raise self.failures[address]
-        return FakeResponse(self.answers.get(address, PNG_BYTES))
+        if address in self.answers:
+            return FakeResponse(self.answers[address])
+        if address.startswith(self.BARE_NATIVE_PREFIX):
+            raise urllib.error.HTTPError(address, 404, "Not Found", None, None)
+        return FakeResponse(PNG_BYTES)
 
     def urls(self) -> list[str]:
         """Every URL asked for, in order."""
