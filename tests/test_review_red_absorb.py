@@ -90,7 +90,9 @@ class FakeGh:
 
     `rollup` is mutated by a test between ticks (the same list object the
     fake serves), `mergeable` models GitHub's mergeability, and every
-    `gh pr merge` lands the given head on origin/main for real.
+    `gh pr merge` lands the given head on origin/main for real. Dispatch is
+    by verb through a table, so an unexpected command is a KeyError instead
+    of an untested fallback branch.
     """
 
     def __init__(self, clone: Path, *, rollup: list, mergeable="MERGEABLE"):
@@ -99,8 +101,8 @@ class FakeGh:
         self.mergeable = mergeable
         self.pr_state = "OPEN"
         self.merge_commit = None
-        # How many upcoming `gh pr view` reads answer a non-object payload
-        # (a broken GitHub answer, the Issue #2423 readability rule).
+        # Set to N to answer the next N PR reads with a broken payload (the
+        # "an unreadable read authorizes nothing" rule of Issue #2423).
         self.bad_pr_view = 0
         self.issue_comments = []
         self.pr_comments = []
@@ -114,7 +116,9 @@ class FakeGh:
         if not starts_with(command, ["gh"]):
             # Every non-GitHub command in these scenes is real git.
             return _REAL_COMMAND(command, **kwargs)
-        return self._gh(command, **kwargs)
+        return {
+            "pr": self._pr, "issue": self._issue, "api": self._api,
+        }[command[1]](command, **kwargs)
 
     def run_git_network_command(self, command, **kwargs):
         runner = kwargs.pop("command_runner", None) or _REAL_COMMAND
@@ -122,115 +126,96 @@ class FakeGh:
             self.pushes.append(list(command))
         return runner(command, **kwargs)
 
-    # --- gh ---------------------------------------------------------------
-
-    def _gh(self, command, **kwargs):
-        if command[1] == "auth":
-            return (
-                "github.com\n"
-                "  Logged in to github.com account orbi-bot (keyring)\n"
-                "  - Active account: true\n"
-            )
-        if command[1] == "pr":
-            return self._pr(command, **kwargs)
-        if command[1] == "issue":
-            return self._issue(command, **kwargs)
-        if command[1] == "api":
-            return self._api(command, **kwargs)
-        raise AssertionError(f"unexpected gh command: {command}")
-
     def _head(self, cwd=None) -> str:
         return git(self.clone if cwd is None else cwd, "rev-parse", "HEAD")
 
-    def _pr(self, command, *, cwd=None, **_kwargs):
-        if command[2] == "list":
-            return json.dumps([{
-                "number": 4, "url": PR_URL,
-                "baseRefName": "main",
-                "baseRefOid": git(self.clone, "rev-parse", "origin/main"),
-                "headRefName": BRANCH,
-                "headRefOid": self._head(cwd),
-                "headRepository": {"name": "repo"},
-                "headRepositoryOwner": {"login": "owner"},
-                "isCrossRepository": False,
-                "body": f"<!-- orbi:run={RUN_ID} -->\n\nFixes #4",
-            }])
-        if command[2] == "view":
-            fields = command[command.index("--json") + 1]
-            if self.bad_pr_view:
-                self.bad_pr_view -= 1
-                return "[]"
-            if "mergeCommit" in fields:
-                return json.dumps({
-                    "state": self.pr_state,
-                    "mergedAt": ("2026-11-25T00:00:00Z"
-                                 if self.merge_commit else None),
-                    "mergeCommit": ({"oid": self.merge_commit}
-                                    if self.merge_commit else None),
-                })
-            if "statusCheckRollup" in fields:
-                return json.dumps({
-                    "state": self.pr_state,
-                    "mergeable": self.mergeable,
-                    "headRefOid": self._head(cwd),
-                    "statusCheckRollup": list(self.rollup),
-                })
-            return json.dumps({"state": self.pr_state})
-        if command[2] == "merge":
-            head = command[command.index("--match-head-commit") + 1]
-            git(self.clone, "checkout", "main")
-            git(self.clone, "merge", "--no-ff", "-m", "Merge PR (fake)", head)
-            git(self.clone, "push", "origin", "main")
-            git(self.clone, "checkout", "-")
-            self.pr_state = "MERGED"
-            self.merge_commit = git(self.clone, "rev-parse", "origin/main")
-            return ""
-        if command[2] == "comment":
-            self.pr_comments.append(command[-1])
-            return ""
-        raise AssertionError(f"unexpected gh pr command: {command}")
+    # --- gh ---------------------------------------------------------------
 
-    def _issue(self, command, **_kwargs):
-        if command[2] == "view":
-            fields = command[command.index("--json") + 1]
-            if fields == "labels":
-                return json.dumps({"labels": [{"name": "ai-pr-opened"}]})
-            if fields == "state":
-                return json.dumps({"state": "OPEN"})
-            if fields == "title":
-                return json.dumps({"title": "Review task"})
-            return json.dumps({"comments": []})
-        if command[2] == "comment":
-            self.issue_comments.append(command[-1])
-            return ""
-        if command[2] == "edit":
-            self.label_edits.append(list(command))
-            return ""
-        raise AssertionError(f"unexpected gh issue command: {command}")
+    def _pr(self, command, **kwargs):
+        return {
+            "list": self._pr_list, "view": self._pr_view,
+            "merge": self._pr_merge, "comment": self._pr_comment,
+        }[command[2]](command, **kwargs)
+
+    def _pr_list(self, _command, *, cwd=None, **_kwargs):
+        return json.dumps([{
+            "number": 4, "url": PR_URL,
+            "baseRefName": "main",
+            "baseRefOid": git(self.clone, "rev-parse", "origin/main"),
+            "headRefName": BRANCH,
+            "headRefOid": self._head(cwd),
+            "headRepository": {"name": "repo"},
+            "headRepositoryOwner": {"login": "owner"},
+            "isCrossRepository": False,
+            "body": f"<!-- orbi:run={RUN_ID} -->\n\nFixes #4",
+        }])
+
+    def _pr_view(self, _command, *, cwd=None, **_kwargs):
+        if self.bad_pr_view:
+            self.bad_pr_view -= 1
+            return "[]"
+        return json.dumps({
+            "state": self.pr_state,
+            "mergeable": self.mergeable,
+            "headRefOid": self._head(cwd),
+            "statusCheckRollup": list(self.rollup),
+            "mergedAt": self.merge_commit and "2026-11-25T00:00:00Z",
+            "mergeCommit": self.merge_commit and {"oid": self.merge_commit},
+        })
+
+    def _pr_merge(self, command, **_kwargs):
+        head = command[command.index("--match-head-commit") + 1]
+        git(self.clone, "checkout", "main")
+        git(self.clone, "merge", "--no-ff", "-m", "Merge PR (fake)", head)
+        git(self.clone, "push", "origin", "main")
+        git(self.clone, "checkout", "-")
+        self.pr_state = "MERGED"
+        self.merge_commit = git(self.clone, "rev-parse", "origin/main")
+        return ""
+
+    def _pr_comment(self, command, **_kwargs):
+        self.pr_comments.append(command[-1])
+        return ""
+
+    def _issue(self, command, **kwargs):
+        return {
+            "view": self._issue_view, "comment": self._issue_comment,
+            "edit": self._issue_edit,
+        }[command[2]](command, **kwargs)
+
+    def _issue_view(self, _command, **_kwargs):
+        # ONE superset answer: the round reads labels, the merged note and
+        # the answer history from the same fake, and an empty comment
+        # history keeps the round count at zero.
+        return json.dumps({
+            "state": "OPEN",
+            "title": "Review task",
+            "labels": [{"name": "ai-pr-opened"}],
+            "comments": [],
+        })
+
+    def _issue_comment(self, command, **_kwargs):
+        self.issue_comments.append(command[-1])
+        return ""
+
+    def _issue_edit(self, command, **_kwargs):
+        self.label_edits.append(list(command))
+        return ""
 
     def _api(self, command, **_kwargs):
-        path = command[2]
-        if path == f"repos/{REPO}":
-            return json.dumps({"allow_merge_commit": True})
-        if "/collaborators/" in path:
-            return json.dumps({"permission": "admin"})
-        if "check-runs" in path:
+        if "check-runs" in command[2]:
             return json.dumps([{"total_count": 0, "check_runs": []}])
-        if "--method" in command:
-            method = command[command.index("--method") + 1]
-            if method == "DELETE":
-                return ""
-            if method == "PUT":
-                return json.dumps([{"name": "ai-pr-opened"}])
-            body = command[command.index("--field") + 1][len("body="):]
-            if method == "POST":
-                self.progress.append(body)
-                return json.dumps({"id": 77, "body": body})
-            self.progress.append(body)
-            return ""
-        return json.dumps([])
-
-
+        if command[2] == f"repos/{REPO}":
+            return json.dumps({"allow_merge_commit": True})
+        if "--method" not in command:
+            # A read (one field list) or a `gh api -X DELETE`.
+            return json.dumps([])
+        method = command[command.index("--method") + 1]
+        body = command[command.index("--field") + 1][len("body="):]
+        self.progress.append(body)
+        if method == "POST":
+            return json.dumps({"id": 77, "body": body})
+        return ""
 _REAL_COMMAND = seam.run_command
 
 
