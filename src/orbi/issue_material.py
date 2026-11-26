@@ -45,6 +45,13 @@ from orbi.github_feedback import normalize_pr_feedback
 from orbi.journal import LOGGER
 
 
+# `orbi draft` runs the pre-work check on a drafted Issue with THIS
+# placeholder number, because the Issue is not created yet
+# (`draft.check_draft`). GitHub knows no Issue 0, so nothing about such an
+# Issue can be read there (Issue #2429).
+NOT_CREATED = 0
+
+
 def text(issue: dict) -> str:
     """The ONE text renderer of an Issue: its title, then its body.
 
@@ -108,6 +115,11 @@ def material(
 
     A failed comment read stays a bypass (`issue_images.comments`), while an
     unreadable image raises `issue_images.Unreadable` before the session.
+
+    An Issue that does not exist yet (`NOT_CREATED`, Issue #2429) has no
+    comments to read: the draft-time check judges a drafted Issue before
+    creation, and asking GitHub for Issue 0 always fails. Its material is
+    what the draft itself carries — the title, the body and its images.
     """
     number = int(issue["number"])
     title = str(issue.get("title") or "")
@@ -116,7 +128,7 @@ def material(
     fetched = (
         list(comments) if comments is not None
         else issue_images.comments(number, repo=repo)
-        if with_comments or viewable else []
+        if number != NOT_CREATED and (with_comments or viewable) else []
     )
     limit = config.issue_comments_limit
     issue_kept = _limited(fetched, limit, repo=repo)

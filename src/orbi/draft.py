@@ -36,8 +36,8 @@ from contextlib import contextmanager
 from pathlib import Path
 
 from orbi import (
-    attachments, clarify, draft_marker, failure, gitops, journal,
-    model_catalog, provider_balance, split_command,
+    attachments, clarify, draft_marker, failure, gitops, issue_material,
+    journal, model_catalog, provider_balance, split_command,
 )
 from orbi.acceptance_section import appended_body, write_body
 from orbi.claim import _repo_scan_keys
@@ -486,15 +486,19 @@ def check_draft(
     """Run every drafted Issue through the check the claim runs.
 
     `clarify.judge_issue_body` is the SAME function, not a copy, and the
-    Issue number is a placeholder (0) because the Issue does not exist yet
-    — the judgment only reads the title and the body. An unavailable
-    judgment (`None`, a model error) fails OPEN exactly like the gate, so
-    a broken model call never turns a good draft into a failed one.
+    Issue number is the shared placeholder (`issue_material.NOT_CREATED`)
+    because the Issue does not exist yet — the judgment only reads the
+    title, the body and the images the draft carries, and the material
+    never asks GitHub for the comments of a not-yet-created Issue
+    (Issue #2429). An unavailable judgment (`None`, a model error) fails
+    OPEN exactly like the gate, so a broken model call never turns a good
+    draft into a failed one.
     """
     failed: list[str] = []
     for issue in issues:
         verdict = clarify.judge_issue_body(
-            {"number": 0, "title": issue.title, "body": issue.body},
+            {"number": issue_material.NOT_CREATED,
+             "title": issue.title, "body": issue.body},
             config, repo, run_id,
         )
         if verdict is None or verdict.passed:
