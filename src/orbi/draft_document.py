@@ -27,7 +27,7 @@ import json
 from dataclasses import dataclass
 from typing import Sequence
 
-from orbi import attachments
+from orbi import attachments, delivery_labels
 from orbi.question import (
     RECOMMENDED_MARK,
     Option,
@@ -55,6 +55,16 @@ TAKEN_INSTRUCTION = (
 )
 
 
+def matched_labels() -> tuple[str, ...]:
+    """The only label names a draft may match on its own (Issue #2445).
+
+    Read from the table, never written here: the claim order reads these two
+    (`p0` before `bug` before plain), and a draft that matched anything else
+    would be inventing a label the repository may not even have.
+    """
+    return (delivery_labels.BUG_LABEL, delivery_labels.P0_LABEL)
+
+
 class DraftError(RuntimeError):
     """One failed step of `orbi draft`, with the machine triple a caller
     reads: a stable `code`, the `step` that failed and the concrete
@@ -69,17 +79,20 @@ class DraftError(RuntimeError):
 
 @dataclass(frozen=True)
 class DraftIssue:
-    """One drafted Issue: its title, its body, its place in the order and
-    the attached files it uses (Issue #2364).
+    """One drafted Issue: its title, its body, its place in the order, the
+    attached files it uses and the labels it matched (Issues #2364, #2445).
 
     'attachments' is the 1-based numbers of the draft's files this Issue
     uses; None means all of them, and an empty tuple means none.
+    'labels' is the match the drafter made from the request — `bug`, `p0`
+    or neither (`matched_labels`) — and an empty tuple means no match.
     """
 
     title: str
     body: str
     after: int | None = None
     attachments: tuple[int, ...] | None = None
+    labels: tuple[str, ...] = ()
 
     def as_json(self) -> dict:
         data: dict = {"title": self.title, "body": self.body}
@@ -87,6 +100,8 @@ class DraftIssue:
             data["after"] = self.after
         if self.attachments is not None:
             data["attachments"] = list(self.attachments)
+        if self.labels:
+            data["labels"] = list(self.labels)
         return data
 
 
@@ -261,9 +276,60 @@ def parse_issues(value: object) -> tuple[DraftIssue, ...]:
             DraftIssue(
                 title=title.strip(), body=body.strip(), after=after,
                 attachments=attachments,
+                labels=_matched_labels(entry.get("labels"), position),
             )
         )
     return tuple(issues)
+
+
+def _matched_labels(value: object, position: int) -> tuple[str, ...]:
+    """One Issue's 'labels': only the names a draft may match (Issue #2445).
+
+    The set is closed on purpose: the model classifies the request, it never
+    chooses a label. A name outside it is refused with the reason the draft
+    tools hand back to the session, so the model corrects it in the same
+    session instead of an invented label reaching GitHub.
+    """
+    if value is None:
+        return ()
+    if not isinstance(value, list) or any(
+        not isinstance(name, str) or not name.strip() for name in value
+    ):
+        raise DraftError(
+            "invalid_draft", "read the draft",
+            f"Issue {position}: labels must be a list of label names",
+        )
+    allowed = matched_labels()
+    for name in value:
+        if name.strip() not in allowed:
+            raise DraftError(
+                "invalid_draft", "read the draft",
+                f"Issue {position}: a draft may only match "
+                f"{' and '.join(allowed)}, not {name.strip()!r}",
+            )
+    return tuple(dict.fromkeys(name.strip() for name in value))
+
+
+def keep_matched_labels(
+    revised: tuple[DraftIssue, ...], drafted: tuple[DraftIssue, ...],
+) -> tuple[DraftIssue, ...]:
+    """The revised Issues at the drafter's positions, keeping its matches.
+
+    A rewrite answers a body the pre-work check bounced; the label match is
+    the drafter's classification of the request, not wording, so a rewrite
+    that names no label (or another Issue count) keeps what the drafter
+    matched (Issue #2445).
+    """
+    if len(revised) != len(drafted):
+        return revised
+    return tuple(
+        DraftIssue(
+            title=entry.title, body=entry.body, after=entry.after,
+            attachments=entry.attachments,
+            labels=entry.labels or original.labels,
+        )
+        for entry, original in zip(revised, drafted)
+    )
 
 
 def _attachment_numbers(

@@ -10,7 +10,8 @@ make it the next turn with no repository tools and no previous messages.
 Input:
 
 1. the person's request, verbatim;
-2. the complete draft.
+2. the complete draft, each Issue with the labels it matched (`bug`,
+   `p0`, or none).
 
 Return the complete revised draft, never a diff or a list of comments.
 
@@ -62,5 +63,11 @@ Apply these rules in order:
    The English section names (`Not included (suggestions)`, `Assumptions`
    and the rest) name a section; they are never the heading text to copy into
    a body written in another language.
+
+8. **The matched labels are the drafter's, and they stay.** An Issue's
+   `labels` classify the request; they are not wording. Return every Issue's
+   `labels` exactly as the input has them, and never add, drop or rename
+   one: this pass removes what the person did not ask for, never a label the
+   request matched.
 
 When the draft already satisfies every rule above, return it unchanged.

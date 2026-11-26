@@ -127,6 +127,23 @@ Q1 — <question>
 
 A person answers them in their own words; the agent drafts from those answers.
 
+## Match the labels from the request
+
+The claim queue reads two labels ahead of everything else: `bug` and `p0`.
+Decide them from the request itself, per Issue, and only with these two
+names:
+
+- `bug` — the request describes behaviour that is supposed to work today
+  and does not: it worked before, or the repository's own rule says it must.
+- `p0` — only when the request says the problem is urgent or blocking: an
+  outage, data loss, every delivery stopped. When the request does not
+  clearly say it is urgent, leave `p0` out: never guess, and never add it
+  because the request sounds serious.
+
+A plain new feature carries neither label. Record the match with each Issue;
+never name a third label, because Orbi's drafting session refuses any name
+outside this pair.
+
 ## Full form
 
 Sections, in this order:
@@ -237,7 +254,7 @@ Create the Issue with the resolved dispatch label:
 
 ```
 gh issue create --title "…" --body-file <path> --label <dispatch-label> \
-  [--milestone <value>]
+  [--label bug] [--label p0] [--milestone <value>]
 ```
 
 Then reply with the Issue URL.

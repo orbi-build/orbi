@@ -81,6 +81,12 @@ const draftIssue = Type.Object(
 					"The 1-based numbers of the attached files this Issue uses (from the 'The person attached' line); omit to use all of them, an empty list to use none",
 			}),
 		),
+		labels: Type.Optional(
+			Type.Array(Type.String({ minLength: 1 }), {
+				description:
+					"The labels this Issue matched from the request — only \"bug\" (behaviour that should work today does not) and \"p0\" (the request says it is urgent or blocking); omit the field when nothing matches, and never write another name",
+			}),
+		),
 	},
 	{ additionalProperties: false },
 );

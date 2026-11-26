@@ -59,6 +59,25 @@ HEADING_LANGUAGE_RULE = (
     "in another language."
 )
 
+# The one thing a draft may classify, and the closed set of names it may
+# classify with (Issue #2445). The set itself lives in the label table
+# (`draft_document.matched_labels`, which the parser enforces); the prompt
+# states it in prose because the model reads sentences. So the model
+# decides WHETHER the request is a defect and whether it is urgent, never
+# which label to invent.
+MATCHED_LABELS_RULE = (
+    "Classify each Issue from the request itself, with labels, and only "
+    "these two: \"bug\" when the request describes behaviour that is supposed "
+    "to work today and does not (it worked before, or the repository's own "
+    "rule says it must), and \"p0\" only when the request says the problem is "
+    "urgent or blocking (an outage, data loss, every delivery stopped). A "
+    "plain new feature carries neither. When the request does not clearly "
+    "say the problem is urgent, leave \"p0\" out: never guess, and never "
+    "add the label because a request sounds serious. Put the matched names "
+    "in that Issue's \"labels\" field, a list of names; omit the field when "
+    "nothing matches. Any other label name is refused."
+)
+
 # The drafting rules are the engine's own (Issues #2041, #2147).
 DRAFTING_RULES = (
     "Rules for every draft:\n"
@@ -115,18 +134,22 @@ DRAFTING_RULES = (
     "and use an empty list when it uses none.\n"
     "- The after field is the 1-based number of an EARLIER Issue in this "
     "same draft that this one waits for; omit it when nothing comes "
-    "first."
+    "first.\n"
+    "- " + MATCHED_LABELS_RULE
 )
 
 FIDELITY_PROTOCOL = (
     "Input: one JSON object {\"request\": <the person's words verbatim>, "
-    "\"issues\": [{\"title\", \"body\", \"after\", \"attachments\"}]}.\n"
+    "\"issues\": [{\"title\", \"body\", \"after\", \"attachments\", "
+    "\"labels\"}]}.\n"
     "Return ONLY a JSON object {\"issues\": [{\"title\", \"body\", "
-    "\"after\", \"attachments\"}]} holding the complete revised draft, "
+    "\"after\", \"attachments\", \"labels\"}]} holding the complete "
+    "revised draft, "
     "never a diff and never a comment. Keep the same Issues the input has, "
-    "and keep each Issue's \"attachments\" numbers unchanged: this pass "
-    "removes what the person did not ask for, it never drops an outcome or "
-    "a file the Issue uses.\n"
+    "and keep each Issue's \"attachments\" numbers and \"labels\" unchanged: "
+    "this pass "
+    "removes what the person did not ask for, it never drops an outcome, "
+    "a file the Issue uses or a label the request matched.\n"
     + HEADING_LANGUAGE_RULE
 )
 

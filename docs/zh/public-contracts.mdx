@@ -570,7 +570,7 @@ Issue 已关闭或已合并，或正在等待已确认的手动动作。该 GitH
 
 ```json
 {"message": "one sentence", "conversation": [{"role": "person", "text": "..."}], "draft": {"issues": []}, "attachments": [{"name": "screen.png", "src": "./screen.png"}]}
-{"reply": "what will change", "questions": [{"question": "What should the other person get?", "header": "Sharing", "options": [{"label": "A read-only link (Recommended)", "description": "Opens the list, cannot change it."}, {"label": "An editable link", "description": "Lets whoever holds it change the list."}]}], "issues": [{"title": "...", "body": "...", "after": 1, "attachments": [1, 2]}], "check": "passed", "warning": "..."}
+{"reply": "what will change", "questions": [{"question": "What should the other person get?", "header": "Sharing", "options": [{"label": "A read-only link (Recommended)", "description": "Opens the list, cannot change it."}, {"label": "An editable link", "description": "Lets whoever holds it change the list."}]}], "issues": [{"title": "...", "body": "...", "after": 1, "attachments": [1, 2], "labels": ["bug", "p0"]}], "check": "passed", "warning": "..."}
 ```
 
 `questions` 一轮最多三个。一个问题形如 `{"question", "header"?, "options"?}`：
@@ -586,6 +586,13 @@ options 的问题同样是合法问题。存在推荐选项时其 `label` 以 `(
 的问题返回为 `{"question": "..."}`。
 
 `after` 是同一草稿中更早 Issue 的 1 起始序号，表示本条要等它，没有则省略。
+`labels` 是起草 session 根据请求做出的匹配，取值是封闭集合：请求描述「本来应该工作、
+现在不工作」的行为时为 `bug`；只有请求自己说问题紧急或阻塞（服务中断、数据丢失、
+全部交付被阻塞）时才为 `p0`。普通新功能两个都不带；没有匹配时该字段缺席；请求没有
+说清紧急程度时永远不是 `p0`。领取顺序先读 `p0`、再读 `bug`、最后才是普通票，
+所以这个匹配决定了领取顺序。任何其它标签名都会被拒绝 —— 答案以引擎自己的理由失败为
+`invalid_draft`，草稿工具把这条理由作为工具错误交回 session，模型在同一轮改正，答案
+文件不会被写入（Issue #2445）。
 只提问的一轮 `issues` 为空；草稿轮至少包含一个 Issue。明确要求不改任何代码
 （"just review it and tell me"、"don't touch the code"）的一轮，`issues` 和
 `questions` 都为空，答案在 `reply` 里：这一轮既不运行保真检查也不运行 pre-work
@@ -597,11 +604,14 @@ options 的问题同样是合法问题。存在推荐选项时其 `label` 以 `(
 创建输入，以及 stdout 上的已创建编号：
 
 ```json
-{"key": "the caller's draft id", "issues": [{"title": "...", "body": "...", "after": 1, "attachments": [1]}], "header": "optional text above every body", "issue": 12, "attachments": [{"name": "screen.png", "src": "./screen.png"}]}
+{"key": "the caller's draft id", "issues": [{"title": "...", "body": "...", "after": 1, "attachments": [1], "labels": ["bug"]}], "header": "optional text above every body", "issue": 12, "attachments": [{"name": "screen.png", "src": "./screen.png"}]}
 {"created": [41, 42, 43]}
 ```
 
-新建 Issue 时不带 `issue`；带 `issue` 表示给已有 Issue 补充细节：草稿只有一个
+新建 Issue 的 `labels` 与打开它的同一条 create 一起写入（`gh issue create
+--label ...`，每个名字一个参数），随后照旧再加派发标签；保真检查、以及
+pre-work 检查不过时的那一次重写，都保留起草时的匹配。新建 Issue 时不带
+`issue`；带 `issue` 表示给已有 Issue 补充细节：草稿只有一个
 Issue 时，把它的正文追加一次，并把 `ai-needs-detail` 换成派发标签；草稿有多个时，
 该 Issue 成为父 Issue（原生子 Issue、`after` 用 `blockedBy`、派发标签最后、
 父 Issue 打 `ai-epic`）。用同样的输入再次 `--create` 不会再创建：每个已创建
