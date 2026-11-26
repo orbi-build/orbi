@@ -16,7 +16,9 @@ own order (absorb a red, behind-only head -> this stop -> review):
    `failure_report._raise_if_preexisting_ci_failure` -> `base_ci_red.detect`,
    the same detection the merge gate gets, on the base commit the head
    actually contains at that moment (never only the `base_oid` frozen when
-   the round opened, so a base that turned red afterwards is still seen).
+   the round opened, so a base that turned red afterwards is still seen),
+   and on the base's CURRENT verdict per check name — the newest run, the
+   one the recovery scan reads before it resumes.
 2. A base whose matching check has not concluded yet is not green: the tick
    neither records the pause nor starts a session on that evidence, it
    defers and looks again on the next tick.
@@ -54,13 +56,14 @@ def stop_before_session(
     """
     if not failed or not base_tip:
         return False
-    failure_report._raise_if_preexisting_ci_failure(
-        source_repo, list(failed), base_tip,
-        base_branch=base_branch, pr_number=pr["number"], reviewed=False,
-    )
-    pending = base_ci_red.pending_checks(
+    red, pending = base_ci_red.current_base_verdict(
         source_repo, list(failed), base_tip,
     )
+    if red:
+        failure_report._raise_if_preexisting_ci_failure(
+            source_repo, red, base_tip,
+            base_branch=base_branch, pr_number=pr["number"], reviewed=False,
+        )
     if not pending:
         return False
     event(

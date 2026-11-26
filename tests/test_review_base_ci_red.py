@@ -635,6 +635,60 @@ def test_a_running_base_check_defers_without_a_record_or_a_session(
     assert len(fix_issues(fake)) == 1
 
 
+def test_a_rerun_base_check_in_progress_defers(
+        clone, tmp_path, monkeypatch, bind_run_id, caplog,
+):
+    """Acceptance 5, the re-run shape: the base's newest run of X is still
+    running while an older run of the same name failed. The matching check
+    has not concluded, so the tick defers — it records nothing, starts no
+    session, and the next tick decides."""
+    bind_run_id(RUN_ID)
+    caplog.set_level("INFO")
+    start_delivery(clone, behind=False)
+    fake = FakeGh(clone, checks=rollup(), base_runs={
+        base_commit(clone): [
+            check_run(status="in_progress", conclusion=None, run_id=92),
+            check_run(),
+        ],
+    })
+
+    outcome, marker = tick(clone, tmp_path, fake, monkeypatch)
+
+    assert outcome is False
+    assert not marker.exists()
+    assert "review_base_checks_pending" in caplog.text
+    assert record_bodies(fake) == []
+    assert fix_issues(fake) == []
+    assert fake.label_history == []
+
+
+def test_a_base_rerun_to_green_never_pauses(
+        clone, tmp_path, monkeypatch, bind_run_id,
+):
+    """Acceptance 5, the recovery shape: the base's X was re-run to GREEN
+    while an older run of the same name failed. The base is not red, so the
+    tick reviews — pausing here would be resumed by the recovery scan (which
+    reads the newest run) and paused again by the next tick, forever."""
+    bind_run_id(RUN_ID)
+    start_delivery(clone, behind=False)
+    fake = FakeGh(clone, checks=rollup(), base_runs={
+        base_commit(clone): [
+            check_run(conclusion="success", run_id=92),
+            check_run(),
+        ],
+    })
+
+    outcome, marker = tick(
+        clone, tmp_path, fake, monkeypatch, session=REVIEW_BLOCKED,
+    )
+
+    assert outcome is None
+    assert marker.exists()
+    assert record_bodies(fake) == []
+    assert fix_issues(fake) == []
+    assert '"reason_code":"human_decision_required"' in fake.comments[-1][1]
+
+
 # --------------------------------------------------------------------------
 # Acceptance 6: a failed base read is reported as the read failure it is
 # --------------------------------------------------------------------------
@@ -786,16 +840,38 @@ def answer_check_runs(monkeypatch, runs, *, commit="c0ffee"):
     return calls
 
 
-def test_pending_checks_reports_only_unconcluded_base_runs(monkeypatch):
-    """A running base run is not green; a name the base never ran is not
-    pending — the base carries no such check, so it cannot explain it."""
+def test_a_rerun_check_is_read_through_its_newest_run(monkeypatch):
+    """The base's current verdict for a name is its NEWEST run: a re-run to
+    green, or one still running, replaces the older failure. Otherwise the
+    tick would pause on a base the recovery scan calls green and be resumed
+    into the same pause, forever."""
+    answer_check_runs(monkeypatch, [
+        check_run(conclusion="success", run_id=92),
+        check_run(),
+    ])
+    verdict = base_ci_red.current_base_verdict(REPO, [CHECK], "c0ffee")
+    assert verdict == ([], [])
+
+    answer_check_runs(monkeypatch, [
+        check_run(status="in_progress", conclusion=None, run_id=92),
+        check_run(),
+    ])
+    assert base_ci_red.current_base_verdict(
+        REPO, [CHECK], "c0ffee",
+    ) == ([], [CHECK])
+
+
+def test_the_verdict_separates_red_from_still_running(monkeypatch):
+    """A concluded red run is red; a running one is not green; a name the
+    base never ran is neither — the base carries no such check, so it
+    cannot explain the PR's failure."""
     answer_check_runs(monkeypatch, [
         check_run(status="in_progress", conclusion=None),
         check_run(OTHER_CHECK, conclusion="success", run_id=92),
     ])
-    assert base_ci_red.pending_checks(
+    assert base_ci_red.current_base_verdict(
         REPO, [CHECK, OTHER_CHECK, "never-ran"], "c0ffee",
-    ) == [CHECK]
+    ) == ([], [CHECK])
 
 
 def test_the_decision_needs_a_failing_check_and_the_base_commit():

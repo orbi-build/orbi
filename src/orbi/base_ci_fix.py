@@ -26,8 +26,8 @@ from orbi import blocked_scan, failure, language
 from orbi.base_ci_red import (
     PASSING_CONCLUSIONS, REMINDER_AFTER_SECONDS,
     STATE_MERGED, STATE_RESUMING, BaseCIRed, FailingCheck, comment_body,
-    edit_state, failing_checks, open_triage_issue, paused_scene, remind,
-    scene_receipt, triage_title,
+    edit_state, failing_checks, newest_runs, open_triage_issue,
+    paused_scene, remind, scene_receipt, triage_title,
 )
 from orbi import delivery_labels
 from orbi.github import (
@@ -91,7 +91,7 @@ def _base_red_checks(repo: str, record: BaseCIRed) -> list[FailingCheck]:
     """
     names = list(record.failing_checks)
     names += [
-        name for name in _newest_runs(commit_check_runs(repo, record.base_sha))
+        name for name in newest_runs(commit_check_runs(repo, record.base_sha))
         if name not in names
     ]
     return failing_checks(repo, names, record.base_sha)
@@ -224,29 +224,13 @@ def _base_head(repo: str, pr_number: int,
     return str(state.get("state") or ""), branch_head_sha(repo, base_branch)
 
 
-def _newest_runs(runs: list[dict]) -> dict[str, dict]:
-    """One current run per check name.
-
-    A RE-RUN of a check adds a second run under the same name, and the
-    check-runs endpoint lists a commit's runs newest first (descending
-    `started_at`/`id`, verified against the live endpoint), so the FIRST
-    occurrence is the current verdict. Reading the last one would keep an
-    old failure alive after the maintainer re-ran the check to green and
-    the delivery would never resume.
-    """
-    by_name: dict[str, dict] = {}
-    for run in runs:
-        by_name.setdefault(str(run.get("name")), run)
-    return by_name
-
-
 def _base_is_green(repo: str, record: BaseCIRed,
                    base_head: str) -> bool:
     """True when every check in the record concluded green on the base.
 
     A pending check is not green: the scan waits, it never guesses.
     """
-    by_name = _newest_runs(commit_check_runs(repo, base_head))
+    by_name = newest_runs(commit_check_runs(repo, base_head))
     for name in record.failing_checks:
         run = by_name.get(name)
         if run is None:
