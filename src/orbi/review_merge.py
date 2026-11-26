@@ -952,7 +952,7 @@ def _run_review_round(
     priority = issue_priority(issue)
     ready_label = delivery_labels.queue_label(config.dispatch_label)
 
-    def block_label_inconsistency(labels: list[str], reason: str) -> None:
+    def block_label_inconsistency(reason: str) -> None:
         event(
             "delivery_label_inconsistent", level=logging.ERROR,
             issue=number, pr=pr_url, reason=reason,
@@ -1000,7 +1000,7 @@ def _run_review_round(
             LOGGER.exception(
                 "issue=%s delivery_label_repair_failed pr=%s", number, pr_url,
             )
-            block_label_inconsistency(labels, str(exc))
+            block_label_inconsistency(str(exc))
             return None
         event(
             "delivery_label_repaired", issue=number, pr=pr_url,
@@ -1010,7 +1010,6 @@ def _run_review_round(
             and not needs_human_intervention(labels)
             and delivery_labels.MERGED_LABEL not in labels):
         block_label_inconsistency(
-            labels,
             "open PR has no resumable delivery label",
         )
         return None

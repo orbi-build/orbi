@@ -656,8 +656,8 @@ def _replace_labels(number: int, *, repo: str, current: list[str],
 
 
 def swap_issue_labels(number: int, *, repo: str,
-                       add: Sequence[str] = (),
-                       remove: Sequence[str] = ()) -> list[str]:
+                      add: Sequence[str] = (),
+                      remove: Sequence[str] = ()) -> list[str]:
     """Add and remove labels in ONE whole-set write (Issue #2426)."""
     return _replace_labels(
         number, repo=repo, current=issue_labels(number, repo=repo),

@@ -76,11 +76,11 @@ from orbi.github import (
     apply_label_patch,
     close_issue,
     comment_issue,
-    edit_issue,
     issue_comments,
     issue_view,
     open_pr_for_branch,
     pr_number,
+    swap_issue_labels,
 )
 from orbi.gitops import is_delivery_branch, task_branch
 from orbi.journal import event, run_command
@@ -579,8 +579,12 @@ def _amend(
         target = delivery_labels.FIX_NEEDED_LABEL if pull is not None else dispatch_label
         run_step(
             "re-queue the ticket",
-            lambda: edit_issue(
-                issue_number, repo=repo, add=target, remove=delivery_labels.BLOCKED_LABEL,
+            # ONE whole-set write (Issue #2426): the unblock cannot apply
+            # its ai-blocked removal and lose its add, which would leave
+            # the Issue with no delivery label at all.
+            lambda: swap_issue_labels(
+                issue_number, repo=repo, add=[target],
+                remove=[delivery_labels.BLOCKED_LABEL],
             ),
         )
         lines.append(language.text(
@@ -593,8 +597,11 @@ def _requeue(number: int, *, repo: str, dispatch_label: str) -> None:
     """Put a blocked triage Issue back in the ready queue."""
     run_step(
         "re-queue the ticket",
-        lambda: edit_issue(
-            number, repo=repo, add=dispatch_label, remove=delivery_labels.BLOCKED_LABEL,
+        # ONE whole-set write (Issue #2426), the same rule as _amend: a
+        # blocked Issue is never left with its removal and no add.
+        lambda: swap_issue_labels(
+            number, repo=repo, add=[dispatch_label],
+            remove=[delivery_labels.BLOCKED_LABEL],
         ),
     )
 
