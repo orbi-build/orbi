@@ -255,6 +255,15 @@ branch、base、head、精确 URL 校验全部保留，#45/#89 的防串 PR 语�
   8 s 后重读整个 PR 状态（`MERGEABLE_UNKNOWN_RETRY_DELAYS`），GitHub 一
   给出结果就在同一 tick 继续——最多约 15 s 槽位时间。rollup 仍 pending 或
   有失败时绝不重读；所有重读仍为 `UNKNOWN` 的 PR 依旧按上面的方式顺延。
+  PR 视图始终没有跟上交付自己 push 的情况是另一种等待（Issue #2440）：merge
+  gate 读到 `UNKNOWN` 且 PR head 不是 `origin` 上该分支的最新提交时，Runner
+  会请 GitHub 自己更新该 pull request 分支（用分支最新提交作为
+  `expected_head_sha` 调用 `PUT /pulls/<n>/update-branch`，并记
+  `pr_head_lagging`、`pr_head_refresh_requested`），GitHub 重新读取分支后交付
+  在刷新后的 head 上继续。尝试次数有界，最多三个 tick
+  （`PR_HEAD_REFRESH_TICKS`）；超过上限即 `ai-blocked`，评论写明原因（GitHub
+  没有刷新该 PR）和修复办法（往分支推一个新提交，或用 PR 的 “Update
+  branch” 按钮），不再无限轮询。
 - base 前进由 task branch 上对最新 `origin/<base>` 的普通 `git merge`
   吸收（冲突手工解决），然后重跑完整测试。不 force push、不自动解决
   冲突、不 push 保护分支。

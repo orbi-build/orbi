@@ -616,6 +616,11 @@ journalctl --user -u orbi@1.service -u orbi@2.service | grep e07383c2
 | `review_recovery_read_failed` | 评审恢复重置所需的标签历史读取失败（报告中仍使用场景里的轮次） |
 | `merge_gate_ci_pending` | 合并门发现 CI pending；合并顺延到下一 tick |
 | `merge_gate_mergeable_unknown` | GitHub 可合并状态仍为 UNKNOWN；合并顺延到下一 tick |
+| `pr_head_lagging` | PR head 落后于交付分支的最新提交；Runner 请求 GitHub 重新读取该分支（Issue #2440） |
+| `pr_head_refresh_requested` | 已请求 GitHub 更新该 pull request 的分支（`PUT /pulls/<n>/update-branch`，Issue #2440） |
+| `pr_head_refresh_failed` | 更新 pull request 分支的请求失败；该次尝试已计入，下一 tick 会在预算内重试（Issue #2440） |
+| `pr_head_refresh_unrecorded` | 过期的 PR head 无法计入 run state，因此不会启动刷新循环，合并与之前一样继续等待（Issue #2440） |
+| `pr_head_refresh_unreadable` | 无法读取远程交付分支的最新提交；合并与之前一样继续等待（Issue #2440） |
 | `merge_gate_behind_base` | 合并门发现 PR 落后于 base |
 | `merge_gate_head_moved` | PR head 在评审之后被移动 |
 | `merge_gate_not_mergeable` | PR 不可合并（冲突或检查失败） |
