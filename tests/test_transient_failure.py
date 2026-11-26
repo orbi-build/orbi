@@ -127,6 +127,39 @@ def test_a_gh_read_that_keeps_failing_transiently_is_recorded_github_transient(
     assert record.retry_safe is True
 
 
+def test_a_gh_write_that_keeps_failing_transiently_is_recorded_github_transient(
+    monkeypatch,
+):
+    """Acceptance 3 for the write path: `run_gh_write_command` retries the
+    same transport failure and, when its attempts run out, hands the
+    classifier the STRUCTURED failure — `github_transient` / `requeue`,
+    never `unclassified / fix_ticket` (the #2427 timeout on a comment or
+    label write is the field case)."""
+    calls = []
+
+    def fake_run(command, **kwargs):
+        calls.append(command)
+        raise subprocess.CalledProcessError(
+            1, command, stderr="dial tcp 140.82.121.6:443: i/o timeout",
+        )
+
+    monkeypatch.setattr(github.time, "sleep", lambda _: None)
+    with pytest.raises(gh_response.GitHubRequestFailed) as caught:
+        github.run_gh_write_command(
+            ["gh", "api", "repos/o/r/issues/9/comments",
+             "--method", "POST", "-f", "body=x"],
+            command_runner=fake_run,
+        )
+
+    assert len(calls) == github.GH_WRITE_MAX_ATTEMPTS
+    record = failure.classify(
+        runner.failure_detail(caught.value), error=caught.value,
+    )
+    assert record.reason_code == "github_transient"
+    assert record.action_code == "requeue"
+    assert record.retry_safe is True
+
+
 @pytest.mark.parametrize("sample", [sample for sample, _ in DEFINITION])
 def test_the_gh_retry_and_the_classification_agree_on_every_wording(sample):
     """Acceptance 4: for each wording in the one definition the `gh` retry
