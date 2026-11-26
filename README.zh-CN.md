@@ -16,7 +16,7 @@ Orbi 是一个开源的**软件暗工厂（software dark factory）**：面向 G
 
 官网 <https://orbi.build> ｜ 文档 <https://docs.orbi.build/> ｜ [Discussions](https://github.com/orbi-build/orbi/discussions)
 
-**想自己部署？** 按下面的「快速开始」来。Cloud 创始会员永久 5 折，结账时输入 `FOUNDING50`（限 6 位）。
+**想自己部署？** 按下面的「快速开始」来。Cloud 创始会员永久 5 折（限 6 位），结账时自动打折，不用填优惠码。
 ## 快速开始
 
 ```bash
