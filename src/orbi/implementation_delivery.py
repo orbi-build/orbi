@@ -377,7 +377,6 @@ def _claim_issue(attempt: _Attempt) -> None:
     number = int(attempt.issue["number"])
     apply_label_patch(
         number, repo=attempt.source_repo, event=EVENT_CLAIM,
-        current_labels=attempt.facts.claim_labels,
         ready_label=attempt.facts.dispatch_label,
     )
     # The successful pickup resets the stale-pickup clock in
@@ -604,12 +603,10 @@ def _closeout_implementation(attempt: _Attempt) -> IssueResult:
     # frozen base, so the head always advanced.
     # Issue #2369: this event's patch is computed from the callee's own
     # fresh label read and written as ONE whole-set replacement, so the
-    # pre-upgrade claim's dispatch residue it must remove is seen there;
-    # the snapshot below is the function's contract for the other events.
+    # pre-upgrade claim's dispatch residue it must remove is seen there.
     apply_label_patch(
         int(attempt.issue["number"]), repo=attempt.source_repo,
         event=EVENT_PR_OPENED,
-        current_labels=facts.claim_labels,
         ready_label=facts.dispatch_label,
     )
     # The label transition has landed and must remain the state
@@ -875,15 +872,6 @@ def _report_terminal_failure(attempt: _Attempt, exc: Exception) -> None:
             f"- priority: {attempt.priority}"
         ),
         classify=False, evidence=True,
-        # The blocked patch must clear the queue label, or the
-        # Issue is claimed again every tick (Issue #1749). Before
-        # the claim write landed (the publisher is created right
-        # after it) the scanned labels are the honest source.
-        current_labels=(
-            {delivery_labels.PR_OPENED_LABEL, facts.dispatch_label} if attempt.pr_opened
-            else {delivery_labels.IN_PROGRESS_LABEL, facts.dispatch_label}
-            if attempt.publisher is not None else set(facts.claim_labels)
-        ),
         review_round=0,
         finish=(
             attempt.worktree is not None
@@ -916,7 +904,6 @@ def report_ticket_only_failure(
                 status_url=config.status_url, title=issue.get("title"),
                 detail=detail, run_info=run_info.text(), run_id=run_id,
             ),
-            current_labels={delivery_labels.IN_PROGRESS_LABEL, ready_label},
             language_code=language.of(config), ready_label=ready_label)
         publish(
             action=lambda: publisher.milestone(language.text(
@@ -950,5 +937,4 @@ def _report_attachment_stop(issue: dict, config: config_domain.RunnerConfig,
         ),
         reason=failure_detail(exc),
         classify=False, evidence=False, finish=False,
-        current_labels={delivery_labels.IN_PROGRESS_LABEL, ready_label},
     )

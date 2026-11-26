@@ -31,8 +31,8 @@ from orbi.base_ci_red import (
 )
 from orbi import delivery_labels
 from orbi.github import (
-    branch_head_sha, comment_issue, commit_check_runs, create_issue, edit_issue,
-    issue_comments, pr_view,
+    branch_head_sha, comment_issue, commit_check_runs, create_issue,
+    issue_comments, pr_view, swap_issue_labels,
 )
 from orbi.journal import LOGGER, event
 from orbi.pi_activity import parse_iso_utc
@@ -331,8 +331,12 @@ def recover(repo: str, *, language_code: str,
             )
             continue
         if _base_is_green(repo, record, base_head):
-            edit_issue(number, repo=repo, add=delivery_labels.FIX_NEEDED_LABEL,
-                       remove=delivery_labels.BLOCKED_LABEL)
+            # ONE whole-set write (Issue #2426): the unblock cannot
+            # apply its removal and lose its add.
+            swap_issue_labels(
+                number, repo=repo, add=[delivery_labels.FIX_NEEDED_LABEL],
+                remove=[delivery_labels.BLOCKED_LABEL],
+            )
             edit_state(repo, number, comment, STATE_RESUMING,
                         language_code=language_code)
             event(

@@ -102,8 +102,7 @@ class FakeGh:
         # flag the answer does not otherwise change (a read scoped with
         # `--repo`, Issue #2234) reads the command line here.
         self.commands: list[list[str]] = []
-        # Label edits that fail server-side, keyed as (add|remove, label)
-        # — the terminal-transition restore tests (Issue #2357).
+        # Label edits that fail server-side, keyed as (add|remove, label).
         self.fail_label_edits: set[tuple[str, str]] = set()
         # The attached images gh refuses to upload, by their body reference
         # ("1.png" for `![x](./1.png)`, Issue #2364): gh still creates the
@@ -120,8 +119,12 @@ class FakeGh:
         self.create_failure: str | None = None
         # A failed `gh issue view --json comments` read (Issue #2364).
         self.comment_read_failure: str | None = None
-        # The whole-set label replacement fails server-side (Issue #2369).
-        self.failing_label_replace = False
+        # The whole-set label replacement fails server-side (Issue #2369):
+        # "before" leaves the labels untouched, "applied" is GitHub's
+        # documented lost-response shape — the request DID land and the
+        # answer never arrived (Issue #2426).
+        self.fail_label_replace_status: int | None = None
+        self.fail_label_replace_after_apply = False
         self._clock = 0
 
     # --- state arrangement (what a test does instead of patching) -------
@@ -283,9 +286,17 @@ class FakeGh:
         """Make one `gh issue edit --add/--remove-label` write fail."""
         self.fail_label_edits.add((verb, label))
 
-    def fail_label_replace(self) -> None:
-        """Make the whole-set `PUT .../labels` replacement fail."""
-        self.failing_label_replace = True
+    def fail_label_replace(self, *, status: int | None = None,
+                           applied: bool = False) -> None:
+        """Make the whole-set `PUT .../labels` replacement fail.
+
+        `status` makes it a GitHub server-side failure (retried and
+        settled by a read); `applied` applies the labels FIRST and still
+        answers with the failure — a lost response over an executed
+        mutation.
+        """
+        self.fail_label_replace_status = status
+        self.fail_label_replace_after_apply = applied
 
     def set_repo_config(self, text: str) -> None:
         """Seed the repository's default `.github/orbi.toml` — the
@@ -953,8 +964,6 @@ class FakeGh:
         changes nothing."""
         self._repo_or_fail(match.group(1))
         issue = self._issue_or_fail(int(match.group(2)))
-        if self.failing_label_replace:
-            self._fail(1, "fake-gh: label replacement failed")
         labels: list[str] = []
         index = 1
         while index < len(args):
@@ -969,8 +978,20 @@ class FakeGh:
                 )
             labels.append(value)
             index += 2
+        if self.fail_label_replace_status is not None                 and not self.fail_label_replace_after_apply:
+            self._fail_replace()
         issue["labels"] = labels
+        if self.fail_label_replace_status is not None:
+            self._fail_replace()
         return json.dumps([{"name": name} for name in labels])
+
+    def _fail_replace(self) -> None:
+        """Answer the label replacement with a GitHub server-side 5xx."""
+        self._fail(
+            1, f"gh: Server Error (HTTP {self.fail_label_replace_status})",
+            status=self.fail_label_replace_status,
+            reason="Bad Gateway",
+        )
 
     def _api_put(self, args: list[str]) -> str:
         """The contents API PUT (create/update a file) and the Issue

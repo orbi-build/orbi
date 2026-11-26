@@ -297,7 +297,7 @@ def test_issue_labels_returns_names_and_fails_fast(monkeypatch):
         ]})
 
     monkeypatch.setattr(seam, "run_command", fake_run)
-    assert runner.issue_labels(39, "owner/repo") == [
+    assert github.issue_labels(39, "owner/repo") == [
         "ai-ready", "ai-fix-needed",
     ]
 
@@ -306,14 +306,14 @@ def test_issue_labels_returns_names_and_fails_fast(monkeypatch):
 
     monkeypatch.setattr(seam, "run_command", bad_run)
     with pytest.raises(ValueError, match="issue labels must be a JSON array"):
-        runner.issue_labels(39, "owner/repo")
+        github.issue_labels(39, "owner/repo")
 
     def bad_run2(command, **kwargs):
         return json.dumps(["ai-ready"])
 
     monkeypatch.setattr(seam, "run_command", bad_run2)
     with pytest.raises(ValueError, match="issue view must be a JSON object"):
-        runner.issue_labels(39, "owner/repo")
+        github.issue_labels(39, "owner/repo")
 
 
 def test_trusted_issue_comments_block_filters_untrusted_and_keeps_order(

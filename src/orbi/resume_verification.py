@@ -45,7 +45,6 @@ from orbi.github import (
     apply_label_patch,
     close_issue,
     comment_issue,
-    issue_labels,
     run_gh_read_command,
 )
 from orbi.gitops import (
@@ -304,7 +303,6 @@ def _record_merged_issue(number: int, source_repo: str, *,
     """
     apply_label_patch(
         number, repo=source_repo, event=EVENT_MERGED,
-        current_labels=issue_labels(number, repo=source_repo),
         ready_label=ready_label,
     )
     run_state.close_issue_after_landed_merge(
@@ -330,7 +328,6 @@ def _requeue_closed_external_takeover(
     ready_label = delivery_labels.queue_label(ready_label)
     apply_label_patch(
         number, repo=source_repo, event=EVENT_REQUEUE,
-        current_labels=issue_labels(number, repo=source_repo),
         ready_label=ready_label,
     )
     body = (

@@ -339,8 +339,8 @@ def _review_round_env(
 ):
     """Shared fake GitHub/git scene for one direct `_run_review_round`
     call. Returns (edits, comments, reviews, publishes) capture lists;
-    `edits` carries the `edit_issue` label patches, `publishes` the
-    `safe_publish` progress calls."""
+    `edits` carries the label set each whole-set replacement wrote
+    (Issue #2426), `publishes` the `safe_publish` progress calls."""
     def fake_run(command, **kwargs):
         if command[-1] == "comments":
             # The trusted scene comment.
@@ -390,10 +390,13 @@ def _review_round_env(
                 }),
                 encoding="utf-8",
             )
+    # Issue #2426: a delivery-label change is ONE whole-set replacement,
+    # so `edits` carries the label set each transition wrote.
     edits: list = []
     comments: list = []
-    monkeypatch.setattr(seam, "edit_issue",
-        lambda *args, **kwargs: edits.append((args, kwargs)),
+    monkeypatch.setattr(
+        seam, "set_issue_labels",
+        lambda number, *, repo, labels: edits.append(list(labels)),
     )
     monkeypatch.setattr(seam, "comment_issue",
         lambda *args, **kwargs: comments.append((args, kwargs)),
@@ -470,8 +473,8 @@ def _blocked_review_body(monkeypatch, tmp_path, code, **env):
         "owner/repo",
     )
     assert outcome is None
-    # Issue #2357: the terminal add is the last label write.
-    assert edits[-1][1]["add"] == "ai-blocked"
+    # Issue #2426: the terminal is ONE whole-set write on ai-blocked alone.
+    assert edits[-1] == ["ai-blocked"]
     return comments[0][1]["body"]
 
 

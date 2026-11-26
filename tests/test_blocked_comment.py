@@ -92,10 +92,9 @@ def test_the_blocked_exit_labels_then_posts_the_body_and_one_help_line(
     calls = capture_blocked_writes(monkeypatch)
     blocked_comment.post_blocked_comment(
         42, repo=REPO, body="Orbi failed: the reason",
-        current_labels={"ai-fix-needed"}, language_code=language_code,
+        language_code=language_code,
     )
     body = posted_body(calls)
-    assert calls[0][2]["current_labels"] == {"ai-fix-needed"}
     assert body == (
         f"{stop_record()}\nOrbi failed: the reason\n\n"
         f"{help_line(language_code)}"
@@ -125,10 +124,9 @@ def test_repo_config_blocked_ends_with_the_help_line(
     calls = capture_blocked_writes(monkeypatch)
     error = ValueError("bad key")
     failure_report.block_repo_config_failure(
-        42, REPO, error, RUN_ID, {"ai-ready"}, language_code=language_code,
+        42, REPO, error, RUN_ID, language_code=language_code,
     )
     body = posted_body(calls)
-    assert calls[0][2]["current_labels"] == {"ai-ready"}
     expected = (
         f"{run_marker(RUN_ID)}\n"
         f"{comment_kind_marker(COMMENT_KIND_FAILURE)}\n"
@@ -152,9 +150,6 @@ def test_resume_blocked_ends_with_the_help_line_exactly_once(
         language_code=language_code,
     )
     body = posted_body(calls)
-    # The claimed Issue still carries the queue label, so the blocked
-    # terminal clears it with the in-flight label (Issue #1775).
-    assert calls[0][2]["current_labels"] == {"ai-in-progress", "ai-ready"}
     expected = (
         f"{run_marker(RUN_ID)}\n"
         f"{comment_kind_marker(COMMENT_KIND_FAILURE)}\n"
@@ -191,11 +186,10 @@ def test_delivery_failure_diagnostic_ends_with_the_help_line(
         source_repo=REPO, run_id=RUN_ID, pr_url=None,
         worktree=tmp_path, branch="orbi/task", role="review",
         classify=True, finish=False, publisher=Publisher(),
-        current_labels=set(), language_code=language_code,
+        language_code=language_code,
     )
     assert outcome == "blocked"
     body = posted_body(calls)
-    assert calls[0][2]["current_labels"] == set()
     assert language.text(
         language_code, "failure.headline_blocked",
         disposition=language.text(language_code, "failure.disposition_decide"),
@@ -317,7 +311,7 @@ def test_every_ai_blocked_stop_writes_the_failure_kind_and_record(
     calls = capture_blocked_writes(monkeypatch)
     blocked_comment.post_blocked_comment(
         42, repo=REPO, body=stop_scene_bodies("en")[scene],
-        current_labels=set(), language_code="en",
+        language_code="en",
     )
     body = posted_body(calls)
     assert body.splitlines()[1] == comment_kind_marker(COMMENT_KIND_FAILURE)

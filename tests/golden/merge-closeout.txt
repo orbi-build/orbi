@@ -18,18 +18,9 @@ Orbi merged PR: u
 </details>
 <<<golden:merged-labels>>>
 [
-  {
-    "repo": "owner/repo",
-    "remove": "ai-pr-opened"
-  },
-  {
-    "repo": "owner/repo",
-    "remove": "ai-ready"
-  },
-  {
-    "repo": "owner/repo",
-    "add": "ai-merged"
-  }
+  [
+    "ai-merged"
+  ]
 ]
 <<<golden:blocked-comment>>>
 <!-- orbi:run=a1b2c3d4 -->

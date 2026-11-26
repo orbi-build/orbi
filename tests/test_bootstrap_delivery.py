@@ -4027,8 +4027,9 @@ def test_delivery_step_defers_when_ci_pending(
         lambda *args, **kwargs: reviews.append((args, kwargs)) or False,
     )
     edits = []
-    monkeypatch.setattr(seam, "edit_issue",
-        lambda *args, **kwargs: edits.append((args, kwargs)),
+    monkeypatch.setattr(
+        seam, "set_issue_labels",
+        lambda number, *, repo, labels: edits.append(list(labels)),
     )
     issue = {"number": 39, "title": "task", "body": ""}
     caplog.set_level("INFO")
@@ -4238,8 +4239,9 @@ def test_delivery_step_marks_blocked_when_review_fails(
     monkeypatch.setattr(seam, "run_command", fake_run)
     edits: list = []
     comments: list = []
-    monkeypatch.setattr(seam, "edit_issue",
-        lambda *args, **kwargs: edits.append((args, kwargs)),
+    monkeypatch.setattr(
+        seam, "set_issue_labels",
+        lambda number, *, repo, labels: edits.append(list(labels)),
     )
     monkeypatch.setattr(seam, "comment_issue",
         lambda *args, **kwargs: comments.append((args, kwargs)),
@@ -4251,15 +4253,9 @@ def test_delivery_step_marks_blocked_when_review_fails(
         PR_URL, issue, config_domain.RunnerConfig(repo_dir=tmp_path, base_branch="main"),
         "owner/repo",
     )
-    # Issue #2357: every removal is written before the terminal add.
-    assert edits[0][1] == {
-        "repo": "owner/repo",
-        "remove": "ai-pr-opened",
-    }
-    assert edits[1][1] == {
-        "repo": "owner/repo",
-        "add": "ai-blocked",
-    }
+    # Issue #2426: the terminal is ONE whole-set replacement that ends on
+    # ai-blocked alone.
+    assert edits[-1] == ["ai-blocked"]
     body = comments[0][1]["body"]
     assert "the independent review of" in body
     assert f"<!-- orbi:run=a1b2c3d4 -->" in body
@@ -4351,8 +4347,9 @@ def test_delivery_step_marks_blocked_when_review_fails_while_fix_needed(
     monkeypatch.setattr(seam, "run_command", fake_run)
     edits: list = []
     comments: list = []
-    monkeypatch.setattr(seam, "edit_issue",
-        lambda *args, **kwargs: edits.append((args, kwargs)),
+    monkeypatch.setattr(
+        seam, "set_issue_labels",
+        lambda number, *, repo, labels: edits.append(list(labels)),
     )
     monkeypatch.setattr(seam, "comment_issue",
         lambda *args, **kwargs: comments.append((args, kwargs)),
@@ -4365,20 +4362,9 @@ def test_delivery_step_marks_blocked_when_review_fails_while_fix_needed(
         "owner/repo",
     )
     # Issue #2369: the round-start repair is ONE whole-set replacement
-    # ending on ai-pr-opened; the blocked terminal then removes the
-    # delivery-state label and adds ai-blocked LAST.
-    assert [
-        command for command in api_calls
-        if command[2:4] == ["--method", "PUT"]
-    ] == [[
-        "gh", "api", "--method", "PUT",
-        "repos/owner/repo/issues/39/labels",
-        "-f", "labels[]=ai-pr-opened", "--include",
-    ]]
-    assert edits == [
-        ((39,), {"repo": "owner/repo", "remove": "ai-fix-needed"}),
-        ((39,), {"repo": "owner/repo", "add": "ai-blocked"}),
-    ]
+    # ending on ai-pr-opened; the blocked terminal is ONE more, ending on
+    # ai-blocked alone (Issue #2426).
+    assert edits == [["ai-pr-opened"], ["ai-blocked"]]
     body = comments[0][1]["body"]
     assert "the independent review of" in body
     assert f"<!-- orbi:run=a1b2c3d4 -->" in body
@@ -4466,8 +4452,9 @@ def test_delivery_step_blocks_when_scene_base_differs_from_config(
     monkeypatch.setattr(runner.time, "sleep", lambda s: None)
     edits: list = []
     comments: list = []
-    monkeypatch.setattr(seam, "edit_issue",
-        lambda *args, **kwargs: edits.append((args, kwargs)),
+    monkeypatch.setattr(
+        seam, "set_issue_labels",
+        lambda number, *, repo, labels: edits.append(list(labels)),
     )
     monkeypatch.setattr(seam, "comment_issue",
         lambda *args, **kwargs: comments.append((args, kwargs)),
@@ -4493,15 +4480,9 @@ def test_delivery_step_blocks_when_scene_base_differs_from_config(
     # instead of re-checking the PR state.
     assert pr_calls["n"] == 1
     # The Issue is marked ai-blocked (removing ai-pr-opened) ...
-    # Issue #2357: every removal is written before the terminal add.
-    assert edits[0][1] == {
-        "repo": "owner/repo",
-        "remove": "ai-pr-opened",
-    }
-    assert edits[1][1] == {
-        "repo": "owner/repo",
-        "add": "ai-blocked",
-    }
+    # Issue #2426: the terminal is ONE whole-set replacement that ends on
+    # ai-blocked alone.
+    assert edits[-1] == ["ai-blocked"]
     # ... with a failure comment that names BOTH base values and carries
     # the run marker.
     body = comments[0][1]["body"]
@@ -4606,8 +4587,9 @@ def test_delivery_step_worktree_missing_stays_fix_needed(
         fake_run(["git", "fetch"])
     edits: list = []
     comments: list = []
-    monkeypatch.setattr(seam, "edit_issue",
-        lambda *args, **kwargs: edits.append((args, kwargs)),
+    monkeypatch.setattr(
+        seam, "set_issue_labels",
+        lambda number, *, repo, labels: edits.append(list(labels)),
     )
     monkeypatch.setattr(seam, "comment_issue",
         lambda *args, **kwargs: comments.append((args, kwargs)),
@@ -4630,13 +4612,8 @@ def test_delivery_step_worktree_missing_stays_fix_needed(
     assert reviews == []
     # The Issue is marked ai-fix-needed (removing ai-pr-opened) —
     # never ai-blocked (Issue #50) ...
-    assert edits[0][1] == {
-        "repo": "owner/repo",
-        "add": "ai-fix-needed",
-        "remove": "ai-pr-opened",
-    }
-    # ... and it is the only label edit.
-    assert len(edits) == 1
+    # ... in ONE whole-set replacement (Issue #2426).
+    assert edits == [["ai-fix-needed"]]
     # The failure comment names the missing worktree and carries the
     # run marker.
     body = comments[0][1]["body"]
@@ -4753,8 +4730,9 @@ def test_delivery_step_worktree_missing_while_fix_needed_keeps_label(
     monkeypatch.setattr(seam, "run_command", fake_run)
     edits: list = []
     comments: list = []
-    monkeypatch.setattr(seam, "edit_issue",
-        lambda *args, **kwargs: edits.append((args, kwargs)),
+    monkeypatch.setattr(
+        seam, "set_issue_labels",
+        lambda number, *, repo, labels: edits.append(list(labels)),
     )
     monkeypatch.setattr(seam, "comment_issue",
         lambda *args, **kwargs: comments.append((args, kwargs)),
@@ -4773,19 +4751,9 @@ def test_delivery_step_worktree_missing_while_fix_needed_keeps_label(
     # No review was started.
     assert reviews == []
     # Issue #2369: the round-start repair is ONE whole-set replacement
-    # ending on ai-pr-opened; the recoverable failure then sets
-    # ai-fix-needed again, the same end state as before.
-    assert [
-        command for command in api_calls
-        if command[2:4] == ["--method", "PUT"]
-    ] == [[
-        "gh", "api", "--method", "PUT",
-        "repos/owner/repo/issues/39/labels",
-        "-f", "labels[]=ai-pr-opened", "--include",
-    ]]
-    assert edits == [
-        ((39,), {"repo": "owner/repo", "add": "ai-fix-needed"}),
-    ]
+    # ending on ai-pr-opened; the recoverable failure then patches
+    # ai-fix-needed again — the same end state as before (Issue #2426).
+    assert edits == [["ai-pr-opened"]]
     body = comments[0][1]["body"]
     assert "Orbi needs a fix:" in body
     assert "branch: `orbi/owner-repo-issue-39`" in body
@@ -4931,8 +4899,9 @@ def test_delivery_step_marks_blocked_when_pr_closed_unmerged(
     monkeypatch.setattr(seam, "run_command", fake_run)
     edits: list = []
     comments: list = []
-    monkeypatch.setattr(seam, "edit_issue",
-        lambda *args, **kwargs: edits.append((args, kwargs)),
+    monkeypatch.setattr(
+        seam, "set_issue_labels",
+        lambda number, *, repo, labels: edits.append(list(labels)),
     )
     monkeypatch.setattr(seam, "comment_issue",
         lambda *args, **kwargs: comments.append((args, kwargs)),
@@ -4946,16 +4915,8 @@ def test_delivery_step_marks_blocked_when_pr_closed_unmerged(
     # (the delivery was awaiting the next review session) — so the
     # terminal state is ai-blocked alone. One deterministic patch,
     # not two hardcoded removes.
-    # Issue #2357: the removal is written before the terminal add.
-    assert edits[0][1] == {
-        "repo": "owner/repo",
-        "remove": "ai-fix-needed",
-    }
-    assert edits[1][1] == {
-        "repo": "owner/repo",
-        "add": "ai-blocked",
-    }
-    assert len(edits) == 2
+    # Issue #2426: the terminal is ONE whole-set write on ai-blocked alone.
+    assert edits == [["ai-blocked"]]
     # ... with a failure comment carrying the run marker and run_id and,
     # from the ONE blocked exit, the community help line last (Issue #1730).
     body = comments[0][1]["body"]
@@ -5022,8 +4983,9 @@ def test_delivery_step_blocked_clears_the_repositorys_dispatch_label(
     bind_run_id(None)
     monkeypatch.setattr(seam, "comment_issue", lambda *a, **k: None)
     edits: list = []
-    monkeypatch.setattr(seam, "edit_issue",
-        lambda *args, **kwargs: edits.append((args, kwargs)),
+    monkeypatch.setattr(
+        seam, "set_issue_labels",
+        lambda number, *, repo, labels: edits.append(list(labels)),
     )
     runner.delivery_step(
         PR_URL, {"number": 39, "title": "task", "body": ""},
@@ -5032,12 +4994,8 @@ def test_delivery_step_blocked_clears_the_repositorys_dispatch_label(
     )
     # The blocked transition clears the delivery state AND the queue label
     # the claim scanned: `ai-blocked` ALONE, no `ship` residue.
-    # Issue #2357: removals first, terminal add last.
-    assert edits == [
-        ((39,), {"repo": "owner/repo", "remove": "ai-fix-needed"}),
-        ((39,), {"repo": "owner/repo", "remove": "ship"}),
-        ((39,), {"repo": "owner/repo", "add": "ai-blocked"}),
-    ]
+    # Issue #2426: ONE whole-set write that ends on ai-blocked alone.
+    assert edits == [["ai-blocked"]]
 
 
 def test_delivery_step_pr_closed_comment_follows_the_language(
@@ -5107,8 +5065,9 @@ def test_delivery_step_review_failure_without_bound_run_id(
         fake_run(["gh", "release", "list"])
     edits: list = []
     comments: list = []
-    monkeypatch.setattr(seam, "edit_issue",
-        lambda *args, **kwargs: edits.append((args, kwargs)),
+    monkeypatch.setattr(
+        seam, "set_issue_labels",
+        lambda number, *, repo, labels: edits.append(list(labels)),
     )
     monkeypatch.setattr(seam, "comment_issue",
         lambda *args, **kwargs: comments.append((args, kwargs)),
@@ -5118,15 +5077,9 @@ def test_delivery_step_review_failure_without_bound_run_id(
         PR_URL, issue, config_domain.RunnerConfig(repo_dir=tmp_path, base_branch="main"),
         "owner/repo",
     )
-    # Issue #2357: every removal is written before the terminal add.
-    assert edits[0][1] == {
-        "repo": "owner/repo",
-        "remove": "ai-pr-opened",
-    }
-    assert edits[1][1] == {
-        "repo": "owner/repo",
-        "add": "ai-blocked",
-    }
+    # Issue #2426: the terminal is ONE whole-set replacement that ends on
+    # ai-blocked alone.
+    assert edits[-1] == ["ai-blocked"]
     body = comments[0][1]["body"]
     assert "the independent review of" in body
     assert "orbi:run=" not in body
@@ -5191,6 +5144,102 @@ def test_delivery_step_repairs_in_progress_label_and_logs_ci(
     assert "lint=COMPLETED/SKIPPED" in caplog.text
 
 
+
+def test_delivery_step_defers_a_temporary_label_repair_error(
+        monkeypatch, caplog, tmp_path, bind_run_id,
+):
+    """Issue #2426 acceptance 3: GitHub fails the round-start label repair
+    with a 5xx. That is a temporary GitHub error, not a broken delivery:
+
+    - no `ai-blocked` label and no blocked comment (the #3954 scene that
+      ended up `ai-pr-opened` + `ai-fix-needed` + `ai-blocked`);
+    - the Issue keeps exactly the labels it had, so the next tick finds
+      the delivery again;
+    - the next round, with GitHub answering, ends on `ai-pr-opened` and
+      the review proceeds.
+    """
+    state = {"failing": True, "labels": ["ai-fix-needed"]}
+
+    def fake_run(command, **kwargs):
+        # Dispatch on the joined argv (no command-shape ratchet, Issue
+        # #789): the same fake answers the reads, the write and the
+        # comments.
+        shape = " ".join(str(part) for part in command)
+        if shape.startswith("gh pr view "):
+            return json.dumps({"state": "OPEN", "statusCheckRollup": []})
+        if shape.startswith("gh issue view "):
+            if command[-1] == "comments":
+                return json.dumps({"comments": [{
+                    "body": (
+                        "<!-- orbi:run=a1b2c3d4 -->\n"
+                        + scene.render(scene.Scene(
+                            run_id="a1b2c3d4", base_branch="main",
+                            base_sha="abc123def456", pr_url=PR_URL,
+                        ))
+                        + f"\nOrbi opened PR: {PR_URL}"
+                    ),
+                    "authorAssociation": "OWNER",
+                    "author": {"login": "maintainer"},
+                }]})
+            return json.dumps({
+                "labels": [{"name": name} for name in state["labels"]],
+            })
+        if shape.startswith("gh api --method PUT "):
+            if state["failing"]:
+                raise subprocess.CalledProcessError(
+                    1, command,
+                    output=(
+                        "HTTP/2.0 502 Bad Gateway\r\n"
+                        "X-Ratelimit-Remaining: 4999\r\n"
+                        "\r\n"
+                        '{"message": "Server Error"}'
+                    ),
+                    stderr="gh: Server Error (HTTP 502)",
+                )
+            state["labels"] = [
+                argument.split("=", 1)[1] for argument in command
+                if argument.startswith("labels[]=")
+            ]
+            return ""
+        return ""
+
+    monkeypatch.setattr(seam, "run_command", fake_run)
+    monkeypatch.setattr(runner.time, "sleep", lambda _seconds: None)
+    bind_run_id("a1b2c3d4")
+    reviewed = []
+    monkeypatch.setattr(
+        review_merge, "review_and_merge_if_clean",
+        lambda *args, **kwargs: reviewed.append(kwargs) or True,
+    )
+    comments: list = []
+    monkeypatch.setattr(
+        seam, "comment_issue", lambda *args, **kwargs: comments.append(kwargs),
+    )
+    (tmp_path / ".worktrees" /
+     "orbi-owner-repo-issue-39-a1b2c3d4").mkdir(parents=True)
+    issue = {"number": 39, "title": "task", "body": ""}
+    config = config_domain.RunnerConfig(
+        repo_dir=tmp_path, base_branch="main")
+
+    caplog.set_level("INFO")
+    runner.delivery_step(PR_URL, issue, config, "owner/repo")
+    # The repair failed and the round deferred: no blocked scene, no
+    # review, and the Issue still carries the label it came with.
+    assert state["labels"] == ["ai-fix-needed"]
+    assert comments == []
+    assert reviewed == []
+    assert "delivery_label_repair_failed" in caplog.text
+    assert "delivery_label_inconsistent" not in caplog.text
+    caplog.clear()
+
+    # The next round: GitHub answers normally.
+    state["failing"] = False
+    runner.delivery_step(PR_URL, issue, config, "owner/repo")
+    assert state["labels"] == ["ai-pr-opened"]
+    assert len(reviewed) == 1
+    assert "delivery_label_repaired" in caplog.text
+    assert comments == []
+
 def test_delivery_step_blocks_when_in_progress_label_repair_fails(
         monkeypatch, caplog, bind_run_id,
 ):
@@ -5243,6 +5292,10 @@ def test_delivery_step_keeps_holding_when_no_delivery_label(
             return json.dumps({"state": states[pr_calls["n"] - 1]})
         if command[:2] == ["gh", "issue"] and command[2] == "view":
             return json.dumps({"labels": [{"name": "ai-ready"}]})
+        if (command[0] == "gh" and command[1] == "api"
+                and any(part.endswith("/labels") for part in command)):
+            # The blocked terminal's one whole-set replacement (#2426).
+            return ""
         if command[:3] == ["gh", "issue", "edit"]:
             return ""
         if command[:3] == ["gh", "issue", "comment"]:
@@ -5321,6 +5374,10 @@ def test_delivery_step_logs_awaiting_without_bound_run_id(
         if command[:2] == ["gh", "issue"] and command[-1] == "labels":
             # No leftover fix-needed label: only ai-pr-opened is removed.
             return json.dumps({"labels": [{"name": "ai-pr-opened"}]})
+        if (command[0] == "gh" and command[1] == "api"
+                and any(part.endswith("/labels") for part in command)):
+            # The blocked terminal's one whole-set replacement (#2426).
+            return ""
         raise AssertionError(f"unexpected command: {command}")
 
     monkeypatch.setattr(seam, "run_command", fake_run)
@@ -5408,7 +5465,7 @@ def test_run_review_round_reports_a_provider_balance_stop_as_its_own_reason(
     assert "**Action:** Top up" in body
     assert "`ai-ready`" in body
     # The stop is recoverable: the same PR continues.
-    assert edits[-1][1]["add"] == "ai-fix-needed"
+    assert edits[-1] == ["ai-fix-needed"]
 
 
 def test_run_review_round_returns_false_on_findings(
@@ -5744,15 +5801,9 @@ def test_run_review_round_returns_none_when_scene_base_differs(
     )
     assert outcome is None
     assert reviews == []
-    # Issue #2357: every removal is written before the terminal add.
-    assert edits[0][1] == {
-        "repo": "owner/repo",
-        "remove": "ai-pr-opened",
-    }
-    assert edits[1][1] == {
-        "repo": "owner/repo",
-        "add": "ai-blocked",
-    }
+    # Issue #2426: the terminal is ONE whole-set replacement that ends on
+    # ai-blocked alone.
+    assert edits[-1] == ["ai-blocked"]
     assert "Orbi failed:" in comments[0][1]["body"]
     assert "base_branch=develop" in comments[0][1]["body"]
     assert "base_branch=main" in comments[0][1]["body"]
@@ -5775,11 +5826,7 @@ def test_run_review_round_returns_none_when_worktree_missing(
     )
     assert outcome is None
     assert reviews == []
-    assert edits[0][1] == {
-        "repo": "owner/repo",
-        "add": "ai-fix-needed",
-        "remove": "ai-pr-opened",
-    }
+    assert edits == [["ai-fix-needed"]]
     body = comments[0][1]["body"]
     assert "Orbi needs a fix:" in body
     assert "branch: `orbi/owner-repo-issue-39`" in body
@@ -5805,7 +5852,7 @@ def test_run_review_round_failure_comment_follows_the_config_language(
     )
     assert outcome is None
     assert reviews == []
-    assert edits[-1][1]["add"] == "ai-blocked"
+    assert edits[-1] == ["ai-blocked"]
     body = comments[0][1]["body"]
     assert "Orbi：已阻塞 —— 等待人工决定" in body
     assert "**原因：**" in body
@@ -5928,7 +5975,7 @@ def test_run_review_round_recoverable_failure_keeps_no_action(
         "owner/repo",
     )
     assert outcome is None
-    assert edits[0][1]["add"] == "ai-fix-needed"
+    assert edits == [["ai-fix-needed"]]
     body = comments[0][1]["body"]
     assert text["action"] not in body
     assert text["reason"] in body
@@ -6689,7 +6736,7 @@ def test_pick_resumable_routes_marker_ticket_instead_of_blocking(
     monkeypatch.setattr(seam, "issue_comments", lambda number, repo: [])
     patches = []
     monkeypatch.setattr(seam, "apply_label_patch",
-        lambda number, *, repo, event, current_labels, ready_label=None:
+        lambda number, *, repo, event, ready_label=None:
             patches.append(event),
     )
     comments_posted = []
@@ -6849,8 +6896,9 @@ def test_route_external_pr_probe_failure_falls_through_to_block(
     monkeypatch.setattr(seam, "run_command", failing_probe)
     edits = []
     posted = []
-    monkeypatch.setattr(seam, "edit_issue",
-        lambda *args, **kwargs: edits.append((args, kwargs)),
+    monkeypatch.setattr(
+        seam, "set_issue_labels",
+        lambda number, *, repo, labels: edits.append(list(labels)),
     )
     monkeypatch.setattr(seam, "comment_issue",
         lambda *args, **kwargs: posted.append(kwargs["body"]),
@@ -6863,12 +6911,9 @@ def test_route_external_pr_probe_failure_falls_through_to_block(
         hooks=resume_deps(), language_code="en",
     )
     assert result is None
-    # ai-blocked ALONE: the queue label the claim kept goes too (#1775).
-    # Issue #2357: the label actually on the Issue is preserved (#672),
-    # so the terminal add is the only write.
-    assert edits == [
-        ((100,), {"repo": "owner/repo", "add": "ai-blocked"}),
-    ]
+    # ai-blocked ALONE: ONE whole-set write that clears the delivery
+    # state it found (Issues #1775, #2426).
+    assert edits == [["ai-blocked"]]
     assert "no trusted 'Orbi opened PR'" in posted[0]
 
 
@@ -6894,8 +6939,9 @@ def test_route_external_pr_unknown_state_falls_through_to_block(
         draft_state(["gh", "release", "list"])
     edits = []
     posted = []
-    monkeypatch.setattr(seam, "edit_issue",
-        lambda *args, **kwargs: edits.append((args, kwargs)),
+    monkeypatch.setattr(
+        seam, "set_issue_labels",
+        lambda number, *, repo, labels: edits.append(list(labels)),
     )
     monkeypatch.setattr(seam, "comment_issue",
         lambda *args, **kwargs: posted.append(kwargs["body"]),
@@ -6908,12 +6954,9 @@ def test_route_external_pr_unknown_state_falls_through_to_block(
         hooks=resume_deps(), language_code="en",
     )
     assert result is None
-    # ai-blocked ALONE: the queue label the claim kept goes too (#1775).
-    # Issue #2357: the label actually on the Issue is preserved (#672),
-    # so the terminal add is the only write.
-    assert edits == [
-        ((100,), {"repo": "owner/repo", "add": "ai-blocked"}),
-    ]
+    # ai-blocked ALONE: ONE whole-set write that clears the delivery
+    # state it found (Issues #1775, #2426).
+    assert edits == [["ai-blocked"]]
     assert "no trusted 'Orbi opened PR'" in posted[0]
 
 
@@ -6936,8 +6979,9 @@ def test_route_external_pr_ignores_tickets_without_marker(
     monkeypatch.setattr(seam, "run_command", fake_run)
     edits = []
     posted = []
-    monkeypatch.setattr(seam, "edit_issue",
-        lambda *args, **kwargs: edits.append((args, kwargs)),
+    monkeypatch.setattr(
+        seam, "set_issue_labels",
+        lambda number, *, repo, labels: edits.append(list(labels)),
     )
     monkeypatch.setattr(seam, "comment_issue",
         lambda *args, **kwargs: posted.append(kwargs["body"]),
@@ -6949,12 +6993,9 @@ def test_route_external_pr_ignores_tickets_without_marker(
         hooks=resume_deps(), language_code="en",
     )
     assert result is None
-    # ai-blocked ALONE: the queue label the claim kept goes too (#1775).
-    # Issue #2357: the label actually on the Issue is preserved (#672),
-    # so the terminal add is the only write.
-    assert edits == [
-        ((41,), {"repo": "owner/repo", "add": "ai-blocked"}),
-    ]
+    # ai-blocked ALONE: ONE whole-set write that clears the delivery
+    # state it found (Issues #1775, #2426).
+    assert edits == [["ai-blocked"]]
     assert "no trusted 'Orbi opened PR'" in posted[0]
     with pytest.raises(AssertionError, match="unexpected command"):
         fake_run(["gh", "release", "view"])

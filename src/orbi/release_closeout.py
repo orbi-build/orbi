@@ -358,7 +358,6 @@ def release_success_closeout(
         # reads as "still queued" (Issue #1526).
         apply_label_patch(
             number, repo=repo, event=EVENT_MERGED,
-            current_labels={ready_label, delivery_labels.IN_PROGRESS_LABEL},
             ready_label=ready_label,
         )
         close_issue(int(number), repo=repo)
@@ -428,10 +427,6 @@ def release_failure_closeout(
             run_id, run_info, error, language_code=language_code, step=step,
             status_url=status_url, issue=number, title=title,
         ),
-        # A failed release is a blocked terminal: the claimed
-        # ticket still carries the resolved queue label, so it is
-        # cleared with the in-flight label (Issue #1775).
-        current_labels={delivery_labels.IN_PROGRESS_LABEL, ready_label},
         language_code=language_code, ready_label=ready_label,
     )
 

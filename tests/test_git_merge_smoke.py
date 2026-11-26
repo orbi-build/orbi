@@ -550,8 +550,13 @@ def install_round_gh(monkeypatch, clone: Path, head_oid: str, *,
     monkeypatch.setattr(seam, "issue_comments", lambda *a, **k: [])
     monkeypatch.setattr(seam, "issue_labels",
                         lambda *a, **k: ["ai-ready", "ai-pr-opened"])
-    monkeypatch.setattr(seam, "edit_issue",
-                        lambda *a, **k: labels.append(k))
+    # Issue #2426: a delivery-label change is ONE whole-set replacement,
+    # so `labels` carries the set each transition wrote.
+    monkeypatch.setattr(
+        seam, "set_issue_labels",
+        lambda number, *, repo, **kwargs: labels.append(
+            list(kwargs["labels"])),
+    )
     monkeypatch.setattr(seam, "comment_issue",
                         lambda *a, **k: comments.append(k.get("body", "")))
     # A 5xx read is retried with backoff before it escapes (gh read retry):
@@ -615,9 +620,9 @@ def test_round_uses_the_gates_landed_verdict_after_a_failed_merge_call(
 
     assert merged is True
     assert landing_reads == [_LANDING_FIELDS]
-    # Issue #2357: the removal is written before the terminal add.
-    assert {"repo": "owner/repo", "remove": "ai-pr-opened"} in labels
-    assert labels[-1] == {"repo": "owner/repo", "add": "ai-merged"}
+    # Issue #2426: the terminal is ONE whole-set replacement ending on
+    # ai-merged alone.
+    assert labels[-1] == ["ai-merged"]
     merge_commit = git(clone, "rev-parse", "origin/main")
     assert f"merge_commit={merge_commit}" in comments[0]
     # Every later landing read is the 5xx that used to escape the round
@@ -641,6 +646,6 @@ def test_round_reads_the_landing_once_when_the_merge_call_succeeds(
 
     assert merged is True
     assert landing_reads == [_LANDING_FIELDS]
-    # Issue #2357: the removal is written before the terminal add.
-    assert {"repo": "owner/repo", "remove": "ai-pr-opened"} in labels
-    assert labels[-1] == {"repo": "owner/repo", "add": "ai-merged"}
+    # Issue #2426: the terminal is ONE whole-set replacement ending on
+    # ai-merged alone.
+    assert labels[-1] == ["ai-merged"]

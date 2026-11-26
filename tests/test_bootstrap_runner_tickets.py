@@ -280,8 +280,22 @@ def test_process_ticket_only_posts_agent_output_without_git_delivery(monkeypatch
 
 
 def _answer_terminal_labels(monkeypatch, labels):
-    """Answer the terminal transition's real-label read (Issue #2357)."""
-    monkeypatch.setattr(seam, "issue_labels", lambda *a, **k: list(labels))
+    """Answer the terminal transition's reads and capture its one write.
+
+    Issue #2426: the terminal change is ONE whole-set replacement, and the
+    label set it computes comes from the Issue's real labels.
+    """
+    writes: list = []
+
+    def run(command, **kwargs):
+        if command[0:3] == ["gh", "issue", "view"] and command[-1] == "labels":
+            return json.dumps({"labels": [{"name": n} for n in labels]})
+        if command[0:2] == ["gh", "api"]:
+            writes.append(command)
+        return ""
+
+    monkeypatch.setattr(seam, "run_command", run)
+    return writes
 
 
 def test_process_ticket_only_rejects_empty_agent_content(monkeypatch):
@@ -295,12 +309,15 @@ def test_process_ticket_only_rejects_empty_agent_content(monkeypatch):
     monkeypatch.setattr(seam, "comment_issue", lambda *args, **kwargs: None)
     monkeypatch.setattr(pi_session, "run_ticket_agent", lambda *args, **kwargs: "")
     monkeypatch.setattr(runner, "ProgressPublisher", Mock())
-    _answer_terminal_labels(monkeypatch, ["ai-in-progress"])
+    writes = _answer_terminal_labels(monkeypatch, ["ai-in-progress"])
     with pytest.raises(RuntimeError, match="returned no content"):
         runner.process_ticket_only(issue, config_domain.RunnerConfig(repo_dir=Path("/repo")), "o/r")
-    # Issue #2357: the removal is written before the terminal add.
-    assert edits[-2] == (99, {"repo": "o/r", "remove": "ai-in-progress"})
-    assert edits[-1] == (99, {"repo": "o/r", "add": "ai-blocked"})
+    # Issue #2426: the blocked terminal is ONE whole-set replacement that
+    # ends on ai-blocked alone.
+    assert writes == [[
+        "gh", "api", "--method", "PUT", "repos/o/r/issues/99/labels",
+        "-f", "labels[]=ai-blocked", "--include",
+    ]]
 
 
 @pytest.mark.parametrize("language_code", ["en", "zh"])
@@ -331,7 +348,9 @@ def test_process_ticket_only_failure_marks_blocked_without_git_delivery(
                         lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("Pi failed")))
     monkeypatch.setattr(runner, "ProgressPublisher", Mock())
     monkeypatch.setattr(seam, "safe_publish", lambda **kwargs: None)
-    _answer_terminal_labels(monkeypatch, ["ai-in-progress"])
+    writes = _answer_terminal_labels(
+        monkeypatch, ["ai-in-progress", queue_label],
+    )
     with pytest.raises(RuntimeError, match="Pi failed"):
         runner.process_ticket_only(
             issue, config_domain.RunnerConfig(
@@ -339,9 +358,14 @@ def test_process_ticket_only_failure_marks_blocked_without_git_delivery(
                 dispatch_label=dispatch_label, status_url=TASK_STATUS_URL,
             ), "o/r",
         )
-    # Issue #2357: the removal is written before the terminal add.
-    assert edits[-2] == (99, {"repo": "o/r", "remove": "ai-in-progress"})
-    assert edits[-1] == (99, {"repo": "o/r", "add": "ai-blocked"})
+    # Issue #2426: after the claim, the blocked terminal is ONE whole-set
+    # replacement that clears the in-flight and the resolved queue label
+    # (Issue #1775) and ends on ai-blocked alone.
+    assert writes[-1] == [
+        "gh", "api", "--method", "PUT", "repos/o/r/issues/99/labels",
+        "-f", "labels[]=ai-blocked", "--include",
+    ]
+    assert len(writes) == 2
     body = comments[-1][1]["body"]
     assert language.text(
         language_code, "runner.ticket_only_failed",

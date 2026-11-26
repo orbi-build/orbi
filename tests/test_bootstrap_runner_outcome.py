@@ -82,7 +82,6 @@ def test_process_issue_success_records_base_and_run_in_comment(monkeypatch, tmp_
         return ""
 
     monkeypatch.setattr(seam, "run_command", fake_run)
-    monkeypatch.setattr(seam, "edit_issue", lambda *args, **kwargs: calls.append(("edit", args, kwargs)))
     monkeypatch.setattr(seam, "freeze_base", lambda repo_dir, base_branch: "abc123def456")
     monkeypatch.setattr(seam, "new_run_id", lambda: "a1b2c3d4")
     monkeypatch.setattr(seam, "create_worktree", lambda *args, **kwargs: tmp_path / "wt")
@@ -209,7 +208,12 @@ def test_process_issue_failure_marks_blocked_and_ends_cleanly(monkeypatch, tmp_p
     an already-handled failure; the tick ends cleanly and `main` skips
     the delivery wait."""
     calls = []
-    monkeypatch.setattr(seam, "edit_issue", lambda *args, **kwargs: calls.append(("edit", args, kwargs)))
+    # Issue #2426: a delivery-label change is ONE whole-set replacement;
+    # the capture is the set the transition wrote.
+    monkeypatch.setattr(
+        seam, "set_issue_labels",
+        lambda number, *, repo, labels: calls.append(("labels", list(labels))),
+    )
     monkeypatch.setattr(seam, "freeze_base", lambda repo_dir, base_branch: "abc123def456")
     monkeypatch.setattr(seam, "new_run_id", lambda: "a1b2c3d4")
     monkeypatch.setattr(seam, "create_worktree", Mock(side_effect=RuntimeError("git failed")))
@@ -228,9 +232,10 @@ def test_process_issue_failure_marks_blocked_and_ends_cleanly(monkeypatch, tmp_p
     # The failure is terminal: `process_issue` returns `None` (no PR) and
     # does NOT re-raise — the service must not crash on it (Issue #239).
     assert runner.process_issue({"number": 8, "title": "Fail", "body": ""}, config_domain.RunnerConfig(repo_dir=tmp_path, prompt=tmp_path / "prompt.md", base_branch="main"), "xqliu/orbi-backlog").kind == "failed"
-    # Issue #2357: the removal is written before the terminal add.
-    assert calls[0][2] == {"repo": "xqliu/orbi-backlog", "remove": "ai-ready"}
-    assert calls[1][2] == {"repo": "xqliu/orbi-backlog", "add": "ai-blocked"}
+    # The claim and the blocked terminal are ONE whole-set replacement
+    # each, so the Issue ends ai-blocked alone (Issues #2369, #2426).
+    assert calls[0] == ("labels", ["ai-in-progress"])
+    assert calls[1] == ("labels", ["ai-blocked"])
     assert calls[2][0] == "comment"
     failure_body = calls[2][2]["body"]
     # The failure is also published as the blocked milestone (Issue
@@ -256,8 +261,9 @@ def test_process_issue_terminal_failure_clears_the_repositorys_dispatch_label(
     terminal failure ai-blocked ALONE — the blocked transition clears the
     same queue label the claim scanned, not only the host default."""
     edits = []
-    monkeypatch.setattr(seam, "edit_issue",
-        lambda *args, **kwargs: edits.append(kwargs),
+    monkeypatch.setattr(
+        seam, "set_issue_labels",
+        lambda number, *, repo, labels: edits.append(list(labels)),
     )
     monkeypatch.setattr(seam, "freeze_base",
         lambda repo_dir, base_branch: "abc123def456")
@@ -289,12 +295,9 @@ def test_process_issue_terminal_failure_clears_the_repositorys_dispatch_label(
     )
     assert result.kind == "failed"
     # The claim is one whole-set replacement (Issue #2369); the terminal
-    # blocked patch removes the queue label first and ends on ai-blocked
-    # (Issue #2357).
-    assert edits == [
-        {"repo": "xqliu/orbi-backlog", "remove": "ship"},
-        {"repo": "xqliu/orbi-backlog", "add": "ai-blocked"},
-    ]
+    # blocked patch is ONE more, so the Issue ends ai-blocked alone
+    # (Issues #1775, #2426).
+    assert edits == [["ai-in-progress"], ["ai-blocked"]]
 
 
 @pytest.mark.parametrize(
@@ -343,7 +346,6 @@ def test_claim_then_blocked_ends_ai_blocked_alone(
     # resolved label is the one the production claim passes.
     github.apply_label_patch(
         8, repo="owner/repo", event=runner.EVENT_CLAIM,
-        current_labels=github.issue_labels(8, repo="owner/repo"),
         ready_label=queue_label,
     )
     # Issue #2309: the claim removes the queue label — the delivery is in
@@ -371,8 +373,11 @@ def test_process_issue_delivery_no_commit_marks_blocked_without_crashing(
     not crash on the unhandled `RuntimeError` (the #239 scene). The
     Runner never auto-commits or expands the agent's commit boundary."""
     calls = []
-    monkeypatch.setattr(seam, "edit_issue",
-        lambda *args, **kwargs: calls.append(kwargs),
+    # Issue #2426: a delivery-label change is ONE whole-set replacement.
+    monkeypatch.setattr(
+        seam, "set_issue_labels",
+        lambda number, *, repo, labels: calls.append(
+            ("labels", list(labels))),
     )
     monkeypatch.setattr(seam, "freeze_base", lambda repo_dir, base_branch: "abc123def456",
     )
@@ -433,12 +438,11 @@ def test_process_issue_delivery_no_commit_marks_blocked_without_crashing(
         config_domain.RunnerConfig(repo_dir=tmp_path, prompt=tmp_path / "prompt.md", base_branch="main"),
         "xqliu/orbi",
     ).kind == "failed"
-    edits = [entry for entry in calls if isinstance(entry, dict)]
-    # Issue #2369: the claim's whole-set replacement is not an
-    # `edit_issue`; the terminal removes first and adds ai-blocked last.
-    assert edits == [
-        {"repo": "xqliu/orbi", "remove": "ai-ready"},
-        {"repo": "xqliu/orbi", "add": "ai-blocked"},
+    # The claim and the blocked terminal are ONE whole-set replacement
+    # each: the Issue ends ai-blocked alone (Issues #2369, #2426).
+    assert [entry for entry in calls if entry[0] == "labels"] == [
+        ("labels", ["ai-in-progress"]),
+        ("labels", ["ai-blocked"]),
     ]
     comment_bodies = [
         entry[2]["body"] for entry in calls
@@ -527,8 +531,9 @@ def test_process_issue_empty_commit_marks_blocked_without_crashing(
         check=True, capture_output=True, env=env,
     )
     edits = []
-    monkeypatch.setattr(seam, "edit_issue",
-        lambda *args, **kwargs: edits.append(kwargs),
+    monkeypatch.setattr(
+        seam, "set_issue_labels",
+        lambda number, *, repo, labels: edits.append(list(labels)),
     )
     monkeypatch.setattr(seam, "freeze_base",
         lambda repo_dir, base_branch: base_sha,
@@ -575,7 +580,7 @@ def test_process_issue_empty_commit_marks_blocked_without_crashing(
         )
     assert result.kind == "failed"
     # Issue #2357: the terminal add is the last label write.
-    assert edits[-1] == {"repo": "xqliu/orbi", "add": "ai-blocked"}
+    assert edits[-1] == ["ai-blocked"]
     blocked = [body for body in comments if "Orbi: blocked" in body]
     assert len(blocked) == 1
     assert "no file change" in blocked[0]
@@ -609,8 +614,11 @@ def test_process_issue_model_wait_dead_failure_stays_in_progress(
     the SAME run (same run id, branch, worktree, progress comment). No
     terminal label, no fallback."""
     calls = []
-    monkeypatch.setattr(seam, "edit_issue",
-        lambda *args, **kwargs: calls.append(kwargs),
+    # Issue #2426: a delivery-label change is ONE whole-set replacement.
+    monkeypatch.setattr(
+        seam, "set_issue_labels",
+        lambda number, *, repo, labels: calls.append(
+            ("labels", list(labels))),
     )
     monkeypatch.setattr(seam, "freeze_base", lambda repo_dir, base_branch: "abc123def456",
     )
@@ -653,8 +661,9 @@ def test_process_issue_model_wait_dead_failure_stays_in_progress(
     # replacement (Issue #2369) is the ONLY label write — no
     # `ai-blocked`, no removal of `ai-in-progress` (the edit calls are
     # the dict entries; the `gh issue comment` traffic is tuple entries).
-    edits = [entry for entry in calls if isinstance(entry, dict)]
-    assert edits == []
+    assert [entry for entry in calls if entry[0] == "labels"] == [
+        ("labels", ["ai-in-progress"]),
+    ]
     comment_bodies = [
         entry[2]["body"] for entry in calls
         if isinstance(entry, tuple) and entry[0] == "comment"
@@ -947,8 +956,11 @@ def test_process_issue_model_wait_dead_comment_failure_stays_in_progress(
     Issue `ai-blocked` — exactly the unrecoverable state Issue #227
     forbids for the model_wait recovery."""
     calls = []
-    monkeypatch.setattr(seam, "edit_issue",
-        lambda *args, **kwargs: calls.append(kwargs),
+    # Issue #2426: a delivery-label change is ONE whole-set replacement.
+    monkeypatch.setattr(
+        seam, "set_issue_labels",
+        lambda number, *, repo, labels: calls.append(
+            ("labels", list(labels))),
     )
     monkeypatch.setattr(seam, "freeze_base", lambda repo_dir, base_branch: "abc123def456",
     )
@@ -996,8 +1008,9 @@ def test_process_issue_model_wait_dead_comment_failure_stays_in_progress(
     # replacement (Issue #2369) is the ONLY label write — the failed
     # recovery comment must NOT fall through to the generic handler's
     # terminal `ai-blocked` (Issue #227).
-    edits = [entry for entry in calls if isinstance(entry, dict)]
-    assert edits == []
+    assert [entry for entry in calls if entry[0] == "labels"] == [
+        ("labels", ["ai-in-progress"]),
+    ]
     # No terminal failure comment was posted.
     comment_bodies = [
         entry[2]["body"] for entry in calls
@@ -1022,8 +1035,11 @@ def test_process_issue_idle_recovery_failure_marks_blocked(
     's `finally` (Issue #239: the handled failure never re-raises to
     crash the service). No special handling, no fallback."""
     calls = []
-    monkeypatch.setattr(seam, "edit_issue",
-        lambda *args, **kwargs: calls.append(kwargs),
+    # Issue #2426: a delivery-label change is ONE whole-set replacement.
+    monkeypatch.setattr(
+        seam, "set_issue_labels",
+        lambda number, *, repo, labels: calls.append(
+            ("labels", list(labels))),
     )
     monkeypatch.setattr(seam, "freeze_base", lambda repo_dir, base_branch: "abc123def456",
     )
@@ -1060,12 +1076,11 @@ def test_process_issue_idle_recovery_failure_marks_blocked(
         config_domain.RunnerConfig(repo_dir=tmp_path, prompt=tmp_path / "prompt.md", base_branch="main"),
         "xqliu/orbi",
     ).kind == "failed"
-    edits = [entry for entry in calls if isinstance(entry, dict)]
-    # Issue #2369: the claim's whole-set replacement is not an
-    # `edit_issue`; the terminal removes first and adds ai-blocked last.
-    assert edits == [
-        {"repo": "xqliu/orbi", "remove": "ai-ready"},
-        {"repo": "xqliu/orbi", "add": "ai-blocked"},
+    # The claim and the blocked terminal are ONE whole-set replacement
+    # each: the Issue ends ai-blocked alone (Issues #2369, #2426).
+    assert [entry for entry in calls if entry[0] == "labels"] == [
+        ("labels", ["ai-in-progress"]),
+        ("labels", ["ai-blocked"]),
     ]
     comment_bodies = [
         entry[2]["body"] for entry in calls
@@ -1097,8 +1112,9 @@ def test_process_issue_ends_cleanly_when_reporting_fails(monkeypatch, tmp_path, 
     degraded, not fatal."""
     edit_calls = []
 
-    monkeypatch.setattr(seam, "edit_issue",
-        lambda *args, **kwargs: edit_calls.append(kwargs),
+    monkeypatch.setattr(
+        seam, "set_issue_labels",
+        lambda number, *, repo, labels: edit_calls.append(list(labels)),
     )
     monkeypatch.setattr(seam, "freeze_base", lambda repo_dir, base_branch: "abc123def456")
     monkeypatch.setattr(seam, "new_run_id", lambda: "a1b2c3d4")
@@ -1146,9 +1162,6 @@ def test_process_issue_ends_cleanly_when_reporting_fails(monkeypatch, tmp_path, 
     # claim label, not the opened-PR label (Issue #79: the scene
     # comment is the first failure after the transition; its test in
     # test_progress_wiring pins the other branch).
-    # Issue #2369: the claim is a whole-set replacement (not an
-    # `edit_issue`); the terminal removes first and adds ai-blocked last.
-    assert edit_calls == [
-        {"repo": "xqliu/orbi-backlog", "remove": "ai-ready"},
-        {"repo": "xqliu/orbi-backlog", "add": "ai-blocked"},
-    ]
+    # Issue #2369/#2426: the claim and the terminal are one whole-set
+    # replacement each, so the Issue ends ai-blocked alone.
+    assert edit_calls == [["ai-in-progress"], ["ai-blocked"]]

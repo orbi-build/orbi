@@ -384,11 +384,9 @@ def test_fix_needed_decision_and_comment_text_are_golden(
             make_resume_config(tmp_path), "owner/repo",
         )
 
-    # The decision: recoverable -> ai-fix-needed, ai-pr-opened removed.
-    assert captured["edits"] == [
-        ((9,), {"repo": "owner/repo", "add": "ai-fix-needed",
-                "remove": "ai-pr-opened"}),
-    ]
+    # The decision: recoverable -> ai-fix-needed, ai-pr-opened removed, in
+    # ONE whole-set replacement (Issue #2426).
+    assert captured["edits"] == [["ai-fix-needed"]]
     # The text: the Issue comment and its PR copy, exactly.
     issue_body = captured["comments"][0][1]["body"]
     assert issue_body == EXPECTED_ISSUE_BODY

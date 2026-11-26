@@ -288,8 +288,9 @@ def test_delivery_step_recoverable_review_failure_stays_fix_needed(
     edits = []
     issue_comments = []
     pr_comments = []
-    monkeypatch.setattr(seam, "edit_issue",
-        lambda *args, **kwargs: edits.append((args, kwargs)),
+    monkeypatch.setattr(
+        seam, "set_issue_labels",
+        lambda number, *, repo, labels: edits.append(list(labels)),
     )
     monkeypatch.setattr(seam, "comment_issue",
         lambda *args, **kwargs: issue_comments.append((args, kwargs)),
@@ -315,10 +316,7 @@ def test_delivery_step_recoverable_review_failure_stays_fix_needed(
     assert len(reviews) == 1
     # The Issue is marked ai-fix-needed (removing ai-pr-opened) — and
     # never ai-blocked.
-    assert edits == [
-        ((39,), {"repo": "owner/repo", "add": "ai-fix-needed",
-                 "remove": "ai-pr-opened"}),
-    ]
+    assert edits == [["ai-fix-needed"]]
     # The failure comment carries the run marker, the PR, the concrete
     # error and the full scene (run_id, branch, worktree, session,
     # phase, last activity).
@@ -388,8 +386,9 @@ def test_delivery_step_recoverable_failure_while_fix_needed_keeps_label(
         monkeypatch, labels=("ai-fix-needed",), progress_comments=[],
     )
     edits = []
-    monkeypatch.setattr(seam, "edit_issue",
-        lambda *args, **kwargs: edits.append((args, kwargs)),
+    monkeypatch.setattr(
+        seam, "set_issue_labels",
+        lambda number, *, repo, labels: edits.append(list(labels)),
     )
     monkeypatch.setattr(seam, "comment_issue", lambda *a, **k: None)
     monkeypatch.setattr(failure_report, "comment_pr", lambda *a, **k: None)
@@ -400,21 +399,11 @@ def test_delivery_step_recoverable_failure_while_fix_needed_keeps_label(
     monkeypatch.setattr(review_merge, "review_and_merge_if_clean", failing_review)
     bind_run_id(RUN_ID)
     runner.delivery_step(PR_URL, _issue(), _config(tmp_path), "owner/repo")
-    # Issue #2369: the round-start repair is ONE whole-set replacement
-    # ending on ai-pr-opened; the failed review then sets ai-fix-needed
-    # again — the same end state as before.
-    label_writes = [
-        command for command in api_calls
-        if command[2:4] == ["--method", "PUT"]
-        and command[4].endswith("/labels")
-    ]
-    assert label_writes == [[
-        "gh", "api", "--method", "PUT", "repos/owner/repo/issues/39/labels",
-        "-f", "labels[]=ai-pr-opened", "--include",
-    ]]
-    assert edits == [
-        ((39,), {"repo": "owner/repo", "add": "ai-fix-needed"}),
-    ]
+    # The round-start repair is ONE whole-set replacement ending on
+    # ai-pr-opened (Issues #2369, #2426); the recoverable failure's
+    # fix-needed patch then changes nothing, because the Issue it reads
+    # still carries ai-fix-needed — the label the next tick scans for.
+    assert edits == [["ai-pr-opened"]]
 
 
 def _write_session(worktree_dir, session_id="sess-1"):
@@ -473,8 +462,9 @@ def test_delivery_step_recoverable_failure_scene_snapshot_failure_is_logged(
     make_wait_failure_fake(monkeypatch)
     issue_comments = []
     edits = []
-    monkeypatch.setattr(seam, "edit_issue",
-        lambda *args, **kwargs: edits.append((args, kwargs)),
+    monkeypatch.setattr(
+        seam, "set_issue_labels",
+        lambda number, *, repo, labels: edits.append(list(labels)),
     )
     monkeypatch.setattr(seam, "comment_issue",
         lambda *args, **kwargs: issue_comments.append((args, kwargs)),
@@ -496,10 +486,7 @@ def test_delivery_step_recoverable_failure_scene_snapshot_failure_is_logged(
     body = issue_comments[0][1]["body"]
     assert "Orbi needs a fix:" in body
     assert "session=-" in body
-    assert edits == [
-        ((39,), {"repo": "owner/repo", "add": "ai-fix-needed",
-                 "remove": "ai-pr-opened"}),
-    ]
+    assert edits == [["ai-fix-needed"]]
 
 
 # ------------------------------------------- delivery_step: unrecoverable
@@ -519,8 +506,9 @@ def test_delivery_step_recoverable_failure_without_bound_run_id(
     api_calls = make_wait_failure_fake(monkeypatch)
     issue_comments = []
     edits = []
-    monkeypatch.setattr(seam, "edit_issue",
-        lambda *args, **kwargs: edits.append((args, kwargs)),
+    monkeypatch.setattr(
+        seam, "set_issue_labels",
+        lambda number, *, repo, labels: edits.append(list(labels)),
     )
     monkeypatch.setattr(seam, "comment_issue",
         lambda *args, **kwargs: issue_comments.append((args, kwargs)),
@@ -534,10 +522,7 @@ def test_delivery_step_recoverable_failure_without_bound_run_id(
     # The autouse fixture resets the run id to None; do not re-bind it.
     assert runner.current_run_id() is None
     runner.delivery_step(PR_URL, _issue(), _config(tmp_path), "owner/repo")
-    assert edits == [
-        ((39,), {"repo": "owner/repo", "add": "ai-fix-needed",
-                 "remove": "ai-pr-opened"}),
-    ]
+    assert edits == [["ai-fix-needed"]]
     body = issue_comments[0][1]["body"]
     assert "Orbi needs a fix:" in body
     assert "<!-- orbi:run=" not in body
@@ -559,8 +544,9 @@ def test_delivery_step_unrecoverable_failure_marks_blocked_with_reason(
     api_calls = make_wait_failure_fake(monkeypatch)
     edits = []
     issue_comments = []
-    monkeypatch.setattr(seam, "edit_issue",
-        lambda *args, **kwargs: edits.append((args, kwargs)),
+    monkeypatch.setattr(
+        seam, "set_issue_labels",
+        lambda number, *, repo, labels: edits.append(list(labels)),
     )
     monkeypatch.setattr(seam, "comment_issue",
         lambda *args, **kwargs: issue_comments.append((args, kwargs)),
@@ -581,10 +567,7 @@ def test_delivery_step_unrecoverable_failure_marks_blocked_with_reason(
     runner.delivery_step(PR_URL, _issue(), _config(tmp_path), "owner/repo")
 
     # The terminal state is ai-blocked ALONE ...
-    assert edits == [
-        ((39,), {"repo": "owner/repo", "remove": "ai-pr-opened"}),
-        ((39,), {"repo": "owner/repo", "add": "ai-blocked"}),
-    ]
+    assert edits == [["ai-blocked"]]
     # ... with a failure comment that carries the run marker, the PR
     # and the EXPLICIT reason why automatic recovery is impossible.
     body = issue_comments[0][1]["body"]
@@ -668,8 +651,9 @@ def test_delivery_step_base_branch_mismatch_marks_blocked_with_reason(
     )
     edits = []
     issue_comments = []
-    monkeypatch.setattr(seam, "edit_issue",
-        lambda *args, **kwargs: edits.append((args, kwargs)),
+    monkeypatch.setattr(
+        seam, "set_issue_labels",
+        lambda number, *, repo, labels: edits.append(list(labels)),
     )
     monkeypatch.setattr(seam, "comment_issue",
         lambda *args, **kwargs: issue_comments.append((args, kwargs)),
@@ -688,10 +672,7 @@ def test_delivery_step_base_branch_mismatch_marks_blocked_with_reason(
     )
     # No review was started (the mismatch is terminal before it).
     assert reviews == []
-    assert edits == [
-        ((39,), {"repo": "owner/repo", "remove": "ai-pr-opened"}),
-        ((39,), {"repo": "owner/repo", "add": "ai-blocked"}),
-    ]
+    assert edits == [["ai-blocked"]]
     body = issue_comments[0][1]["body"]
     assert "Orbi failed:" in body
     assert "base_branch=develop" in body
@@ -744,10 +725,7 @@ def test_verify_resumed_pr_diverged_pr_head_stays_fix_needed(
         )
     # The Issue is marked ai-fix-needed (removing ai-pr-opened) — and
     # never ai-blocked: the branch, worktree and PR are preserved.
-    assert captured["edits"] == [
-        ((9,), {"repo": "owner/repo", "add": "ai-fix-needed",
-                "remove": "ai-pr-opened"}),
-    ]
+    assert captured["edits"] == [["ai-fix-needed"]]
     # The failure comment carries the run marker, the PR, the branch,
     # the worktree and the concrete error ...
     assert len(captured["comments"]) == 1
@@ -879,10 +857,7 @@ def test_verify_resumed_pr_unrecoverable_failure_marks_blocked_with_reason(
             make_resume_scene(), make_resume_issue(),
             make_resume_config(tmp_path), "owner/repo",
         )
-    assert captured["edits"] == [
-        ((9,), {"repo": "owner/repo", "remove": "ai-pr-opened"}),
-        ((9,), {"repo": "owner/repo", "add": "ai-blocked"}),
-    ]
+    assert captured["edits"] == [["ai-blocked"]]
     body = captured["comments"][0][1]["body"]
     assert "Orbi failed:" in body
     assert "not authorized" in body
@@ -995,10 +970,7 @@ def test_verify_resumed_pr_unrecoverable_failure_removes_leftover_fix_needed_lab
     # The blocked patch clears every delivery-state label that is
     # present — here only `ai-fix-needed` (the delivery was awaiting the
     # next review session) — removal first, terminal add last (#2357).
-    assert captured["edits"] == [
-        ((9,), {"repo": "owner/repo", "remove": "ai-fix-needed"}),
-        ((9,), {"repo": "owner/repo", "add": "ai-blocked"}),
-    ]
+    assert captured["edits"] == [["ai-blocked"]]
 
 
 def _pr_scene_comment(pr_number, round_no, *, run_id, opened=False):
@@ -1104,8 +1076,9 @@ def test_block_scene_failure_states_why_not_auto_recoverable(
     ]
     edits = []
     posted = []
-    monkeypatch.setattr(seam, "edit_issue",
-        lambda *args, **kwargs: edits.append((args, kwargs)),
+    monkeypatch.setattr(
+        seam, "set_issue_labels",
+        lambda number, *, repo, labels: edits.append(list(labels)),
     )
     monkeypatch.setattr(seam, "comment_issue",
         lambda *args, **kwargs: posted.append(kwargs["body"]),
@@ -1119,11 +1092,7 @@ def test_block_scene_failure_states_why_not_auto_recoverable(
     )
     # Issue #2357: every removal is written before the terminal add, so
     # the timeline ends on ai-blocked alone.
-    assert edits == [
-        ((39,), {"repo": "owner/repo", "remove": "ai-fix-needed"}),
-        ((39,), {"repo": "owner/repo", "remove": "ai-ready"}),
-        ((39,), {"repo": "owner/repo", "add": "ai-blocked"}),
-    ]
+    assert edits == [["ai-blocked"]]
     assert len(posted) == 1
     body = posted[0]
     assert "Orbi failed:" in body
@@ -1145,8 +1114,9 @@ def test_block_scene_failure_clears_the_repositorys_dispatch_label(
     `ai-blocked` ALONE, not `ai-blocked` + `ship`."""
     issue = {"number": 39, "title": "task", "body": ""}
     edits = []
-    monkeypatch.setattr(seam, "edit_issue",
-        lambda *args, **kwargs: edits.append((args, kwargs)),
+    monkeypatch.setattr(
+        seam, "set_issue_labels",
+        lambda number, *, repo, labels: edits.append(list(labels)),
     )
     monkeypatch.setattr(seam, "comment_issue", lambda *args, **kwargs: None)
     _answer_blocked_labels(monkeypatch, ["ai-fix-needed", "ship"])
@@ -1155,11 +1125,7 @@ def test_block_scene_failure_clears_the_repositorys_dispatch_label(
         "owner/repo", [{"body": "public comment", "authorAssociation": "NONE"}],
         language_code="en", ready_label="ship",
     )
-    assert edits == [
-        ((39,), {"repo": "owner/repo", "remove": "ai-fix-needed"}),
-        ((39,), {"repo": "owner/repo", "remove": "ship"}),
-        ((39,), {"repo": "owner/repo", "add": "ai-blocked"}),
-    ]
+    assert edits == [["ai-blocked"]]
 
 
 # ------------------------------------------------------------------ review rounds
@@ -1591,9 +1557,13 @@ def make_report_fake(monkeypatch, *, history=None, labels=("ai-fix-needed",),
     monkeypatch.setattr(failure_report, "comment_pr",
         lambda number, *, repo, body:
             captured["pr_comments"].append(body))
-    monkeypatch.setattr(seam, "edit_issue",
-        lambda number, *, repo, add=None, remove=None:
-            captured["edits"].append((add, remove)))
+    # Issue #2426: a delivery-label change is ONE whole-set replacement,
+    # so the capture is the set the transition wrote.
+    monkeypatch.setattr(
+        seam, "set_issue_labels",
+        lambda number, *, repo, labels: captured["edits"].append(
+            list(labels)),
+    )
     return captured
 
 
@@ -1690,12 +1660,10 @@ def test_report_failure_three_identical_ticks_escalate_the_dead_loop(
     assert "dead loop" in captured["comments"][1]
     assert "Orbi failed:" in captured["comments"][1]
     # Recoverable ticks patch ai-fix-needed; the third escalates.
-    assert captured["edits"] == [
-        ("ai-fix-needed", None),
-        ("ai-fix-needed", None),
-        (None, "ai-fix-needed"),
-        ("ai-blocked", None),
-    ]
+    # Issue #2426: the two recoverable ticks change nothing (the Issue
+    # already carries ai-fix-needed, so no write lands); the third
+    # escalates in ONE replacement ending on ai-blocked alone.
+    assert captured["edits"] == [["ai-blocked"]]
     # The PR thread only ever saw the first recoverable copy; terminal
     # comments are Issue-only.
     assert len(captured["pr_comments"]) == 1
@@ -1720,9 +1688,7 @@ def test_report_failure_third_identical_failure_blocks_the_dead_loop(
     )
     caplog.set_level("INFO")
     _report(exc)
-    assert captured["edits"] == [
-        (None, "ai-fix-needed"), ("ai-blocked", None),
-    ]
+    assert captured["edits"] == [["ai-blocked"]]
     assert len(captured["comments"]) == 1
     body = captured["comments"][0]
     assert "3 consecutive times" in body
@@ -1749,9 +1715,7 @@ def test_report_failure_balance_stop_keeps_its_own_reason_when_escalated(
     )
     _report(exc)
 
-    assert captured["edits"] == [
-        (None, "ai-fix-needed"), ("ai-blocked", None),
-    ]
+    assert captured["edits"] == [["ai-blocked"]]
     body = captured["comments"][0]
     assert failure.parse(body) == failure.Failure(
         reason_code="provider_balance", action_code="top_up_balance",
@@ -1812,7 +1776,8 @@ def test_report_failure_scene_block_breaks_the_streak(
     captured = make_report_fake(monkeypatch, history=history)
     _report(exc)
     # The streak reset: still recoverable (no escalation) ...
-    assert captured["edits"] == [("ai-fix-needed", None)]
+    # The Issue already carries ai-fix-needed: the change is a no-op.
+    assert captured["edits"] == []
     # ... and the dedup holds: the identical failure was already
     # reported, the counter bumps in place instead of a new comment.
     assert captured["comments"] == []
@@ -1873,9 +1838,7 @@ def test_human_decision_failure_is_terminal_with_decision_details(
         reason="The review requires a human decision.", diagnosis=decision, language_code="en",
     )
     assert outcome == "blocked"
-    assert captured["edits"] == [
-        (None, "ai-pr-opened"), ("ai-blocked", None),
-    ]
+    assert captured["edits"] == [["ai-blocked"]]
     body = captured["comments"][0]
     assert body.index(action) < body.index("The review requires")
     assert body.index("The review requires") < body.index(

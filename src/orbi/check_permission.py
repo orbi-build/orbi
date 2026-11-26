@@ -54,7 +54,7 @@ from orbi.comment_kind import (
 from orbi.comment_rest_id import rest_comment_id
 from orbi import delivery_labels
 from orbi.github import (
-    edit_issue, issue_labels, pr_number, run_gh_read_command,
+    issue_labels, pr_number, run_gh_read_command, swap_issue_labels,
     update_issue_comment,
 )
 from orbi.github_feedback import pr_delivery_rollup
@@ -267,7 +267,6 @@ def block(issue_number: int, repo: str, pr_url: str, *, run_id: str,
     )
     post_blocked_comment(
         issue_number, repo=repo, body=body,
-        current_labels=set(issue_labels(issue_number, repo)),
         language_code=language_code, ready_label=ready_label,
     )
     event(
@@ -419,8 +418,10 @@ def recover(repo: str) -> list[int]:
                 number, record.pr, repo,
             )
             continue
-        edit_issue(number, repo=repo, add=delivery_labels.FIX_NEEDED_LABEL,
-                   remove=delivery_labels.BLOCKED_LABEL)
+        # ONE whole-set write: the unblock cannot lose its add (#2426).
+        swap_issue_labels(
+            number, repo=repo, add=[delivery_labels.FIX_NEEDED_LABEL],
+            remove=[delivery_labels.BLOCKED_LABEL])
         _edit_state(repo, number, comment, record)
         event(
             "checks_permission_recovered", issue=number, pr=record.pr,

@@ -3,8 +3,7 @@ answer: True
 command ["gh", "pr", "view", "4", "--json", "state,mergeable,headRefOid,statusCheckRollup"]
 command ["git", "rev-parse", "HEAD"]
 command ["git", "rev-list", "--count", "m1^1..m1^2"]
-label {"remove": "ai-pr-opened", "repo": "owner/repo"}
-label {"add": "ai-merged", "repo": "owner/repo"}
+label ["ai-merged"]
 comment
   <!-- orbi:run=a1b2c3d4 -->
   <!-- orbi:comment=merged -->
@@ -46,7 +45,7 @@ comment
     **Fix:** 
   <!-- orbi:scene:v1 {"base_advance_round": 0, "base_branch": "main", "base_sha": "b1", "external": "", "pr_url": "u", "review_round": 1, "run_id": "a1b2c3d4", "schema": 1, "verdict_head_unknown_round": 0} -->
 command ["gh", "pr", "comment", "4", "--repo", "owner/repo", "--body", "<!-- orbi:run=a1b2c3d4 -->\n<!-- orbi:comment=review-round -->\nOrbi review round 1 for PR #4: 1 blocker(s), 0 major(s).\n**#4 Review task**\n\n### Findings\n\n- **Level:** Blocker\n  **Location:** a.py:1\n  **Note:** x\n  **Fix:** \n<!-- orbi:scene:v1 {\"base_advance_round\": 0, \"base_branch\": \"main\", \"base_sha\": \"b1\", \"external\": \"\", \"pr_url\": \"u\", \"review_round\": 1, \"run_id\": \"a1b2c3d4\", \"schema\": 1, \"verdict_head_unknown_round\": 0} -->\n\n<!-- runner=<fingerprint> -->"]
-label {"add": "ai-fix-needed", "remove": "ai-pr-opened", "repo": "owner/repo"}
+label ["ai-fix-needed"]
 merge_gate: not called
 journal:
   INFO review pr=4 round=1 verdict=findings blockers=1 majors=0
@@ -67,7 +66,7 @@ comment
   The next review session merges the latest origin/main into the branch in-session, resolves conflicts, and reruns the full test suite
   <!-- orbi:scene:v1 {"base_advance_round": 1, "base_branch": "main", "base_sha": "b1", "external": "", "pr_url": "u", "review_round": 0, "run_id": "a1b2c3d4", "schema": 1, "verdict_head_unknown_round": 0} -->
 command ["gh", "pr", "comment", "4", "--repo", "owner/repo", "--body", "<!-- orbi:run=a1b2c3d4 -->\n<!-- orbi:comment=failure -->\nOrbi base advance retry 1 for PR #4:\n**#4 Review task**\n\nMerge gate blocked: PR #4 head h1 is behind latest remote base origin/main (b2); absorb the latest base, rerun tests and review, then retry (run_id=a1b2c3d4)\n\nThe next review session merges the latest origin/main into the branch in-session, resolves conflicts, and reruns the full test suite\n<!-- orbi:scene:v1 {\"base_advance_round\": 1, \"base_branch\": \"main\", \"base_sha\": \"b1\", \"external\": \"\", \"pr_url\": \"u\", \"review_round\": 0, \"run_id\": \"a1b2c3d4\", \"schema\": 1, \"verdict_head_unknown_round\": 0} -->\n\n<!-- runner=<fingerprint> -->"]
-label {"add": "ai-fix-needed", "remove": "ai-pr-opened", "repo": "owner/repo"}
+label ["ai-fix-needed"]
 merge_gate: [{"base": "main", "head": "h1", "issue": 4, "language": "en", "pr": 4, "repo_dir": "<worktree>", "run_id": "a1b2c3d4"}]
 journal:
   INFO review pr=4 round=1 verdict=pass blockers=0 majors=0
@@ -76,7 +75,7 @@ journal:
 answer: False
 command ["gh", "pr", "view", "4", "--json", "state,mergeable,headRefOid,statusCheckRollup"]
 command ["git", "rev-parse", "HEAD"]
-label {"add": "ai-awaiting-merge", "remove": "ai-pr-opened", "repo": "owner/repo"}
+label ["ai-awaiting-merge"]
 comment
   <!-- orbi:run=a1b2c3d4 -->
   Orbi: PR #4 is delivered and waiting for a maintainer action.

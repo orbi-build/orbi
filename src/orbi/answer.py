@@ -78,7 +78,6 @@ from orbi.github import (
     comment_issue,
     edit_issue,
     issue_comments,
-    issue_labels,
     issue_view,
     open_pr_for_branch,
     pr_number,
@@ -835,7 +834,7 @@ def stop_for_fix_round(
     )
     apply_label_patch(
         number, repo=repo, event=EVENT_FIX_NEEDED,
-        current_labels=issue_labels(number, repo), ready_label=ready_label,
+        ready_label=ready_label,
     )
 
 

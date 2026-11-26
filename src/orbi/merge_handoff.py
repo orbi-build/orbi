@@ -174,7 +174,7 @@ def handle_merge_handoff(
         return False
     github.apply_label_patch(
         number, repo=repo, event=EVENT_AWAITING_MERGE,
-        current_labels=current_labels, ready_label=ready_label,
+        ready_label=ready_label,
     )
     github.comment_issue(
         number, repo=repo,

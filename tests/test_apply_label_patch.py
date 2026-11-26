@@ -1,11 +1,8 @@
-"""Direct unit tests for `github.apply_label_patch` (Issues #175, #1865).
+"""Direct unit tests for `github.apply_label_patch` (Issues #175, #1865, #2426).
 
 `apply_label_patch` computes the deterministic label patch via
-`delivery_labels.label_patch` and applies it through `edit_issue`. These
-tests cover the branches the delivery-flow tests do not reach: the no-op
-patch (nothing changes on the Issue), the add-only patch, the remove-only
-patch, the multi-remove patch (two delivery-state labels cleared by one
-terminal), the blocked terminal and the terminal fix-needed case.
+`delivery_labels.label_patch` and applies it as ONE whole-set replacement
+(GitHub's "Set labels for an issue") computed from the Issue's real labels.
 
 Issue #1865: the state lives in `FakeGh` and every assertion is the label
 set the Issue is left with — the observable result — instead of a captured
@@ -13,22 +10,31 @@ set the Issue is left with — the observable result — instead of a captured
 subprocess seam (`seam.run_command`), so the real adapter runs and the
 fake applies the labels the way GitHub does.
 
-Issue #2357: the terminal transitions (merged / blocked) must END on the
-new state label — every removal written before the terminal add — and put
-the already removed labels back when any write fails.
+Issue #2426 (the ticket's Outcome): every delivery-label change is
+all-or-nothing. A removal and an add sent as several writes — or as one
+`gh issue edit` carrying both flags — can apply one and fail the other,
+which stranded four deliveries during GitHub's 2026-11-25 incidents. So:
+
+- the change is ONE `PUT .../issues/{n}/labels` replacement;
+- after a failed write the Issue holds exactly the labels it had before
+  the change or exactly the labels the change intended;
+- non-delivery labels (`bug`, `p0`, a customer's own label) survive.
 """
 import subprocess
 
 import pytest
 
 import orbi.github as github
+from orbi import delivery_labels
 from orbi.delivery_labels import (
     BLOCKED_LABEL,
+    EVENT_AWAITING_MERGE,
     EVENT_BLOCKED,
     EVENT_CLAIM,
     EVENT_FIX_NEEDED,
     EVENT_MERGED,
     EVENT_PR_OPENED,
+    EVENT_REQUEUE,
     FIX_NEEDED_LABEL,
     IN_PROGRESS_LABEL,
     MERGED_LABEL,
@@ -45,9 +51,13 @@ REPO = "o/r"
 
 @pytest.fixture
 def fake_gh(monkeypatch):
-    """The one subprocess seam patched: every `gh` call is the fake."""
+    """The one subprocess seam patched: every `gh` call is the fake.
+
+    Retries sleep for real backoff seconds; the tests never do.
+    """
     fake = FakeGh(REPO)
     monkeypatch.setattr(seam, "run_command", fake)
+    monkeypatch.setattr(github.time, "sleep", lambda _seconds: None)
     return fake
 
 
@@ -56,13 +66,26 @@ def labels(fake_gh, number: int = NUMBER) -> set[str]:
     return set(github.issue_labels(number, REPO))
 
 
-def apply(fake_gh, event: str, number: int = NUMBER, **kwargs) -> None:
-    """Apply `event` to the Issue the fake holds, reading its labels the
-    way the caller does: one read, then one deterministic patch."""
-    github.apply_label_patch(
-        number, repo=REPO, event=event,
-        current_labels=github.issue_labels(number, REPO), **kwargs,
+def apply(fake_gh, event: str, number: int = NUMBER, **kwargs):
+    """Apply `event` to the Issue the fake holds; return nothing."""
+    return github.apply_label_patch(
+        number, repo=REPO, event=event, **kwargs,
     )
+
+
+def _label_replacements(fake_gh) -> list[list[str]]:
+    """The whole-set label writes the fake answered, in order."""
+    return [
+        command for command in fake_gh.commands
+        if command[0:4] == ["gh", "api", "--method", "PUT"]
+        and command[4].endswith("/labels")
+    ]
+
+
+def _label_edits(fake_gh) -> list[list[str]]:
+    """The single-label `gh issue edit` writes the fake answered."""
+    return [command for command in fake_gh.commands
+            if command[1] == "issue" and command[2] == "edit"]
 
 
 def test_apply_label_patch_no_op_patch_applies_nothing(fake_gh):
@@ -72,6 +95,7 @@ def test_apply_label_patch_no_op_patch_applies_nothing(fake_gh):
     fake_gh.add_issue(NUMBER, labels=(BLOCKED_LABEL,))
     apply(fake_gh, EVENT_BLOCKED)
     assert labels(fake_gh) == {BLOCKED_LABEL}
+    assert _label_replacements(fake_gh) == []
 
 
 def test_apply_label_patch_add_only_patch(fake_gh):
@@ -104,10 +128,7 @@ def test_apply_label_patch_remove_only_patch_removes_without_adding(
             [], [IN_PROGRESS_LABEL],
         ),
     )
-    github.apply_label_patch(
-        NUMBER, repo=REPO, event=EVENT_BLOCKED,
-        current_labels={IN_PROGRESS_LABEL},
-    )
+    apply(fake_gh, EVENT_BLOCKED)
     assert labels(fake_gh) == set()
 
 
@@ -140,11 +161,15 @@ def test_apply_label_patch_threads_the_resolved_queue_label(fake_gh):
 
 def test_apply_label_patch_multi_remove_patch_clears_every_state(fake_gh):
     """A blocked terminal on an Issue carrying two delivery-state labels
-    clears both (one `gh issue edit` per extra remove) and finishes on
-    `ai-blocked` alone."""
+    clears both in ONE write and finishes on `ai-blocked` alone."""
     fake_gh.add_issue(NUMBER, labels=(PR_OPENED_LABEL, FIX_NEEDED_LABEL))
     apply(fake_gh, EVENT_BLOCKED)
     assert labels(fake_gh) == {BLOCKED_LABEL}
+    assert _label_replacements(fake_gh) == [[
+        "gh", "api", "--method", "PUT",
+        f"repos/{REPO}/issues/{NUMBER}/labels",
+        "-f", f"labels[]={BLOCKED_LABEL}", "--include",
+    ]]
 
 
 def test_apply_label_patch_fix_needed_on_a_terminal_issue_applies_nothing(
@@ -159,127 +184,17 @@ def test_apply_label_patch_fix_needed_on_a_terminal_issue_applies_nothing(
     fake_gh.add_issue(NUMBER + 1, labels=(BLOCKED_LABEL, PR_OPENED_LABEL))
     apply(fake_gh, EVENT_FIX_NEEDED, number=NUMBER + 1)
     assert labels(fake_gh, NUMBER + 1) == {BLOCKED_LABEL, PR_OPENED_LABEL}
+    assert _label_replacements(fake_gh) == []
 
 
-
-def _label_edits(fake_gh) -> list[list[str]]:
-    """The label writes the fake answered, in order."""
-    return [command for command in fake_gh.commands
-            if command[1] == "issue" and command[2] == "edit"]
-
-
-def test_merged_terminal_removes_before_adding_the_new_state(fake_gh):
-    """Issue #2357: a merge ends the timeline on "added ai-merged".
-
-    Every removal is its own write before the terminal add, so GitHub's
-    unordered single-call handling can never leave a removal last."""
-    fake_gh.add_issue(NUMBER, labels=(READY_LABEL, PR_OPENED_LABEL))
-    apply(fake_gh, EVENT_MERGED)
-    writes = _label_edits(fake_gh)
-    assert [write[-2:] for write in writes] == [
-        ["--remove-label", PR_OPENED_LABEL],
-        ["--remove-label", READY_LABEL],
-        ["--add-label", MERGED_LABEL],
-    ]
-    # The terminal label is the last label written and ends alone.
-    assert writes[-1] == [
-        "gh", "issue", "edit", str(NUMBER), "--repo", REPO,
-        "--add-label", MERGED_LABEL,
-    ]
-    assert labels(fake_gh) == {MERGED_LABEL}
-
-
-def test_blocked_terminal_removes_before_adding_the_new_state(fake_gh):
-    """Issue #2357: a block ends the timeline on "added ai-blocked"."""
-    fake_gh.add_issue(NUMBER, labels=(PR_OPENED_LABEL, FIX_NEEDED_LABEL))
-    apply(fake_gh, EVENT_BLOCKED)
-    writes = _label_edits(fake_gh)
-    assert [write[-2:] for write in writes] == [
-        ["--remove-label", PR_OPENED_LABEL],
-        ["--remove-label", FIX_NEEDED_LABEL],
-        ["--add-label", BLOCKED_LABEL],
-    ]
-    assert labels(fake_gh) == {BLOCKED_LABEL}
-
-
-def test_failed_terminal_add_restores_the_labels_it_removed(fake_gh):
-    """Issue #2357: a failed terminal add puts the removed labels back,
-    so the Issue keeps its state label and the next tick recovers it."""
-    fake_gh.add_issue(NUMBER, labels=(READY_LABEL, PR_OPENED_LABEL))
-    fake_gh.fail_label_edit("add", MERGED_LABEL)
-    with pytest.raises(subprocess.CalledProcessError):
-        apply(fake_gh, EVENT_MERGED)
-    assert labels(fake_gh) == {READY_LABEL, PR_OPENED_LABEL}
-
-
-def test_synthetic_current_labels_are_not_restored_on_a_failed_add(
-        fake_gh,
-):
-    """Issue #2357: the release close-out passes a hard-coded superset
-    (ai-ready + ai-in-progress); only the labels actually on the Issue are
-    removed, so the restore never invents ai-ready."""
-    fake_gh.add_issue(NUMBER, labels=(IN_PROGRESS_LABEL,))
-    fake_gh.fail_label_edit("add", MERGED_LABEL)
-    with pytest.raises(subprocess.CalledProcessError):
-        github.apply_label_patch(
-            NUMBER, repo=REPO, event=EVENT_MERGED,
-            current_labels={READY_LABEL, IN_PROGRESS_LABEL},
-        )
-    assert labels(fake_gh) == {IN_PROGRESS_LABEL}
-    assert READY_LABEL not in labels(fake_gh)
-
-
-def test_failed_second_removal_restores_the_first_removed_label(fake_gh):
-    """Issue #2357: when the second removal fails, the first removed
-    label is back on the Issue and the terminal label is not added."""
-    fake_gh.add_issue(NUMBER, labels=(PR_OPENED_LABEL, FIX_NEEDED_LABEL))
-    fake_gh.fail_label_edit("remove", FIX_NEEDED_LABEL)
-    with pytest.raises(subprocess.CalledProcessError):
-        apply(fake_gh, EVENT_BLOCKED)
-    # The first removed label is back; the failed removal and the
-    # terminal add never landed.
-    assert labels(fake_gh) == {PR_OPENED_LABEL, FIX_NEEDED_LABEL}
-    assert BLOCKED_LABEL not in labels(fake_gh)
-
-
-
-def test_double_failure_leaves_the_issue_without_a_state_label(
-        fake_gh, caplog,
-):
-    """Issue #2357: when putting the removed labels back fails too, the
-    Issue is left without a state label (the accepted double failure) and
-    the original write failure still propagates."""
-    fake_gh.add_issue(NUMBER, labels=(PR_OPENED_LABEL,))
-    fake_gh.fail_label_edit("add", MERGED_LABEL)
-    fake_gh.fail_label_edit("add", PR_OPENED_LABEL)
-    with caplog.at_level("ERROR"):
-        with pytest.raises(subprocess.CalledProcessError):
-            apply(fake_gh, EVENT_MERGED)
-    assert labels(fake_gh) == set()
-    assert "label_restore_failed" in caplog.text
-
-
-def _label_replacements(fake_gh) -> list[list[str]]:
-    """The whole-set label writes the fake answered, in order."""
-    return [
-        command for command in fake_gh.commands
-        if command[0:4] == ["gh", "api", "--method", "PUT"]
-        and command[4].endswith("/labels")
-    ]
-
-
-def test_claim_replacement_keeps_a_label_missing_from_the_snapshot(fake_gh):
-    """Issue #2369 acceptance 1: the claim reads the Issue's real labels
-    and replaces the WHOLE set once. A label the caller's snapshot does
-    not carry stays on the Issue; the queue and stale fix-needed labels
-    go; `ai-in-progress` comes."""
+def test_the_whole_set_comes_from_the_issue_not_the_callers_snapshot(fake_gh):
+    """Issue #2369 acceptance 1: the change reads the Issue's real labels,
+    so a label the caller does not know about survives and a stale delivery
+    state the caller does know about still goes."""
     fake_gh.add_issue(
         NUMBER, labels=("bug", READY_LABEL, FIX_NEEDED_LABEL),
     )
-    github.apply_label_patch(
-        NUMBER, repo=REPO, event=EVENT_CLAIM,
-        current_labels={READY_LABEL, FIX_NEEDED_LABEL},
-    )
+    apply(fake_gh, EVENT_CLAIM)
     assert labels(fake_gh) == {"bug", IN_PROGRESS_LABEL}
     assert _label_replacements(fake_gh) == [[
         "gh", "api", "--method", "PUT",
@@ -299,11 +214,113 @@ def test_pr_opened_replacement_ends_on_the_new_state_alone(fake_gh):
     assert len(_label_replacements(fake_gh)) == 1
 
 
-def test_failed_replacement_leaves_the_labels_as_they_were(fake_gh):
+# --- Issue #2426 acceptance 1: all-or-nothing ------------------------------
+#
+# One table of (event, labels before the change): each row is a real
+# delivery transition whose patch adds and removes at least one label, and
+# every row carries non-delivery labels (`bug`, `p0`, a customer's own
+# label) that must survive whatever GitHub does with the write.
+
+TRANSITIONS = [
+    pytest.param(
+        EVENT_CLAIM, (READY_LABEL, "bug", "p0"), id="claim",
+    ),
+    pytest.param(
+        EVENT_PR_OPENED, (IN_PROGRESS_LABEL, "bug", "customer"), id="pr-opened",
+    ),
+    pytest.param(
+        EVENT_FIX_NEEDED, (PR_OPENED_LABEL, "bug", "p0"), id="fix-needed",
+    ),
+    pytest.param(
+        EVENT_BLOCKED, (PR_OPENED_LABEL, FIX_NEEDED_LABEL, "bug", "p0"),
+        id="blocked",
+    ),
+    pytest.param(
+        EVENT_MERGED, (PR_OPENED_LABEL, "bug", "p0"), id="merged",
+    ),
+    pytest.param(
+        EVENT_REQUEUE, (IN_PROGRESS_LABEL, "bug", "p0"), id="requeue",
+    ),
+    pytest.param(
+        EVENT_AWAITING_MERGE, (FIX_NEEDED_LABEL, "bug"), id="awaiting-merge",
+    ),
+]
+
+
+def _intended(event: str, before) -> set[str]:
+    """The labels the engine's ONE transition decision intends."""
+    to_add, to_remove = delivery_labels.label_patch(event, set(before))
+    return (set(before) - set(to_remove)) | set(to_add)
+
+
+@pytest.mark.parametrize("event, before", TRANSITIONS)
+def test_a_failed_change_leaves_either_the_before_or_the_intended_labels(
+        fake_gh, event, before,
+):
+    """Acceptance 1: GitHub fails the change. The Issue ends with EXACTLY
+    the labels it had (the write never landed) and a single whole-set
+    request carried the change — never a removal without its add."""
+    fake_gh.add_issue(NUMBER, labels=before)
+    fake_gh.fail_label_replace(status=502)
+    with pytest.raises(subprocess.CalledProcessError):
+        apply(fake_gh, event)
+    assert labels(fake_gh) == set(before)
+    writes = _label_replacements(fake_gh)
+    assert writes and all(
+        command[4] == f"repos/{REPO}/issues/{NUMBER}/labels"
+        for command in writes
+    )
+    assert _label_edits(fake_gh) == []
+
+
+@pytest.mark.parametrize("event, before", TRANSITIONS)
+def test_a_change_that_reports_an_error_after_applying_is_done(
+        fake_gh, caplog, event, before,
+):
+    """Acceptance 2: the write fails but GitHub applied it. The read after
+    the failure shows the intended labels, so the runner treats the change
+    as done — ONE write, no retry write, no compensating write."""
+    fake_gh.add_issue(NUMBER, labels=before)
+    fake_gh.fail_label_replace(status=502, applied=True)
+    with caplog.at_level("WARNING"):
+        apply(fake_gh, event)
+    assert labels(fake_gh) == _intended(event, before)
+    assert len(_label_replacements(fake_gh)) == 1
+    assert _label_edits(fake_gh) == []
+    assert "already applied" in caplog.text
+
+
+# --- the unblock primitive (Issue #2426) ---------------------------------
+
+
+def test_swap_issue_labels_keeps_every_other_label(fake_gh):
+    """The recovered-delivery unblock: `ai-blocked` out, `ai-fix-needed`
+    in, ONE write, and every non-delivery label kept."""
+    fake_gh.add_issue(NUMBER, labels=(BLOCKED_LABEL, "bug", "p0"))
+    applied = github.swap_issue_labels(
+        NUMBER, repo=REPO, add=[FIX_NEEDED_LABEL], remove=[BLOCKED_LABEL],
+    )
+    assert applied == ["bug", "p0", FIX_NEEDED_LABEL]
+    assert labels(fake_gh) == {"bug", "p0", FIX_NEEDED_LABEL}
+    assert len(_label_replacements(fake_gh)) == 1
+
+
+def test_swap_issue_labels_writes_nothing_when_the_set_is_unchanged(fake_gh):
+    """A swap that changes no label writes no label: the Issue already
+    carries the state the transition wants."""
+    fake_gh.add_issue(NUMBER, labels=("bug", FIX_NEEDED_LABEL))
+    applied = github.swap_issue_labels(
+        NUMBER, repo=REPO, add=[FIX_NEEDED_LABEL], remove=[BLOCKED_LABEL],
+    )
+    assert applied == ["bug", FIX_NEEDED_LABEL]
+    assert _label_replacements(fake_gh) == []
+
+
+def test_a_failed_replacement_leaves_the_labels_as_they_were(fake_gh):
     """Issue #2369 acceptance 3: the replacement is ONE write, so a
     failed one changes nothing and the step fails as today."""
     fake_gh.add_issue(NUMBER, labels=(READY_LABEL, "bug"))
-    fake_gh.fail_label_replace()
+    fake_gh.fail_label_replace(status=403)
     with pytest.raises(subprocess.CalledProcessError):
         apply(fake_gh, EVENT_CLAIM)
     assert labels(fake_gh) == {READY_LABEL, "bug"}

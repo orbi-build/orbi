@@ -24,7 +24,7 @@ from collections.abc import Callable, Sequence
 from pathlib import Path
 from urllib.parse import quote
 
-from orbi import checks, gh_response, merge_gate_reads, notify, terminal_labels
+from orbi import checks, gh_response, merge_gate_reads, notify
 from orbi.delivery_labels import label_name_set, label_patch
 from orbi import delivery_labels
 from orbi.journal import LOGGER, event, run_command, single_line
@@ -604,15 +604,24 @@ def edit_issue(number: int, *, repo: str, add: str | None = None,
     run_gh_write_command(command)
 
 
-def set_issue_labels(number: int, *, repo: str, labels: list[str]) -> None:
-    """Replace an Issue's WHOLE label set in one write (Issue #2369).
+def set_issue_labels(number: int, *, repo: str,
+                     labels: list[str]) -> list[str]:
+    """Replace an Issue's WHOLE label set in one write (Issues #2369, #2426).
 
     GitHub's documented "Set labels for an issue"
     (`PUT /repos/{owner}/{repo}/issues/{issue_number}/labels`,
     https://docs.github.com/en/rest/issues/labels#set-labels-for-an-issue)
-    applies the removals before the additions in the timeline, and it is
-    ONE write — the claim window `claim_race` guards does not grow. gh's
+    "Removes any previous labels and sets the new labels" — the removals
+    come first, so the timeline ends on the new state, and it is ONE
+    request: GitHub cannot apply the removal and lose the addition. gh's
     documented array form is repeated `-f labels[]=<name>`.
+
+    A response lost after GitHub executed the request is settled the only
+    way it can be: the read after the failure decides (Issue #2426). When
+    the Issue holds the intended set the change is done — no second write,
+    no compensating write — and the labels the write produced are
+    returned. When it does not, the write's own error propagates and the
+    Issue is exactly as it was before.
     """
     command = [
         "gh", "api", "--method", "PUT",
@@ -620,61 +629,68 @@ def set_issue_labels(number: int, *, repo: str, labels: list[str]) -> None:
     ]
     for label in labels:
         command += ["-f", f"labels[]={label}"]
-    run_gh_write_command(command)
+    wanted = set(labels)
+    run_gh_write_command(
+        command,
+        already_applied=lambda: set(issue_labels(number, repo=repo)) == wanted,
+    )
+    return labels
+
+
+def _replace_labels(number: int, *, repo: str, current: list[str],
+                    add: Sequence[str] = (),
+                    remove: Sequence[str] = ()) -> list[str]:
+    """Replace `current` with `add` in and `remove` out, in ONE write.
+
+    `current` is the Issue's own read: it is both the input of the change
+    and the set every label that is not being swapped out (`bug`, `p0`,
+    a customer's own label) is carried over from, so a label a caller only
+    believes is there is never written back. Returns the set it now holds.
+    """
+    dropped = set(remove)
+    whole = [label for label in current if label not in dropped]
+    whole += [label for label in add if label not in whole]
+    if whole == current:
+        return current
+    return set_issue_labels(number, repo=repo, labels=whole)
+
+
+def swap_issue_labels(number: int, *, repo: str,
+                       add: Sequence[str] = (),
+                       remove: Sequence[str] = ()) -> list[str]:
+    """Add and remove labels in ONE whole-set write (Issue #2426)."""
+    return _replace_labels(
+        number, repo=repo, current=issue_labels(number, repo=repo),
+        add=add, remove=remove,
+    )
 
 
 def apply_label_patch(number: int, *, repo: str, event: str,
-                      current_labels,
-                      ready_label: str | None = None) -> None:
+                      ready_label: str | None = None) -> list[str] | None:
     """Compute the deterministic label patch for `event` and apply it.
 
-    `current_labels` (read once by the caller) and `ready_label` (the
-    resolved claim label, Issue #1775) feed `delivery_labels.label_patch`,
-    the one transition decision. A TERMINAL patch (merged / blocked)
-    removes every old state label first and adds the terminal label LAST,
-    so the timeline ends on the new state (Issue #2357); a failed write
-    restores what it removed. The claim and PR-opened transitions read the
-    Issue's real labels once and replace the whole set in ONE write
-    (Issue #2369), so the timeline ends on the new state label there too
-    and every non-state label survives. Other events keep the pre-#2357
-    writes. A no-op patch applies nothing; `notify.patch_applied`
-    (Issues #1673, #2287) sends an ordinary handoff's message, never a
-    stop's.
+    `ready_label` (the resolved claim label, Issue #1775) and the Issue's
+    real labels feed `delivery_labels.label_patch`, the one transition
+    decision; the labels are read here because a caller's snapshot
+    predates the write and the write replaces the WHOLE set. Every event
+    lands as that one replacement (Issue #2426): a delivery-label change is
+    all-or-nothing, so after any failure the Issue holds exactly the labels
+    it had or exactly the labels the transition intended — never a removal
+    without its add. A no-op patch applies nothing and returns None;
+    `notify.patch_applied` (Issues #1673, #2287) sends an ordinary
+    handoff's message, never a stop's.
     """
     ready_label = delivery_labels.queue_label(ready_label)
-    if event in (delivery_labels.EVENT_CLAIM,
-                 delivery_labels.EVENT_PR_OPENED):
-        # The caller's snapshot predates the write: the set to write is
-        # computed from a fresh read, and the whole set — every label not
-        # being swapped out included — goes back in that one replacement.
-        current_labels = issue_labels(number, repo=repo)
-        to_add, to_remove = label_patch(event, current_labels, ready_label)
-        removed = set(to_remove)
-        whole = [label for label in current_labels if label not in removed]
-        whole += [label for label in to_add if label not in whole]
-        if whole == current_labels:
-            return
-        set_issue_labels(number, repo=repo, labels=whole)
-    else:
-        to_add, to_remove = label_patch(event, current_labels, ready_label)
-        if not to_add and not to_remove:
-            return
-        if event in (delivery_labels.EVENT_MERGED,
-                     delivery_labels.EVENT_BLOCKED):
-            terminal_labels.apply_terminal_patch(
-                number, repo=repo, to_add=to_add, to_remove=to_remove,
-                edit_issue=edit_issue, read_labels=issue_labels,
-            )
-        else:
-            first_remove = to_remove[0] if to_remove else None
-            kwargs: dict = {"repo": repo}
-            if to_add:
-                kwargs["add"] = to_add[0]
-            if first_remove is not None:
-                kwargs["remove"] = first_remove
-            edit_issue(number, **kwargs)
-            for label in to_remove[1:]:
-                edit_issue(number, repo=repo, remove=label)
+    current_labels = issue_labels(number, repo=repo)
+    to_add, to_remove = label_patch(event, current_labels, ready_label)
+    if not to_add and not to_remove:
+        return None
+    applied = _replace_labels(
+        number, repo=repo, current=current_labels,
+        add=to_add, remove=to_remove,
+    )
+    if applied == current_labels:
+        return None
     # Notifying the person is a pure bypass owned by `notify` (Issues
     # #1673/#1691): it decides from the event, the added labels and the
     # current labels, and reads the title lazily through the callable --
@@ -684,6 +700,7 @@ def apply_label_patch(number: int, *, repo: str, event: str,
         repo=repo, number=number,
         read_title=lambda: issue_title(number, repo=repo),
     )
+    return applied
 
 
 def issue_title(number: int, *, repo: str) -> str | None:
