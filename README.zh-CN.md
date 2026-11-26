@@ -19,6 +19,19 @@ Orbi 是一个开源的**软件暗工厂（software dark factory）**：面向 G
 官网 <https://orbi.build> ｜ 文档 <https://docs.orbi.build/> ｜ [Discussions](https://github.com/orbi-build/orbi/discussions)
 
 **想自己部署？** 按下面的「快速开始」来。Cloud 创始会员永久 5 折（限 6 位），结账时自动打折，不用填优惠码。
+
+## 被上游合并的修复
+
+Orbi 给别人的项目写的修复，由对方维护者合并：
+
+| 项目 | Orbi 修了什么 | 合并的 PR |
+|---|---|---|
+| [brig](https://github.com/brig-sh/brig) | 顶层命令支持 `--help` 和 `-h` | [#402](https://github.com/brig-sh/brig/pull/402) |
+| [LLMVault](https://github.com/CyberSunil/LLMVault) | Flask 调试模式默认开着 | [#39](https://github.com/CyberSunil/LLMVault/pull/39) |
+| [pyinfra](https://github.com/pyinfra-dev/pyinfra) | 中日韩文字让结果表对不齐 | [#1977](https://github.com/pyinfra-dev/pyinfra/pull/1977) |
+
+[每个修复是怎么做出来的 →](https://orbi.build/zh/blog/ai-contribute-to-open-source/?ref=gh-readme-oss)
+
 ## 快速开始
 
 ```bash
