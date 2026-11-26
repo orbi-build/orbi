@@ -789,6 +789,30 @@ def test_create_worktree_reclaims_a_leftover_worktree_without_a_remote_branch(
     assert not (fresh / "stale.txt").exists()
 
 
+def test_create_worktree_reclaims_every_leftover_holding_the_branch(clone):
+    """Issue #2441: more than one leftover worktree can hold the same
+    delivery branch — continuing on the PR branch registers a second one
+    with `--force` — and git refuses to delete a branch any of them still
+    holds. A fresh claim removes all of them before re-creating the branch
+    from the frozen base."""
+    branch = "orbi/owner-repo-issue-3"
+    base_sha = git(clone, "rev-parse", "origin/main")
+    first = runner.create_worktree(clone, "owner/repo", 3, "342c52f5",
+                                   base_sha)
+    second = clone / ".worktrees" / "orbi-owner-repo-issue-3-01a21929"
+    git(clone, "worktree", "add", "--force", str(second), branch)
+
+    fresh = runner.create_worktree(clone, "owner/repo", 3, "ee75648d",
+                                   base_sha)
+
+    assert not first.exists()
+    assert not second.exists()
+    holders = git(clone, "worktree", "list", "--porcelain")
+    assert holders.count(f"branch refs/heads/{branch}") == 1
+    assert git(fresh, "branch", "--show-current") == branch
+    assert git(fresh, "rev-parse", "HEAD") == base_sha
+
+
 def test_create_worktree_keeps_continuing_on_a_pr_branch_with_a_leftover(
         clone,
 ):

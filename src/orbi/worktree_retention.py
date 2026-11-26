@@ -89,40 +89,44 @@ def load_keep_failed_worktrees(data: dict) -> bool:
 
 
 def reclaim_leftover_worktree(repo_dir: Path, branch: str) -> bool:
-    """Remove the leftover worktree still holding *branch* (Issue #2441).
+    """Remove every leftover worktree still holding *branch* (Issue #2441).
 
     A re-queued Issue whose previous run left its task worktree behind
     (the stable branch checked out, never pushed, no PR) is a FRESH
     claim: the delivery must start on a worktree from the current base,
-    while `git worktree add` refuses a branch checked out elsewhere. The
-    stale scene and its unpushed local branch are removed so the caller
-    can create the branch from the frozen base. Returns True when a
-    leftover was removed, False when the branch is not checked out.
+    while `git worktree add` refuses a branch checked out elsewhere. Every
+    stale scene is removed — a continuation on the branch registers a
+    second one with `--force` — and then its unpushed local branch, so
+    the caller can create the branch from the frozen base. Returns True
+    when a leftover was removed, False when the branch is not checked out.
 
     The open-PR/remote-branch scene never reaches this helper (the caller
-    continues on that branch); a failure removing the leftover raises, so
+    continues on that branch); a failure removing a leftover raises, so
     the claim fails with the real command error.
     """
     listing = run_command(
         ["git", "worktree", "list", "--porcelain"], cwd=repo_dir,
     )
     wanted = f"branch refs/heads/{branch}"
-    for block in listing.split("\n\n"):
-        lines = block.splitlines()
-        if wanted not in lines:
-            continue
-        leftover = Path(lines[0].removeprefix("worktree "))
+    leftovers = [
+        Path(block.splitlines()[0].removeprefix("worktree "))
+        for block in listing.split("\n\n")
+        if wanted in block.splitlines()
+    ]
+    for leftover in leftovers:
         run_command(
             ["git", "worktree", "remove", "--force", str(leftover)],
             cwd=repo_dir,
         )
-        run_command(["git", "branch", "-D", branch], cwd=repo_dir)
         event(
             "leftover_worktree_reclaimed", branch=branch,
             worktree=str(leftover),
         )
-        return True
-    return False
+    if not leftovers:
+        return False
+    # Only once every holder is gone can git delete the branch.
+    run_command(["git", "branch", "-D", branch], cwd=repo_dir)
+    return True
 
 
 def cleanup_task_worktree(ctx: RunContext, repo_dir: Path, *,
