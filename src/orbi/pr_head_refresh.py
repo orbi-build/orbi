@@ -51,6 +51,12 @@ from orbi.journal import event, run_command
 #: this guards against without holding a delivery for long.
 PR_HEAD_REFRESH_TICKS = 3
 
+#: Issue #2440: the update-branch request is a network mutation and is
+#: bounded like every other gh call in this runner (Issue #95). A request
+#: that times out spends its tick exactly like a rejected one: the bound,
+#: never one API answer, decides the stop.
+REFRESH_REQUEST_TIMEOUT_SECONDS = 30
+
 #: The run-state field carrying the bounded counter: the stale PR head the
 #: count belongs to and the observations so far. The file is per delivery
 #: line (the same worktree across ticks), so the bound survives a tick.
@@ -116,7 +122,11 @@ def refresh_lagging_head(worktree: Path, *, repo: str, pr_number: int,
     if not isinstance(pr_head, str) or not pr_head:
         return
     tip = _branch_tip(branch, worktree=worktree)
-    if tip is None or tip == pr_head:
+    if tip is None:
+        # The probe itself failed: no verdict about the PR, so the count
+        # (and the bound it carries) stays exactly as it was.
+        return
+    if tip == pr_head:
         _clear(worktree)
         return
     ticks = _next_ticks(worktree, pr_head)
@@ -164,9 +174,10 @@ def _request_refresh(repo: str, pr_number: int, tip: str, *,
     """`PUT /repos/{repo}/pulls/{pr_number}/update-branch` with the branch tip.
 
     GitHub's answer may be 422 (the branch is not behind the base, or the
-    merge conflicts) or a transient server error: either way the attempt is
-    spent and journaled, and the bound — not one API answer — decides the
-    stop, so the tick keeps its normal deferral.
+    merge conflicts), a transient server error, or a request that outlasts
+    `REFRESH_REQUEST_TIMEOUT_SECONDS`: either way the attempt is spent and
+    journaled, and the bound — not one API answer — decides the stop, so the
+    tick keeps its normal deferral.
     """
     try:
         run_command(
@@ -174,6 +185,7 @@ def _request_refresh(repo: str, pr_number: int, tip: str, *,
              f"repos/{repo}/pulls/{pr_number}/update-branch",
              "-f", f"expected_head_sha={tip}"],
             cwd=worktree, failure_log_level=logging.WARNING,
+            timeout=REFRESH_REQUEST_TIMEOUT_SECONDS,
         )
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
         event(

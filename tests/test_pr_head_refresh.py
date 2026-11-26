@@ -77,7 +77,7 @@ def test_a_lagging_pr_head_asks_github_to_update_the_branch(
         monkeypatch, tmp_path, caplog):
     """Acceptance 1: the PR head is an old commit while the branch tip is
     newer — the runner makes GitHub re-read the branch itself."""
-    _fake, calls = refresh_scene(monkeypatch, tip=BRANCH_TIP)
+    fake, calls = refresh_scene(monkeypatch, tip=BRANCH_TIP)
     _seed_run_state(tmp_path)
     with caplog.at_level(logging.INFO, logger="orbi.bootstrap"):
         _refresh(tmp_path)
@@ -87,6 +87,10 @@ def test_a_lagging_pr_head_asks_github_to_update_the_branch(
         "gh", "api", "-X", "PUT", f"repos/{REPO}/pulls/7/update-branch",
         "-f", f"expected_head_sha={BRANCH_TIP}",
     ]]
+    # Issue #95: the network mutation is bounded, never an open wait.
+    assert fake.kwargs_seen[-1].get("timeout") == (
+        pr_head_refresh.REFRESH_REQUEST_TIMEOUT_SECONDS
+    )
     state = run_state.read_run_state(tmp_path)
     assert state["pr_head_refresh"] == {"head": STALE_HEAD, "ticks": 1}
     lines = _journal(caplog)
@@ -157,6 +161,22 @@ def test_an_unreadable_branch_tip_waits_as_today(monkeypatch, tmp_path):
     _refresh(tmp_path)
     assert refresh_requests(calls) == []
     assert "pr_head_refresh" not in run_state.read_run_state(tmp_path)
+
+
+def test_an_unreadable_branch_tip_keeps_the_bound_it_cannot_reach(
+        monkeypatch, tmp_path):
+    """A probe failure is not a verdict about the PR, so it never resets the
+    counted scene: with each flaky read clearing the count, a stale PR would
+    poll forever and acceptance 2's bound would never arrive."""
+    _fake, calls = refresh_scene(monkeypatch, tip=None)
+    _seed_run_state(
+        tmp_path, pr_head_refresh={"head": STALE_HEAD, "ticks": 2},
+    )
+    _refresh(tmp_path)
+    assert refresh_requests(calls) == []
+    assert run_state.read_run_state(tmp_path)["pr_head_refresh"] == {
+        "head": STALE_HEAD, "ticks": 2,
+    }
 
 
 def test_a_missing_run_state_never_starts_an_unbounded_refresh_loop(

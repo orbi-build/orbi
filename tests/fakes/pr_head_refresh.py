@@ -16,13 +16,16 @@ from tests.fakes.github import install_run_command
 def refresh_scene(monkeypatch, tip=None, *, refresh_error=None):
     """Install the branch-tip read and the refresh request of one tick.
 
-    Returns (the fake, the recorded commands). The patch lives here, not in
-    the test (patch ratchet, Issue #789).
+    Returns (the fake, the recorded commands). The kwargs of every call are
+    on `fake.kwargs_seen` (the request's bounded timeout is asserted from
+    there). The patch lives here, not in the test (patch ratchet, Issue #789).
     """
     calls: list[list[str]] = []
+    kwargs_seen: list[dict] = []
 
     def fake_run(command, **kwargs):
         calls.append(list(command))
+        kwargs_seen.append(dict(kwargs))
         if command[0] == "git":
             if tip is None:
                 raise subprocess.CalledProcessError(
@@ -33,6 +36,7 @@ def refresh_scene(monkeypatch, tip=None, *, refresh_error=None):
             raise refresh_error
         return json.dumps({"message": "Updating pull request branch."})
     install_run_command(monkeypatch, fake_run)
+    fake_run.kwargs_seen = kwargs_seen
     return fake_run, calls
 
 
