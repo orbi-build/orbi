@@ -19,6 +19,8 @@ from conftest import rendered_prompt
 
 import orbi.attachments as attachments
 import orbi.clarify as clarify
+import orbi.draft as draft
+import orbi.draft_document as draft_document
 import orbi.failure as failure
 import orbi.failure_report as failure_report
 import orbi.language as language
@@ -870,3 +872,71 @@ def test_every_issue_session_receives_the_same_material(
     # The outsider's image never reached GitHub's renderer nor the network.
     assert NATIVE_3 not in gh.markdown_calls
     assert not any(NATIVE_3 in url or "bad" in url for url in downloads.urls())
+
+
+# --- the Issue that does not exist yet (Issue #2429) ----------------------
+
+def draft_check(config, body: str, *, title: str = "Tag a note"):
+    """Run the draft's OWN pre-work check on one drafted Issue.
+
+    `orbi draft` judges what it drafted before a person sees it, with the
+    placeholder number 0 because the Issue is not created yet
+    (`draft.check_draft` -> `clarify.judge_issue_body`, the function the
+    claim runs).
+    """
+    return draft.check_draft(
+        config, REPO, run_id=RUN_ID,
+        issues=(draft_document.DraftIssue(title=title, body=body),),
+    )
+
+
+def issue_views(gh) -> list[list[str]]:
+    """Every `gh issue view` the draft check asked GitHub for."""
+    return [
+        argv for argv in gh.commands if argv[:3] == ["gh", "issue", "view"]
+    ]
+
+
+def test_the_draft_check_asks_github_nothing_about_issue_0(
+    gh, monkeypatch, caplog,
+):
+    """Acceptance 1: a not-yet-created Issue has no comments to read.
+
+    The placeholder number 0 is not an Issue: asking GitHub for its comments
+    always answers "Could not resolve to an issue ... 0", which the draft
+    journaled as `command_failed` plus `issue_images_unreadable`. The
+    judgment still receives the drafted title and body.
+    """
+    calls = draft_fakes.stub_stream_pi_with_context(monkeypatch)
+    with caplog.at_level(logging.WARNING):
+        check, failed = draft_check(image_input_config(), BODY)
+    assert (check, failed) == ("passed", ())
+    assert len(calls) == 1
+    assert "Tag a note" in calls[0]["context"]
+    assert BODY in calls[0]["context"]
+    # No request named the placeholder Issue, and nothing read it as
+    # unreadable images.
+    assert issue_views(gh) == []
+    assert not [part for argv in gh.commands for part in argv if part == "0"]
+    assert "issue_images_unreadable" not in caplog.text
+
+
+def test_the_draft_check_still_judges_the_drafted_image(
+    gh, downloads, monkeypatch,
+):
+    """Acceptance 2: the draft-time check keeps judging what the ticket shows.
+
+    Only the comment read is skipped: the body's own native image is
+    rendered, downloaded and handed to the judgment exactly as before.
+    """
+    calls = draft_fakes.stub_stream_pi_with_context(monkeypatch)
+    check, _failed = draft_check(
+        image_input_config(), f"{BODY}\n\n![shot]({NATIVE})",
+    )
+    assert check == "passed"
+    command = calls[0]["command"]
+    assert command[-2].startswith("@") and command[-2].endswith(".png")
+    assert "The person attached: 1.png = shot" in calls[0]["context"]
+    assert gh.markdown_calls == [NATIVE]
+    assert downloads.urls() == [SIGNED]
+    assert issue_views(gh) == []
