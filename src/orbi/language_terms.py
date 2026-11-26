@@ -99,6 +99,14 @@ BASE_CI_RED_MESSAGES: dict[str, tuple[str, str]] = {
         "✅ **PR #{pr} is ready:** review passed, tests pass.",
         "✅ **PR #{pr} 已就绪：** review 通过，测试通过。",
     ),
+    # Issue #2442: the review tick stops BEFORE its session, so the comment
+    # never claims a review that did not run.
+    "base_ci_red.ready_unreviewed": (
+        "✅ **PR #{pr} is not the cause:** the failing check fails on the "
+        "base branch too, so no review runs until that is fixed.",
+        "✅ **PR #{pr} 不是原因：** 失败的检查在基础分支上本来也失败，"
+        "因此在它修好之前不会启动评审。",
+    ),
     "base_ci_red.paused": (
         "⛔ **Paused** because the base branch `{base_branch}` is "
         "already failing {checks} (not caused by this PR).",

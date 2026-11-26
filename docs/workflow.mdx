@@ -332,9 +332,20 @@ Rules of the chain:
   that stale head, no round is counted, no failure comment is posted, and
   the next tick reviews the new head. A red check the base has already
   fixed therefore no longer ends the delivery — re-queuing the ticket with
-  `ai-fix-needed` picks the fix up. A head that already contains the base,
-  or one GitHub reports as conflicting, keeps the paths above: the review
-  runs on the red head, and a conflicting head is absorbed in the session.
+  `ai-fix-needed` picks the fix up.
+- A head that already CONTAINS the base and fails a check that also failed
+  on that base commit is paused as
+  [`base_ci_red`](#a-delivery-paused-on-a-red-base-branch-base_ci_red)
+  before any review session starts (Issue #2442): the SAME detection the
+  merge gate uses, on the base commit the head carries at that moment (never
+  only the SHA frozen when the round opened), so ONE fix Issue opens, the
+  delivery pauses, and it resumes by itself once the base turns green — a
+  review of a PR that cannot merge until the base is fixed is never run. A
+  base whose matching check has not concluded yet is not green: that tick
+  records nothing, starts no session, and looks again on the next tick. Every
+  other red head — the base is green on every failed check, or the head does
+  not contain the base (a conflict) — keeps the paths above: the review runs
+  on the red head, and a conflicting head is absorbed in the session.
 - Absorb contract (Issue #877, machine-checked by the Runner): a review
   round that starts with the head behind `origin/<base>` or facing a
   merge conflict must end in one of two states — the branch contains
@@ -926,14 +937,17 @@ the decision, the reason and the Issue link. A stop that lands at
 
 **Available since v0.7.15, including `/orbi fix-base`.**
 
-When the reviewed PR is ready but a check it fails is ALSO failing on the
-configured base branch, the PR cannot turn it green and no review round can
-repair it. The delivery pauses in `ai-blocked` with `reason_code`
+When a check the PR fails is ALSO failing on the configured base branch,
+the PR cannot turn it green and no review round can repair it. The review
+tick asks that question BEFORE it starts a session (Issue #2442) and the
+merge gate asks it again for a ready PR, both through the same detection.
+The delivery pauses in `ai-blocked` with `reason_code`
 `base_ci_red` — `action_code` `fix_ticket`, `retry_safe` false, because a
 plain requeue would hit the same red base — and ONE comment that says what the
-reader already has (a ready PR), why it paused, EVERY failing base check with
-its run link and first error lines, the fix Issue Orbi opened for it, and the
-repair left to the reader. The base branch is the configured one, never a
+reader already has (a ready PR, or — when the review tick stopped before its
+session — that the PR is not the cause), why it paused, EVERY failing base
+check with its run link and first error lines, the fix Issue Orbi opened for
+it, and the repair left to the reader. The base branch is the configured one, never a
 hard-coded `main`, and a non-subprocess failure prints no empty evidence
 section.
 

@@ -360,7 +360,7 @@ def scene_comment(
     repo: str, issue: dict, record: BaseCIRed, checks: list[FailingCheck],
     *, failure_record: failure.Failure, language_code: str,
     status_url: str | None = None, milestone: str | None = None,
-    dispatch_label: str | None = None,
+    dispatch_label: str | None = None, reviewed: bool = True,
 ) -> str:
     """The base-branch-red comment, with the fix Issue Orbi opened itself.
 
@@ -381,6 +381,7 @@ def scene_comment(
             repo, number, record, milestone=milestone,
             dispatch_label=dispatch_label, language_code=language_code,
         ),
+        reviewed=reviewed,
     )
 
 

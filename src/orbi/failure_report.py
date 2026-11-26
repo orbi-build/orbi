@@ -91,15 +91,20 @@ class PreExistingCIFailure(UnrecoverableDeliveryError):
 
     No review round can change a failure the PR did not introduce, so the
     record is decided HERE (Issue #1825): `base_ci_red`/`checks` carry
-    what the comment and `/orbi fix-base` read.
+    what the comment and `/orbi fix-base` read. `reviewed` says whether
+    a review `pass` preceded the stop (the merge gate) or the review tick
+    stopped BEFORE its session (Issue #2442), so the comment never claims a
+    review that did not run.
     """
 
     def __init__(self, message: str, *,
                  record: "base_ci_red.BaseCIRed | None" = None,
-                 checks: "list[base_ci_red.FailingCheck] | None" = None):
+                 checks: "list[base_ci_red.FailingCheck] | None" = None,
+                 reviewed: bool = True):
         super().__init__(message)
         self.base_ci_red = record
         self.checks = list(checks or [])
+        self.reviewed = reviewed
         self.failure_record = failure.Failure(
             "base_ci_red", *failure.DISPOSITIONS["base_ci_red"],
         )
@@ -437,11 +442,13 @@ def block_repo_config_failure(number: int, source_repo: str,
 
 def _raise_if_preexisting_ci_failure(
         repo: str, failed_names: list[str], base_commit: str | None,
-        *, base_branch: str, pr_number: int) -> None:
+        *, base_branch: str, pr_number: int, reviewed: bool = True) -> None:
     """Raise the fast base-branch-red failure (Issue #1825).
 
     The CONFIGURED base branch and every failed base check with its run
-    link: one source for the comment and the recovery scan.
+    link: one source for the comment and the recovery scan. `reviewed` is
+    the caller's own fact: the merge gate stops after a review `pass`, the
+    review tick's pre-session stop does not (Issue #2442).
     """
     detected = base_ci_red.detect(
         repo, failed_names, base_commit, base_branch=base_branch,
@@ -454,7 +461,7 @@ def _raise_if_preexisting_ci_failure(
     raise PreExistingCIFailure(
         f"delivery gate: {base_branch} is already red on check "
         f"'{checks[0].name}' — fix {base_branch} first{suffix}",
-        record=record, checks=checks)
+        record=record, checks=checks, reviewed=reviewed)
 
 
 def _report_resume_failure(*, number: int, source_repo: str, run_id: str,
@@ -841,6 +848,7 @@ def report_delivery_failure(
             source_repo, issue, red, getattr(exc, "checks", []),
             failure_record=failure_record, language_code=language_code,
             status_url=status_url, milestone=milestone, dispatch_label=ready_label,
+            reviewed=getattr(exc, "reviewed", True),
         )
     else:
         body = failure_comment_body(

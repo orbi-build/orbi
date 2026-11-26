@@ -35,15 +35,21 @@ from orbi.journal import event, run_command, run_git_network_command
 
 @dataclass(frozen=True)
 class Absorbed:
-    """What the review tick's ONE PR read decided (Issue #2423).
+    """What the review tick's ONE PR read decided (Issues #2423, #2442).
 
     `head` is the absorbed head when this tick merged and pushed the base;
     `conflicting` is GitHub's CONFLICTING mergeability, the flag the
-    review round arms its in-session absorb on (Issue #877).
+    review round arms its in-session absorb on (Issue #877). `failed` and
+    `base_tip` are the PR's failing check names and the fetched base tip
+    the head CONTAINS — both stay empty unless the read established a base
+    commit the head actually carries, which is what the base-branch-red
+    decision compares (Issue #2442).
     """
 
     head: str | None = None
     conflicting: bool = False
+    failed: tuple[str, ...] = ()
+    base_tip: str | None = None
 
 
 class BaseMergeConflict(RuntimeError):
@@ -136,9 +142,12 @@ def absorb_red_behind_head(
     The ONE PR read (state, mergeability, head, rollup) also answers the
     review tick's CONFLICTING arm, so the tick keeps a single read; an
     unreadable answer authorizes no absorb, exactly as before. Every other
-    case — a moved head, no failing check, a fresh head — returns an empty
-    record and the caller reviews as it always did. `BaseMergeConflict`
-    propagates: the merge was rolled back and nothing was pushed.
+    case — a moved head, no failing check, a fresh head — returns a record
+    with no absorbed head, and the caller decides from the answer: with a
+    base tip the head contains, the failing names are the base-branch-red
+    comparison's input (Issue #2442); without one it reviews as it always
+    did. `BaseMergeConflict` propagates: the merge was rolled back and
+    nothing was pushed.
     """
     try:
         state = pr_view(
@@ -157,11 +166,17 @@ def absorb_red_behind_head(
     if not failed:
         return Absorbed()
     fetch_base_ref(repo_dir, base_branch, cwd=worktree)
+    failed_names = tuple(entry["name"] for entry in failed)
     if run_state.assess_base_freshness(
         worktree, base_branch, head=pr["head_oid"],
     ) is not run_state.BaseFreshness.ABSORBABLE:
-        return Absorbed()
-    head, _base_sha = absorb_origin_base(
+        # FRESH (a CONFLICTING head was refused above): the head already
+        # contains the fetched base tip, so that tip is the base commit
+        # this red PR is compared with (Issue #2442).
+        return Absorbed(failed=failed_names, base_tip=run_command(
+            ["git", "rev-parse", f"origin/{base_branch}"], cwd=worktree,
+        ))
+    head, base_sha = absorb_origin_base(
         worktree, base_branch, pr["head_ref"],
         pr=pr["number"], head=pr["head_oid"],
     )
@@ -170,6 +185,8 @@ def absorb_red_behind_head(
     run_state.record_pushed_head(worktree, head)
     event(
         "review_base_absorbed", pr=pr["number"], base_branch=base_branch,
-        head=head, failed=", ".join(entry["name"] for entry in failed),
+        head=head, failed=", ".join(failed_names),
     )
-    return Absorbed(head=head)
+    return Absorbed(
+        head=head, failed=failed_names, base_tip=base_sha,
+    )

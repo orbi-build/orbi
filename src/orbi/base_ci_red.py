@@ -290,6 +290,28 @@ def failing_checks(repo: str, failed_names: list[str],
     return checks
 
 
+def pending_checks(repo: str, failed_names: list[str],
+                   base_commit: str) -> list[str]:
+    """The `failed_names` whose run on `base_commit` has not concluded.
+
+    A base whose matching check is still running is NOT green (Issue
+    #2442): the review tick defers and looks again instead of recording a
+    pause or starting a session on inconclusive evidence. A name the base
+    never ran is not pending — the base carries no such check at all, so
+    it cannot explain the PR's failure. The FIRST run of a name is its
+    current verdict (a re-run adds a newer run, listed first — the same
+    rule the fix module's `_newest_runs` applies).
+    """
+    by_name: dict[str, dict] = {}
+    for run in commit_check_runs(repo, base_commit):
+        by_name.setdefault(str(run.get("name")), run)
+    return [
+        name for name in failed_names
+        if (run := by_name.get(name)) is not None
+        and run.get("status") != "completed"
+    ]
+
+
 def detect(repo: str, failed_names: list[str], base_commit: str | None,
            *, base_branch: str, pr: int) -> tuple[
                BaseCIRed, list[FailingCheck]] | None:
@@ -401,7 +423,8 @@ def comment_body(record: BaseCIRed, checks: list[FailingCheck], *,
                  issue_number: int | None = None,
                  issue_title: str | None = None,
                  status_url: str | None = None,
-                 fix_issues: list[str] | None = None) -> str:
+                 fix_issues: list[str] | None = None,
+                 reviewed: bool = True) -> str:
     """The ONE readable base-branch-red comment.
 
     Order is the user's: what they already have (a ready PR), why it
@@ -420,7 +443,11 @@ def comment_body(record: BaseCIRed, checks: list[FailingCheck], *,
     """
     parts = [
         failure.render(failure_record),
-        language.text(language_code, "base_ci_red.ready", pr=record.pr),
+        language.text(
+            language_code,
+            "base_ci_red.ready" if reviewed else "base_ci_red.ready_unreviewed",
+            pr=record.pr,
+        ),
     ]
     parts.extend(user_summary.summary_lines(
         status_url=status_url, issue=issue_number, title=issue_title,

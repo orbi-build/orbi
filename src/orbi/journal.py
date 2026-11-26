@@ -392,6 +392,7 @@ JOURNAL_EVENTS: dict[str, str] = {
     "base_absorbed": "an advanced base branch was merged into the task branch",
     "base_absorbed_deferred": "the merge gate absorbed the base, pushed the absorbed head and deferred to the next tick (Issue #1626)",
     "review_base_absorbed": "the review tick absorbed the base into a red, behind-only head and deferred to the next tick (Issue #2423)",
+    "review_base_checks_pending": "a failing PR check has not concluded on the base commit the head contains; the review tick defers to the next tick (Issue #2442)",
     "base_merge_conflict": "the base merge conflicted; aborted without resolution",
     "base_checkout_synced": "the repo_dir base checkout fast-forwarded to the remote base",
     "base_checkout_sync_skipped": "the base checkout sync was skipped (already current)",
