@@ -210,6 +210,15 @@ class FakeGh:
         if "--method" not in command:
             # A read (one field list) or a `gh api -X DELETE`.
             return json.dumps([])
+        if "--method" in command and any(
+                part.endswith("/labels") for part in command):
+            # GitHub's whole-set label replacement: ONE write per
+            # delivery-label change (Issue #2426).
+            self.label_edits.append([
+                argument.split("=", 1)[1] for argument in command
+                if argument.startswith("labels[]=")
+            ])
+            return ""
         method = command[command.index("--method") + 1]
         body = command[command.index("--field") + 1][len("body="):]
         self.progress.append(body)
@@ -383,7 +392,7 @@ def test_red_fresh_head_still_runs_the_review_session(
     # block hands the delivery to the next review round.
     assert marker.exists()
     assert fake.pushes == []
-    assert any("ai-fix-needed" in edit for edit in fake.label_edits)
+    assert ["ai-fix-needed"] in fake.label_edits
     assert any("CI check 'status-page-speed'" in body
                for body in fake.issue_comments)
 
@@ -450,7 +459,7 @@ def test_local_absorb_conflict_rolls_back_and_marks_the_delivery(
     # The existing conflict path: ai-fix-needed and the base-advance
     # failure comment on the Issue, no review session.
     assert not marker.exists()
-    assert any("ai-fix-needed" in edit for edit in fake.label_edits)
+    assert ["ai-fix-needed"] in fake.label_edits
     assert any("cannot absorb origin/main" in body
                for body in fake.issue_comments)
     # The failure comment states what happened: a local merge conflict.

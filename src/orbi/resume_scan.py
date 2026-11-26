@@ -313,10 +313,6 @@ def _pick_opened_pr_delivery(
                             status_url=status_url, issue=number,
                             title=issue.get("title"),
                         ),
-                        # The claimed ticket carries the resolved
-                        # queue label, so the blocked terminal clears it
-                        # too (Issue #1775).
-                        current_labels={delivery_labels.FIX_NEEDED_LABEL, ready_label},
                         language_code=language_code, ready_label=ready_label,
                     )
                 except Exception:

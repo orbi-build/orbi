@@ -46,7 +46,7 @@ from orbi.delivery_labels import EVENT_FIX_NEEDED, EVENT_HUMAN_REVIEW_WAITING, E
 from orbi import delivery_labels
 from orbi.delivery_scene import RunContext
 from orbi.review_ci_status import log_recovery_ci_status  # noqa: F401
-from orbi.failure import failure_detail
+from orbi.failure import classify, failure_detail
 from orbi.failure_report import (
     GateCIFailure,
     HumanDecisionRequired,
@@ -464,7 +464,6 @@ def _round_verdict_phase(work: _Round) -> bool:
     ))
     apply_label_patch(
         number, repo=source_repo, event=EVENT_FIX_NEEDED,
-        current_labels=issue_labels(number, source_repo),
         ready_label=work.ready_label,
     )
     return True
@@ -591,7 +590,6 @@ def _round_external_phase(work: _Round) -> bool:
     )
     post_blocked_comment(
         number, repo=source_repo, body=body,
-        current_labels=issue_labels(number, source_repo),
         language_code=bound, ready_label=work.ready_label,
     )
     event(
@@ -687,7 +685,6 @@ def _round_gate_failure_phase(work: _Round, message: str, *,
         )
     apply_label_patch(
         number, repo=source_repo, event=EVENT_FIX_NEEDED,
-        current_labels=issue_labels(number, source_repo),
         ready_label=work.ready_label,
     )
     if not base_advance_exhausted:
@@ -826,7 +823,6 @@ def _round_closeout_phase(work: _Round, merged: dict) -> None:
     ))
     apply_label_patch(
         number, repo=source_repo, event=EVENT_MERGED,
-        current_labels=issue_labels(number, source_repo),
         ready_label=work.ready_label,
     )
     base_ci_red.post_merged(
@@ -939,8 +935,9 @@ def _run_review_round(
 
     Returns True when this round merged the PR (terminal success);
     False when the delivery stays open for a LATER TICK (`ai-fix-needed`
-    after findings or a failed gate, or a deferred merge — the label
-    transition happens inside the review itself, a defer writes none);
+    after findings or a failed gate, a deferred merge — the label
+    transition happens inside the review itself, a defer writes none — or
+    a label repair a GitHub temporary error interrupted, Issue #2426);
     and None when a terminal state was already handled and the caller
     must release the slot and return: an unrecoverable precondition
     (`ai-blocked`), a recoverable failure's full `ai-fix-needed` scene
@@ -955,7 +952,7 @@ def _run_review_round(
     priority = issue_priority(issue)
     ready_label = delivery_labels.queue_label(config.dispatch_label)
 
-    def block_label_inconsistency(labels: list[str], reason: str) -> None:
+    def block_label_inconsistency(reason: str) -> None:
         event(
             "delivery_label_inconsistent", level=logging.ERROR,
             issue=number, pr=pr_url, reason=reason,
@@ -974,8 +971,7 @@ def _run_review_round(
         )
         post_blocked_comment(
             number, repo=source_repo, body=body,
-            current_labels=labels, language_code=language.of(config),
-            ready_label=ready_label,
+            language_code=language.of(config), ready_label=ready_label,
         )
 
     labels = issue_labels(number, source_repo)
@@ -984,22 +980,28 @@ def _run_review_round(
     if (stale and not needs_human_intervention(labels)
             and delivery_labels.MERGED_LABEL not in labels):
         try:
-            apply_label_patch(
+            # ONE whole-set replacement, and its result — the Issue's real
+            # labels (Issue #2426) — replaces this round's guess.
+            labels = apply_label_patch(
                 number, repo=source_repo, event=EVENT_PR_OPENED,
-                current_labels=labels, ready_label=ready_label,
-            )
+                ready_label=ready_label,
+            ) or labels
         except Exception as exc:
+            # A GitHub temporary error interrupted the repair. The write is
+            # all-or-nothing, so the Issue still holds the labels this round
+            # read: it waits for GitHub under the same #2202 rating that
+            # keeps a transient failure unblocked, and the next tick repairs
+            # it (Issue #2426).
+            if classify(failure_detail(exc), error=exc).reason_code == (
+                    "github_transient"):
+                event("delivery_label_repair_failed", level=logging.WARNING,
+                      issue=number, pr=pr_url, reason=str(exc))
+                return False
             LOGGER.exception(
-                "issue=%s delivery_label_repair_failed pr=%s",
-                number, pr_url,
+                "issue=%s delivery_label_repair_failed pr=%s", number, pr_url,
             )
-            block_label_inconsistency(labels, str(exc))
+            block_label_inconsistency(str(exc))
             return None
-        # The repair also removed a pre-upgrade queue residue (#2309);
-        # a resumed ai-fix-needed round ends on ai-pr-opened alone (#2357).
-        labels = [label for label in labels
-                  if label not in (*stale, ready_label)]
-        labels.append(delivery_labels.PR_OPENED_LABEL)
         event(
             "delivery_label_repaired", issue=number, pr=pr_url,
             **{"from": ",".join(stale), "to": delivery_labels.PR_OPENED_LABEL},
@@ -1008,22 +1010,15 @@ def _run_review_round(
             and not needs_human_intervention(labels)
             and delivery_labels.MERGED_LABEL not in labels):
         block_label_inconsistency(
-            labels,
             "open PR has no resumable delivery label",
         )
         return None
-    # The human acceptance gate — checked BEFORE the scene,
-    # the worktree or any review session. One label read decides; the
-    # column-2 re-derivation is local evidence reads only. With the
-    # gate on and no `ai-human-review` label, a non-empty column 2
-    # holds the delivery: the wait clears the in-flight and queue labels
-    # (the opened-PR anchor stays, so the resume scan keeps finding it),
-    # the round ends here, the caller releases the slot
-    # and every next tick costs one label read — never a review
-    # session, never an `ai-fix-needed` round (the review-round budget
-    # is not consumed by waiting). An empty column 2 needs no human and
-    # falls through to the normal review; a missing worktree falls
-    # through too so the existing recovery semantics stay intact.
+    # The human acceptance gate, checked BEFORE the scene, the worktree or
+    # any review session: with the gate on, no `ai-human-review` label and
+    # a non-empty column 2, the wait clears the in-flight and queue labels
+    # (the opened-PR anchor stays, so the resume scan keeps finding it) and
+    # a tick costs one label read — never a review round. An empty column 2
+    # falls through, and so does a missing worktree (its recovery stays).
     if config.human_review_gate and delivery_labels.HUMAN_REVIEW_LABEL not in labels:
         gate_worktree = worktree_path(
             config.repo_dir, source_repo, number, run_id,
@@ -1038,7 +1033,7 @@ def _run_review_round(
                 apply_label_patch(
                     number, repo=source_repo,
                     event=EVENT_HUMAN_REVIEW_WAITING,
-                    current_labels=labels, ready_label=ready_label,
+                    ready_label=ready_label,
                 )
             event(
                 "human_review_waiting", issue=number, pr=pr_url,

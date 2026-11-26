@@ -902,8 +902,9 @@ def make_pick_fake(list_payload: str, view_payload=None,
                    pr_rollup: list | None = None):
     """Fake `gh` for the resumable scan; guard rejects anything else.
 
-    `edits`/`comments` (when given) capture the label edits and comments
-    posted by the scene-failure blocked transition. `view_payload` may be
+    `edits`/`comments` (when given) capture the label sets the one
+    whole-set replacement wrote (Issue #2426) and the comments posted by
+    the scene-failure blocked transition. `view_payload` may be
     a callable of the Issue number when each candidate needs its own
     `gh issue view` answer (Issue #1473's two-candidate scan). Since
     Issue #1473 the scan reads `gh pr view --json
@@ -956,6 +957,14 @@ def make_pick_fake(list_payload: str, view_payload=None,
                 api_calls.append(command)
             if "--method" not in command:
                 return json.dumps(api_comments or [])
+            if edits is not None and any(
+                    part.endswith("/labels") for part in command):
+                # Issue #2426: the label change is ONE whole-set
+                # replacement; capture the set it wrote.
+                edits.append([
+                    argument.split("=", 1)[1] for argument in command
+                    if argument.startswith("labels[]=")
+                ])
             return ""
         raise AssertionError(f"unexpected command: {command}")
 
@@ -1620,14 +1629,9 @@ def test_pick_resumable_delivery_blocks_issue_without_scene_comment(
         hooks=resume_deps(), language_code=language_code,
         status_url=TASK_STATUS_URL,
     ) is None
-    # Issue #2357: the removal is written before the terminal add, so
-    # the timeline ends on the new state.
-    assert edits == [
-        ["gh", "issue", "edit", "9", "--repo", "owner/repo",
-         "--remove-label", "ai-fix-needed"],
-        ["gh", "issue", "edit", "9", "--repo", "owner/repo",
-         "--add-label", "ai-blocked"],
-    ]
+    # Issue #2426: the blocked terminal is ONE whole-set replacement
+    # that ends on ai-blocked alone.
+    assert edits == [["ai-blocked"]]
     assert "'Orbi opened PR'" in comments[0]
     # Issue #1826: the blocked task message carries the readable summary
     # (identity + the operator's fixed link) above the one help line.
@@ -1668,15 +1672,9 @@ def test_pick_resumable_delivery_blocks_pr_opened_issue_without_scene(
         "owner/repo", tmp_path / "slots", 1,
         hooks=resume_deps(), language_code="en",
     ) is None
-    # Issue #2357: only labels actually on the Issue are removed, so the
-    # deliberately preserved ai-pr-opened label stays and the terminal
-    # add is the only write.
-    assert edits == [
-        ["gh", "issue", "edit", "9", "--repo", "owner/repo",
-         "--add-label", "ai-blocked"],
-    ]
-    # The erroneous ai-pr-opened label is NOT auto-cleaned (Issue #672).
-    assert "ai-pr-opened" not in edits[0]
+    # Issue #2426: the blocked terminal clears the stale opened-PR state
+    # in the same ONE write that adds the terminal label.
+    assert edits == [["ai-blocked"]]
     assert "Orbi failed:" in comments[0]
     assert "issue=9 resume scene is missing" in caplog.text
 
@@ -1721,14 +1719,9 @@ def test_pick_resumable_delivery_blocks_issue_when_scene_is_malformed(
         hooks=resume_deps(), language_code="en",
     ) is None
     # The blocked transition: add ai-blocked, remove ai-fix-needed...
-    # Issue #2357: the removal is written before the terminal add, so
-    # the timeline ends on the new state.
-    assert edits == [
-        ["gh", "issue", "edit", "9", "--repo", "owner/repo",
-         "--remove-label", "ai-fix-needed"],
-        ["gh", "issue", "edit", "9", "--repo", "owner/repo",
-         "--add-label", "ai-blocked"],
-    ]
+    # Issue #2426: the blocked terminal is ONE whole-set replacement
+    # that ends on ai-blocked alone.
+    assert edits == [["ai-blocked"]]
     # ...and a failure comment with the concrete reason...
     body = comments[0]
     assert "Orbi failed:" in body
@@ -1782,6 +1775,13 @@ def test_pick_resumable_delivery_routes_corrupted_marker_and_next_candidate(
             if command[2] == "comment":
                 comments.append(command[-1])
                 return ""
+        if command[1] == "api":
+            if any(part.endswith("/labels") for part in command):
+                edits.append([
+                    argument.split("=", 1)[1] for argument in command
+                    if argument.startswith("labels[]=")
+                ])
+            return ""
         if command[1] == "pr" and command[2] == "view":
             return json.dumps({"state": "OPEN"})
         raise AssertionError(f"unexpected command: {command}")
@@ -1796,16 +1796,15 @@ def test_pick_resumable_delivery_routes_corrupted_marker_and_next_candidate(
     assert issue["number"] == 10
     assert scene.parsed.run_id == "c3d4e5f6"
     # The corrupted marker ticket was routed to the takeover queue, not
-    # blocked.
-    assert any(
-        "edit" in command and "9" in command and "ai-ready" in command
-        for command in edits
-    ), edits
-    assert not any("ai-blocked" in command for command in edits)
+    # blocked: the re-queue is ONE whole-set write ending on ai-ready
+    # (Issue #2426).
+    assert edits == [["ai-ready"]]
     assert any(
         "external contribution PR #55" in body for body in comments
     )
-    # The fake is a contract, not a sink: its strict arm is driven here.
+    # The fake is a contract, not a sink: its strict arm is driven here,
+    # and so is its non-label `gh api` arm (progress traffic).
+    assert fake_run(["gh", "api", "repos/owner/repo/issues/9/comments"]) == ""
     with pytest.raises(AssertionError, match="unexpected command"):
         fake_run(["gh", "issue", "view", "9", "--json", "state"])
 
@@ -1924,14 +1923,9 @@ def test_pick_resumable_delivery_blocks_issue_when_no_trusted_scene(
         "owner/repo", tmp_path / "slots", 1,
         hooks=resume_deps(), language_code="en",
     ) is None
-    # Issue #2357: the removal is written before the terminal add, so
-    # the timeline ends on the new state.
-    assert edits == [
-        ["gh", "issue", "edit", "9", "--repo", "owner/repo",
-         "--remove-label", "ai-fix-needed"],
-        ["gh", "issue", "edit", "9", "--repo", "owner/repo",
-         "--add-label", "ai-blocked"],
-    ]
+    # Issue #2426: the blocked terminal is ONE whole-set replacement
+    # that ends on ai-blocked alone.
+    assert edits == [["ai-blocked"]]
     assert "Orbi failed:" in comments[0]
     assert "issue=9 resume scene is missing" in caplog.text
 
@@ -1958,14 +1952,7 @@ def test_pick_resumable_delivery_scene_blocked_clears_the_dispatch_label(
         "owner/repo", tmp_path / "slots", 1,
         hooks=resume_deps(), language_code="en", ready_label="ship",
     ) is None
-    assert edits == [
-        ["gh", "issue", "edit", "9", "--repo", "owner/repo",
-         "--remove-label", "ai-fix-needed"],
-        ["gh", "issue", "edit", "9", "--repo", "owner/repo",
-         "--remove-label", "ship"],
-        ["gh", "issue", "edit", "9", "--repo", "owner/repo",
-         "--add-label", "ai-blocked"],
-    ]
+    assert edits == [["ai-blocked"]]
 
 
 def test_pick_resumable_delivery_missing_scene_names_the_run_marker(
@@ -2005,7 +1992,7 @@ def test_pick_resumable_delivery_missing_scene_reporting_failure_is_bypass(
     def failing_edit(*args, **kwargs):
         raise RuntimeError("gh down")
 
-    monkeypatch.setattr(seam, "edit_issue", failing_edit)
+    monkeypatch.setattr(seam, "set_issue_labels", failing_edit)
     caplog.set_level("ERROR")
     assert claim.pick_resumable_delivery(
         "owner/repo", tmp_path / "slots", 1,
@@ -2082,8 +2069,9 @@ def test_pick_resumable_delivery_scene_failure_logs_reporting_failure(
     )
 
     def fake_run(command, **kwargs):
-        if command[1] == "issue" and command[2] == "edit":
-            raise RuntimeError("github edit failed")
+        if command[1] == "api" and any(
+                part.endswith("/labels") for part in command):
+            raise RuntimeError("github label write failed")
         return fake(command, **kwargs)
 
     monkeypatch.setattr(seam, "run_command", fake_run)
@@ -2115,6 +2103,12 @@ def test_pick_next_delivery_continues_after_scene_failure(
 
     def fake_run(command, **kwargs):
         if command[:2] == ["gh", "api"]:
+            if any(part.endswith("/labels") for part in command):
+                # Issue #2426: capture the ONE whole-set write.
+                edits.append([
+                    argument.split("=", 1)[1] for argument in command
+                    if argument.startswith("labels[]=")
+                ])
             return "[]"
         if command[:3] == ["gh", "issue", "list"]:
             search = command[command.index("--search") + 1]
@@ -2123,8 +2117,6 @@ def test_pick_next_delivery_continues_after_scene_failure(
             return "[]"
         if command[:3] == ["gh", "issue", "view"]:
             if command[-1] == "labels":
-                # The Issue carries ai-pr-opened; the terminal add is
-                # the only label write (Issue #2357, #672).
                 return json.dumps(
                     {"labels": [{"name": "ai-pr-opened"}]})
             return gh_comments_payload(["only a human comment here"])
@@ -2151,12 +2143,9 @@ def test_pick_next_delivery_continues_after_scene_failure(
     # Issue was scoped to a single-ticket block, not a tick stop.
     assert result == ("owner/repo", ready, None)
     assert calls == [("ready", "owner/repo")]
-    # Issue #2357: ai-pr-opened is deliberately preserved (Issue #672),
-    # so the terminal add is the only label write.
-    assert edits == [
-        ["gh", "issue", "edit", "9", "--repo", "owner/repo",
-         "--add-label", "ai-blocked"],
-    ]
+    # Issue #2426: the blocked terminal is ONE whole-set replacement that
+    # ends on ai-blocked alone.
+    assert edits == [["ai-blocked"]]
     assert len(comments) == 1
     assert "Orbi failed:" in comments[0]
     # The fake rejects anything but its own traffic (same guard pattern
@@ -2580,6 +2569,12 @@ def test_main_continues_to_ready_delivery_after_scene_failure(
 
     def fake_run(command, **kwargs):
         if command[:2] == ["gh", "api"]:
+            if any(part.endswith("/labels") for part in command):
+                # Issue #2426: capture the ONE whole-set write.
+                edits.append([
+                    argument.split("=", 1)[1] for argument in command
+                    if argument.startswith("labels[]=")
+                ])
             return "[]"
         if command[:3] == ["gh", "issue", "list"]:
             search = command[command.index("--search") + 1]
@@ -2588,8 +2583,6 @@ def test_main_continues_to_ready_delivery_after_scene_failure(
             return "[]"
         if command[:3] == ["gh", "issue", "view"]:
             if command[-1] == "labels":
-                # The Issue carries ai-pr-opened; the terminal add is
-                # the only label write (Issue #2357, #672).
                 return json.dumps(
                     {"labels": [{"name": "ai-pr-opened"}]})
             return gh_comments_payload(["only a human comment here"])
@@ -2624,12 +2617,9 @@ def test_main_continues_to_ready_delivery_after_scene_failure(
     monkeypatch.setattr(runner, "delivery_step", lambda *a, **k: None)
     assert runner.main(["--config", str(config)]) == 0
     # The corrupted Issue was scoped to a single-ticket block...
-    # Issue #2357: ai-pr-opened is deliberately preserved (Issue #672),
-    # so the terminal add is the only label write.
-    assert edits == [
-        ["gh", "issue", "edit", "9", "--repo", "owner/repo",
-         "--add-label", "ai-blocked"],
-    ]
+    # Issue #2426: the blocked terminal is ONE whole-set replacement that
+    # ends on ai-blocked alone.
+    assert edits == [["ai-blocked"]]
     assert len(comments) == 1
     assert "Orbi failed:" in comments[0]
     # ...and the same tick delivered the next ready Issue.
@@ -2968,9 +2958,12 @@ def make_resume_failure_fake(monkeypatch, *, progress_comments=None,
     comment is written to the Issue AND the PR). Anything else is
     rejected. `progress_comments` is the GET payload (an existing
     tracked progress comment makes the blocked/fix-needed scene PATCH it
-    in place; empty makes it POST a new one), `labels` the label read. Captures the gh api calls and the label edits / failure
-    comments; monkeypatches `edit_issue` / `comment_issue`
-    accordingly. Returns `(captured, fake_run)` where `captured` is
+    in place; empty makes it POST a new one), `labels` the label read.
+    Captures the gh api calls, the failure comments and the one whole-set
+    label replacement each transition writes (Issue #2426: a delivery-label
+    change is all-or-nothing, never a removal plus an add);
+    monkeypatches `set_issue_labels` / `comment_issue` accordingly.
+    Returns `(captured, fake_run)` where `captured` is
     `{"api": [...], "edits": [...], "comments": [...],
     "pr_comments": [...]}`.
     """
@@ -3006,13 +2999,13 @@ def make_resume_failure_fake(monkeypatch, *, progress_comments=None,
             return json.dumps({"comments": list(history or ())})
         raise AssertionError(f"unexpected command: {command}")
 
-    def fake_edit(*args, **kwargs):
-        captured["edits"].append((args, kwargs))
+    def fake_edit(number, *, repo, labels):
+        captured["edits"].append(list(labels))
 
     def fake_comment(*args, **kwargs):
         captured["comments"].append((args, kwargs))
 
-    monkeypatch.setattr(seam, "edit_issue", fake_edit)
+    monkeypatch.setattr(seam, "set_issue_labels", fake_edit)
     monkeypatch.setattr(seam, "comment_issue", fake_comment)
     monkeypatch.setattr(seam, "run_command", fake_run)
     return captured, fake_run
@@ -3444,10 +3437,7 @@ def test_verify_resumed_pr_missing_fixes_stays_fix_needed(
     assert reviews == []
     # The Issue is marked ai-fix-needed (ai-pr-opened removed) — never
     # ai-blocked (Issue #50: the next tick resumes the same PR) ...
-    assert captured["edits"] == [
-        ((9,), {"repo": "owner/repo", "add": "ai-fix-needed",
-                "remove": "ai-pr-opened"}),
-    ]
+    assert captured["edits"] == [["ai-fix-needed"]]
     # ... with a run-marked failure comment that names the reason ...
     assert len(captured["comments"]) == 1
     body = captured["comments"][0][1]["body"]
@@ -3797,10 +3787,7 @@ def test_verify_resumed_pr_scene_pr_closed_between_ticks_still_blocks(
             _closed_scene(external=False), make_resume_issue(),
             make_resume_config(tmp_path), "owner/repo",
         )
-    assert captured["edits"] == [
-        ((9,), {"repo": "owner/repo", "remove": "ai-pr-opened"}),
-        ((9,), {"repo": "owner/repo", "add": "ai-blocked"}),
-    ]
+    assert captured["edits"] == [["ai-blocked"]]
     assert len(captured["comments"]) == 1
     assert "Orbi failed:" in captured["comments"][0][1]["body"]
     assert "scene_pr_state=CLOSED" in captured["comments"][0][1]["body"]
@@ -3831,10 +3818,7 @@ def test_verify_resumed_pr_pr_repo_mismatch_stays_fix_needed(
             make_resume_scene(), make_resume_issue(),
             make_resume_config(tmp_path), "owner/repo",
         )
-    assert captured["edits"] == [
-        ((9,), {"repo": "owner/repo", "add": "ai-fix-needed",
-                "remove": "ai-pr-opened"}),
-    ]
+    assert captured["edits"] == [["ai-fix-needed"]]
     body = captured["comments"][0][1]["body"]
     assert "Orbi needs a fix:" in body
     assert run_marker_body() in body
@@ -3867,11 +3851,9 @@ def test_verify_resumed_pr_recoverable_failure_keeps_fix_needed_label(
         resume_verification.verify_resumed_pr(
             make_resume_scene(), issue, make_resume_config(tmp_path), "owner/repo",
         )
-    # The current label set already carries ai-fix-needed, so the
-    # transition does not invent a remove for absent ai-pr-opened.
-    assert captured["edits"] == [
-        ((9,), {"repo": "owner/repo", "add": "ai-fix-needed"}),
-    ]
+    # The current label set already carries ai-fix-needed, so the change
+    # is a no-op: no label write at all (Issue #2426).
+    assert captured["edits"] == []
 
 
 def test_verify_resumed_pr_fails_fast_when_scene_base_differs(
@@ -3918,10 +3900,7 @@ def test_verify_resumed_pr_fails_fast_when_scene_base_differs(
         or command[-1] in ("comments", "labels")
         for command in commands
     )
-    assert captured["edits"] == [
-        ((9,), {"repo": "owner/repo", "remove": "ai-pr-opened"}),
-        ((9,), {"repo": "owner/repo", "add": "ai-blocked"}),
-    ]
+    assert captured["edits"] == [["ai-blocked"]]
     body = captured["comments"][0][1]["body"]
     assert "Orbi failed:" in body
     assert run_marker_body() in body
@@ -3953,9 +3932,9 @@ def test_verify_resumed_pr_reraises_when_failure_reporting_fails(
     make_resume_failure_fake(monkeypatch)
 
     def broken_edit(*args, **kwargs):
-        raise RuntimeError("github edit failed")
+        raise RuntimeError("github label write failed")
 
-    monkeypatch.setattr(seam, "edit_issue", broken_edit)
+    monkeypatch.setattr(seam, "set_issue_labels", broken_edit)
     expected_resume_worktree(tmp_path).mkdir(parents=True)
     bind_run_id(FAKE_RUN_ID)
     with caplog.at_level("ERROR"), pytest.raises(
@@ -3992,10 +3971,7 @@ def test_verify_resumed_pr_without_bound_run_id_still_fix_needed(
             make_resume_scene(), make_resume_issue(),
             make_resume_config(tmp_path), "owner/repo",
         )
-    assert captured["edits"] == [
-        ((9,), {"repo": "owner/repo", "add": "ai-fix-needed",
-                "remove": "ai-pr-opened"}),
-    ]
+    assert captured["edits"] == [["ai-fix-needed"]]
     body = captured["comments"][0][1]["body"]
     assert "Orbi needs a fix:" in body
     # No run id: no marker, no milestone, no fix-needed progress scene

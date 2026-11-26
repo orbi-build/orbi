@@ -26,7 +26,7 @@ from typing import TYPE_CHECKING
 from orbi import language, user_summary
 from orbi.cli_source import refresh_cli_install
 from orbi.comment_trust import trusted_comments
-from orbi.delivery_labels import EVENT_CLAIM, EVENT_RELEASE_WAITING, label_name_set
+from orbi.delivery_labels import EVENT_CLAIM, EVENT_RELEASE_WAITING
 from orbi import delivery_labels
 from orbi.delivery_scene import RunContext
 from orbi.github import (
@@ -212,7 +212,7 @@ def process_release(issue: dict, config: RunnerConfig,
         event("release_task", run_info.text(), issue=number)
         apply_label_patch(
             number, repo=source_repo, event=EVENT_CLAIM,
-            current_labels=label_name_set(issue), ready_label=ready_label,
+            ready_label=ready_label,
         )
         set_active_run(ctx, title)
         publish(
@@ -508,7 +508,7 @@ def process_release(issue: dict, config: RunnerConfig,
         )
         apply_label_patch(
             number, repo=source_repo, event=EVENT_RELEASE_WAITING,
-            current_labels={delivery_labels.IN_PROGRESS_LABEL}, ready_label=ready_label,
+            ready_label=ready_label,
         )
         comment_issue(
             number, repo=source_repo,
@@ -529,7 +529,7 @@ def process_release(issue: dict, config: RunnerConfig,
         # ticket to the ready queue before releasing the caller's slot.
         apply_label_patch(
             number, repo=source_repo, event=EVENT_RELEASE_WAITING,
-            current_labels={delivery_labels.IN_PROGRESS_LABEL}, ready_label=ready_label,
+            ready_label=ready_label,
         )
         detail = ", ".join(f"#{item}" for item in waiting.issue_numbers)
         comment_issue(

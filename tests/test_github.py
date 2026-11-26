@@ -445,10 +445,7 @@ def test_apply_label_patch_applies_the_idempotent_patch(monkeypatch):
 
     # Issue #2369: the claim reads the Issue's labels and replaces the
     # WHOLE set in one write (GitHub's "Set labels for an issue").
-    github.apply_label_patch(
-        4, repo="o/r", event="claim",
-        current_labels={"ai-ready"},
-    )
+    github.apply_label_patch(4, repo="o/r", event="claim")
     assert captured == [
         ["gh", "issue", "view", "4", "--repo", "o/r", "--json", "labels"],
         ["gh", "api", "--method", "PUT", "repos/o/r/issues/4/labels",
@@ -460,10 +457,7 @@ def test_apply_label_patch_applies_the_idempotent_patch(monkeypatch):
     # queue labels go — still ONE write.
     issue_labels["current"] = ["ai-ready", "ai-fix-needed", "bug"]
     captured.clear()
-    github.apply_label_patch(
-        4, repo="o/r", event="claim",
-        current_labels={"ai-ready"},
-    )
+    github.apply_label_patch(4, repo="o/r", event="claim")
     assert captured == [
         ["gh", "issue", "view", "4", "--repo", "o/r", "--json", "labels"],
         ["gh", "api", "--method", "PUT", "repos/o/r/issues/4/labels",
@@ -477,7 +471,7 @@ def test_apply_label_patch_applies_the_idempotent_patch(monkeypatch):
         lambda event, labels, ready_label=None: ([], []),
     )
     captured.clear()
-    github.apply_label_patch(4, repo="o/r", event="claim", current_labels=set())
+    github.apply_label_patch(4, repo="o/r", event="claim")
     assert captured == [
         ["gh", "issue", "view", "4", "--repo", "o/r", "--json", "labels"],
     ]

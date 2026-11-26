@@ -30,6 +30,7 @@ from conftest import git
 
 import dataclasses
 
+import orbi.github as github
 import orbi.runner as runner
 from seam import seam
 
@@ -274,12 +275,17 @@ def install_fake_gh(monkeypatch, comments: list[str],
                     return "[]"
             if command[1] == "api":
                 if command[2:4] == ["--method", "PUT"]:
-                    # Issue #2369: the whole-set label replacement.
+                    # Issues #2369/#2426: the whole-set label replacement
+                    # is the observable result of a label change.
                     number = int(command[4].rsplit("/", 2)[-2])
                     new_labels = [
                         value[len("labels[]="):] for value in command
                         if value.startswith("labels[]=")
                     ]
+                    if fail_blocked_edit and "ai-blocked" in new_labels:
+                        # A failed terminal label write: the stop could not
+                        # land, so the Issue must stay resumable.
+                        raise subprocess.CalledProcessError(1, command)
                     if labels is not None:
                         labels[number] = new_labels
                     return json.dumps([
@@ -742,23 +748,21 @@ def test_e2e_restart_reuses_run_id_worktree_and_progress_comment(
     # ---- First attempt: the runner is killed after the claim (the
     # `ai-in-progress` edit reached GitHub) but before the failure path
     # could remove the label.
-    real_edit_issue = runner.edit_issue
+    real_write = github.set_issue_labels
 
-    def claiming_edit(number, **kwargs):
-        # Only the claim edit reaches GitHub before the kill; the
-        # failure path's label removal never happens. The blocked edit
-        # RAISING (Issue #256) is what keeps the Issue recoverable
-        # (ai-in-progress) — the terminal worktree cleanup is gated on
-        # the ai-blocked transition actually landing.
-        if kwargs.get("add") == "ai-in-progress" \
-                and kwargs.get("remove") is None:
-            real_edit_issue(number, **kwargs)
-            return
-        raise AssertionError("kill simulation: label edit must not land")
+    def claiming_write(number, *, repo, labels):
+        # Only the claim write reaches GitHub before the kill; the failure
+        # path's terminal write never happens. That write RAISING (Issue
+        # #256) is what keeps the Issue recoverable (ai-in-progress) — the
+        # terminal worktree cleanup is gated on the ai-blocked transition
+        # actually landing.
+        if "ai-in-progress" in labels and "ai-blocked" not in labels:
+            return real_write(number, repo=repo, labels=labels)
+        raise AssertionError("kill simulation: label write must not land")
 
-    monkeypatch.setattr(seam, "edit_issue", claiming_edit)
+    monkeypatch.setattr(seam, "set_issue_labels", claiming_write)
     monkeypatch.setattr(seam, "new_run_id", lambda: "a1b2c3d4")
-    # Issue #239: the failure path runs (the `claiming_edit` above
+    # Issue #239: the failure path runs (the `claiming_write` above
     # suppresses its label transition, simulating the kill) and
     # `process_issue` returns `None` instead of re-raising.
     assert runner.process_issue(issue(), config, REPO).kind == "failed"
@@ -775,7 +779,7 @@ def test_e2e_restart_reuses_run_id_worktree_and_progress_comment(
     # implementer (now healthy) delivers.
     caplog.clear()
     install_fake_pi(monkeypatch, tmp_path, FAKE_PI)
-    monkeypatch.setattr(seam, "edit_issue", real_edit_issue)
+    monkeypatch.setattr(seam, "set_issue_labels", real_write)
     monkeypatch.setattr(seam, "new_run_id", lambda: "b2c3d4e5")
     result = runner.process_issue(issue(), config, REPO)
 

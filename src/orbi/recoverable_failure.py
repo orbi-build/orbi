@@ -166,11 +166,6 @@ def _stop_repeated_failure(
                 f"- priority: {attempt.priority}"
             ),
             classify=True, evidence=True,
-            # The claim label and the queue label are the delivery state
-            # this run holds; the blocked patch clears them.
-            current_labels=(
-                {delivery_labels.IN_PROGRESS_LABEL, attempt.facts.dispatch_label}
-            ),
             review_round=0,
             finish=True,
             publisher=attempt.publisher,

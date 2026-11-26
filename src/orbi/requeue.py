@@ -39,7 +39,7 @@ from orbi.comment_trust import trusted_comments
 from orbi.delivery_labels import EVENT_REQUEUE
 from orbi import delivery_labels
 from orbi.github import (
-    apply_label_patch, comment_issue, issue_comments, issue_labels,
+    apply_label_patch, comment_issue, issue_comments,
 )
 from orbi.journal import LOGGER, event
 from orbi.progress import run_marker
@@ -81,7 +81,7 @@ def comment_body(*, run_id: str, reason: str, language_code: str,
 
 
 def report_once(record: failure.Failure, *, issue: dict, source_repo: str,
-                run_id: str, reason: str, current_labels,
+                run_id: str, reason: str,
                 language_code: str, status_url: str | None,
                 ready_label: str | None = None) -> str | None:
     """Re-queue the Issue once, or return None to keep the terminal report.
@@ -123,12 +123,8 @@ def report_once(record: failure.Failure, *, issue: dict, source_repo: str,
         run_id=run_id, reason=reason, language_code=language_code,
         status_url=status_url, issue=number, title=issue["title"],
     ))
-    labels = (
-        current_labels if current_labels is not None
-        else issue_labels(number, source_repo)
-    )
     apply_label_patch(
         number, repo=source_repo, event=EVENT_REQUEUE,
-        current_labels=labels, ready_label=ready_label,
+        ready_label=ready_label,
     )
     return OUTCOME_REQUEUED

@@ -259,7 +259,7 @@ def gate_env(tmp_path, monkeypatch, bind_run_id):
     review session is a Mock: the gate must start none."""
     worktree = runner.worktree_path(tmp_path, REPO, 39, RUN_ID)
     (worktree / ".orbi").mkdir(parents=True)
-    calls = {"edit": [], "comments": 0, "diff": 0}
+    calls = {"labels": [], "comments": 0, "diff": 0}
 
     def fake_run(command, **kwargs):
         if command[:2] == ["git", "diff"]:
@@ -292,8 +292,11 @@ def gate_env(tmp_path, monkeypatch, bind_run_id):
         lambda *a, **k: (calls.__setitem__("comments", calls["comments"] + 1)
                          or _scene_comments()),
     )
-    monkeypatch.setattr(seam, "edit_issue",
-        lambda number, **kwargs: calls["edit"].append(kwargs),
+    # Issue #2426: a delivery-label change is ONE whole-set replacement,
+    # so the fixture records the set it wrote.
+    monkeypatch.setattr(
+        seam, "set_issue_labels",
+        lambda number, *, repo, labels: calls["labels"].append(list(labels)),
     )
     monkeypatch.setattr(review_merge, "review_and_merge_if_clean", fake_review)
     bind_run_id(RUN_ID)
@@ -314,7 +317,7 @@ def test_gate_off_runs_the_review_exactly_like_today(gate_env, tmp_path):
     outcome = _round(_gate_config(tmp_path, gate=False))
     assert outcome is False
     assert gate_env["reviews"]
-    assert gate_env["calls"]["edit"] == []
+    assert gate_env["calls"]["labels"] == []
     # The fixture fake is strict: anything outside the recorded gh/git
     # surface fails the test loudly instead of answering garbage.
     with pytest.raises(AssertionError, match="unexpected command"):
@@ -330,19 +333,19 @@ def test_gate_on_with_column2_holds_without_any_session(gate_env, tmp_path):
     assert outcome is None
     assert gate_env["reviews"] == []
     assert gate_env["calls"]["comments"] == 0  # no scene, no review budget
-    assert gate_env["calls"]["edit"] == []
+    assert gate_env["calls"]["labels"] == []
 
 
-@pytest.mark.parametrize(("waiting_labels", "expected_edits"), [
+@pytest.mark.parametrize(("waiting_labels", "expected_labels"), [
     # The steady wait: the anchor alone is the waiting state, so the tick
     # writes nothing at all (Issue #2309).
     (["ai-pr-opened"], []),
     # A ticket claimed before the upgrade still carries the queue label:
-    # the wait removes it once and adds nothing.
-    (["ai-ready", "ai-pr-opened"], [{"repo": REPO, "remove": "ai-ready"}]),
+    # the wait removes it in the same ONE whole-set write (Issue #2426).
+    (["ai-ready", "ai-pr-opened"], [["ai-pr-opened"]]),
 ])
 def test_gate_on_waiting_tick_writes_only_a_label_change(
-    gate_env, tmp_path, monkeypatch, waiting_labels, expected_edits,
+    gate_env, tmp_path, monkeypatch, waiting_labels, expected_labels,
 ):
     """Issue #2309: a waiting ticket keeps its opened-PR anchor and is NOT
     queued — the wait patch fires only when a label would change, so a
@@ -352,7 +355,7 @@ def test_gate_on_waiting_tick_writes_only_a_label_change(
     )
     outcome = _round(_gate_config(tmp_path))
     assert outcome is None
-    assert gate_env["calls"]["edit"] == expected_edits
+    assert gate_env["calls"]["labels"] == expected_labels
     assert gate_env["reviews"] == []
 
 
@@ -367,7 +370,7 @@ def test_gate_on_clears_the_resolved_queue_label_of_a_custom_dispatch(
     )
     outcome = _round(_gate_config(tmp_path, dispatch_label="ship"))
     assert outcome is None
-    assert gate_env["calls"]["edit"] == [{"repo": REPO, "remove": "ship"}]
+    assert gate_env["calls"]["labels"] == [["ai-pr-opened"]]
     assert gate_env["reviews"] == []
 
 
@@ -379,7 +382,7 @@ def test_gate_on_with_the_human_label_runs_the_review(gate_env, tmp_path,
     outcome = _round(_gate_config(tmp_path))
     assert outcome is False
     assert gate_env["reviews"]
-    assert gate_env["calls"]["edit"] == []
+    assert gate_env["calls"]["labels"] == []
 
 
 def test_gate_on_with_empty_column2_passes_without_the_label(
@@ -394,7 +397,7 @@ def test_gate_on_with_empty_column2_passes_without_the_label(
     outcome = _round(_gate_config(tmp_path))
     assert outcome is False
     assert gate_env["reviews"]
-    assert gate_env["calls"]["edit"] == []
+    assert gate_env["calls"]["labels"] == []
 
 
 def test_gate_on_without_checks_holds_on_the_missing_evidence(
@@ -416,7 +419,7 @@ def test_gate_on_without_checks_holds_on_the_missing_evidence(
     )
     assert outcome is None
     assert gate_env["reviews"] == []
-    assert gate_env["calls"]["edit"] == []
+    assert gate_env["calls"]["labels"] == []
 
 
 def test_gate_on_with_missing_worktree_falls_through_to_recovery(
@@ -433,10 +436,7 @@ def test_gate_on_with_missing_worktree_falls_through_to_recovery(
     # existing recoverable classification applied (ai-fix-needed).
     assert outcome is None
     assert gate_env["calls"]["comments"] >= 1
-    assert any(
-        call.get("remove") == "ai-pr-opened"
-        for call in gate_env["calls"]["edit"]
-    )
+    assert ["ai-fix-needed"] in gate_env["calls"]["labels"]
     assert gate_env["reviews"] == []
 
 

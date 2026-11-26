@@ -321,6 +321,34 @@ def test_a_decline_appends_the_persons_own_words_and_requeues(
     assert len(successes(gh)) == 1
 
 
+def test_the_unblock_is_one_whole_set_label_write(monkeypatch, tmp_path):
+    """Issue #2426: answering a blocked stop is ONE whole-set
+    replacement of the delivery labels, so GitHub cannot apply the
+    ai-blocked removal and fail the ai-ready add (the #3953/#669 shape
+    that left the Issue with no delivery label at all). Labels that are
+    not delivery states (bug, p0) survive either way."""
+    gh = _gh(monkeypatch)
+    stopped_ticket(gh, labels=(BLOCKED_LABEL, "bug", "p0"))
+    post(gh, value="Add the assumption")
+
+    tick(monkeypatch, tmp_path, gh)
+
+    assert set(labels(gh)) == {READY_LABEL, "bug", "p0"}
+    writes = [
+        command for command in gh.commands
+        if command[0:4] == ["gh", "api", "--method", "PUT"]
+        and command[4].endswith(f"/issues/{TICKET}/labels")
+    ]
+    assert len(writes) == 1
+    # A single-effect gh label edit would be the pre-#2426 shape.
+    assert not [
+        command for command in gh.commands
+        if " ".join(command).startswith("gh issue edit")
+        and any(part in ("--add-label", "--remove-label") for part in command)
+    ]
+    assert len(successes(gh)) == 1
+
+
 def test_a_confirm_yes_appends_the_questions_criterion(
     monkeypatch, tmp_path,
 ):

@@ -420,19 +420,20 @@ def test_process_issue_p0_failure_enters_ai_blocked_terminal_state(
     assert runner.process_issue(issue, make_config(tmp_path),
                                 "xqliu/orbi").kind == "failed"
     # Issue #2369: the claim is ONE whole-set replacement (the queue
-    # entry goes, `ai-in-progress` comes).
-    assert _label_writes(calls) == [[
-        "gh", "api", "--method", "PUT",
-        "repos/xqliu/orbi/issues/18/labels",
-        "-f", "labels[]=ai-in-progress", "--include",
-    ]]
-    # Issue #2357: the terminal removals are written before its add.
-    assert edit.call_args_list[0] == mock_call(
-        18, repo="xqliu/orbi", remove="ai-ready",
-    )
-    assert edit.call_args_list[1] == mock_call(
-        18, repo="xqliu/orbi", add="ai-blocked",
-    )
+    # entry goes, `ai-in-progress` comes). Issue #2426: the blocked
+    # terminal is ONE more, ending on `ai-blocked` alone.
+    assert _label_writes(calls) == [
+        [
+            "gh", "api", "--method", "PUT",
+            "repos/xqliu/orbi/issues/18/labels",
+            "-f", "labels[]=ai-in-progress", "--include",
+        ],
+        [
+            "gh", "api", "--method", "PUT",
+            "repos/xqliu/orbi/issues/18/labels",
+            "-f", "labels[]=ai-blocked", "--include",
+        ],
+    ]
     # The failure comment carries the run marker and the reason.
     failure_comments = [
         call for call in calls
@@ -987,23 +988,26 @@ def test_recoverable_401_stops_after_three_identical_ticks(monkeypatch, tmp_path
             make_issue(), make_config(tmp_path), "xqliu/orbi",
         ).kind == "failed"
     assert all(
-        "ai-blocked" not in str(call.kwargs)
-        for call in runner.edit_issue.call_args_list
+        "labels[]=ai-blocked" not in write
+        for write in _label_writes(_calls)
     )
     assert len(_recoverable_scenes(comments)) == 1
 
     assert runner.process_issue(
         make_issue(), make_config(tmp_path), "xqliu/orbi",
     ).kind == "failed"
-    edits = [call.kwargs for call in runner.edit_issue.call_args_list]
     blockers = [
         body for body in (comment["body"] for comment in comments)
         if "Orbi failed:" in body
     ]
     assert len(blockers) == 1, comments
-    # Issue #2357: the terminal add is the last label write.
-    assert edits[-1].get("add") == "ai-blocked", edits
-    assert any(edit.get("remove") for edit in edits[:-1]), edits
+    # Issue #2426: the terminal is the last label write, ONE whole-set
+    # replacement ending on ai-blocked alone.
+    writes = _label_writes(_calls)
+    assert writes[-1] == [
+        "gh", "api", "--method", "PUT", "repos/xqliu/orbi/issues/18/labels",
+        "-f", "labels[]=ai-blocked", "--include",
+    ]
     # The recovery comment keeps the two prior occurrences.
     assert len(_recoverable_scenes(comments)) == 1
     assert "<!-- orbi:fail=" in _recoverable_scenes(comments)[0]["body"]
@@ -1494,15 +1498,16 @@ def test_process_issue_pr_opened_scene_has_no_duplicate_milestone(
     )
     patch_process_deps(monkeypatch, tmp_path)
     edits = []
-    monkeypatch.setattr(seam, "edit_issue", lambda number, **kwargs:
-                        edits.append(kwargs))
+    monkeypatch.setattr(
+        seam, "set_issue_labels",
+        lambda number, *, repo, labels: edits.append(list(labels)))
     caplog.set_level("ERROR")
 
     result = runner.process_issue(make_issue(), make_config(tmp_path),
                                   "xqliu/orbi")
 
     assert result.url == "https://github.com/xqliu/orbi/pull/40"
-    assert not any(kwargs.get("add") == "ai-blocked" for kwargs in edits)
+    assert ["ai-blocked"] not in edits
     # No duplicate PR-opened milestone is attempted. The delivered
     # finish still ran (independent step)...
     delivered_patches = [c for c in calls if _progress_patch_of(c)]
@@ -1661,8 +1666,9 @@ def test_process_issue_started_scene_has_no_duplicate_milestone(
     )
     patch_process_deps(monkeypatch, tmp_path)
     edits = []
-    monkeypatch.setattr(seam, "edit_issue", lambda number, **kwargs:
-                        edits.append(kwargs))
+    monkeypatch.setattr(
+        seam, "set_issue_labels",
+        lambda number, *, repo, labels: edits.append(list(labels)))
     caplog.set_level("ERROR")
 
     result = runner.process_issue(make_issue(), make_config(tmp_path),
@@ -1670,7 +1676,7 @@ def test_process_issue_started_scene_has_no_duplicate_milestone(
 
     assert result.url == "https://github.com/xqliu/orbi/pull/40"
     assert pi_session.run_pi.called
-    assert not any(kwargs.get("add") == "ai-blocked" for kwargs in edits)
+    assert ["ai-blocked"] not in edits
     # The ensure itself succeeded; the scene comment is the sole
     # started announcement...
     assert any("Orbi progress" in body for body in posted)
@@ -1696,8 +1702,9 @@ def test_process_issue_plan_milestone_failure_does_not_fail_delivery(
     )
     patch_process_deps(monkeypatch, tmp_path)
     edits = []
-    monkeypatch.setattr(seam, "edit_issue", lambda number, **kwargs:
-                        edits.append(kwargs))
+    monkeypatch.setattr(
+        seam, "set_issue_labels",
+        lambda number, *, repo, labels: edits.append(list(labels)))
     caplog.set_level("ERROR")
 
     # The worktree (created by the patched create_worktree) carries a
@@ -1714,7 +1721,7 @@ def test_process_issue_plan_milestone_failure_does_not_fail_delivery(
                                   "xqliu/orbi")
 
     assert result.url == "https://github.com/xqliu/orbi/pull/40"
-    assert not any(kwargs.get("add") == "ai-blocked" for kwargs in edits)
+    assert ["ai-blocked"] not in edits
     assert caplog.text.count("progress_publish_failed") >= 1, caplog.text
     # The failed milestone was not posted...
     assert not any("Orbi: plan ready" in body for body in posted)
@@ -1756,8 +1763,9 @@ def test_process_issue_failure_path_progress_failure_keeps_blocked_transition(
         ),
     )
     edits = []
-    monkeypatch.setattr(seam, "edit_issue", lambda number, **kwargs:
-                        edits.append(kwargs))
+    monkeypatch.setattr(
+        seam, "set_issue_labels",
+        lambda number, *, repo, labels: edits.append(list(labels)))
     caplog.set_level("ERROR")
 
     # Issue #239: the failure is terminal — `process_issue` returns
@@ -1768,7 +1776,7 @@ def test_process_issue_failure_path_progress_failure_keeps_blocked_transition(
 
     # The `ai-blocked` transition completed even though the progress
     # publishing 404'd...
-    assert any(kwargs.get("add") == "ai-blocked" for kwargs in edits)
+    assert ["ai-blocked"] in edits
     # ...the `Orbi failed` comment was posted...
     comment_bodies = [
         command[-1] for command in calls
@@ -1814,7 +1822,7 @@ def test_review_and_merge_posts_review_findings_milestone(monkeypatch, tmp_path)
         monkeypatch, tmp_path, verdict=findings_verdict,
     )
     assert merged is False
-    assert any(kwargs.get("add") == "ai-fix-needed" for kwargs in edits)
+    assert ["ai-fix-needed"] in edits
     milestones = [
         body for body in posted
         if any(line.startswith(progress.MILESTONE_PREFIX)
@@ -1847,7 +1855,7 @@ def test_review_and_merge_posts_merged_milestone_and_final_summary(
         monkeypatch, tmp_path, verdict=pass_verdict,
     )
     assert merged is True
-    assert any(kwargs.get("add") == "ai-merged" for kwargs in edits)
+    assert ["ai-merged"] in edits
     milestones = [
         body for body in posted
         if any(line.startswith(progress.MILESTONE_PREFIX)
@@ -1888,8 +1896,12 @@ def test_review_and_merge_posts_merged_milestone_and_final_summary(
 
 def _progress_call_of(command) -> bool:
     """True for the `ProgressPublisher` gh traffic (issue comments API:
-    the ensure GET/POST, the milestone POST, the finish PATCH)."""
-    return command[:2] == ["gh", "api"]
+    the ensure GET/POST, the milestone POST, the finish PATCH).
+
+    A delivery-label replacement is `gh api` too but not progress
+    traffic, so the Issue's label endpoint is excluded (Issue #2426)."""
+    return command[:2] == ["gh", "api"] and not any(
+        part.endswith("/labels") for part in command)
 
 
 def _run_review_and_merge(monkeypatch, tmp_path, *, verdict,
@@ -1965,8 +1977,9 @@ def _run_review_and_merge(monkeypatch, tmp_path, *, verdict,
     # on ProgressPublisher's bypass behavior. Issue #788: the gate's CI read
     # is one-shot inside merge_gate itself, so no separate stub is needed.
     edits = []
-    monkeypatch.setattr(seam, "edit_issue",
-        lambda number, **kwargs: edits.append(kwargs),
+    monkeypatch.setattr(
+        seam, "set_issue_labels",
+        lambda number, *, repo, labels: edits.append(list(labels)),
     )
     monkeypatch.setattr(seam, "comment_issue", Mock())
     monkeypatch.setattr(failure_report, "comment_pr", Mock())
@@ -2022,12 +2035,12 @@ def test_review_and_merge_ensure_failure_does_not_block_issue(
     assert merged is False
     # The findings state transition happened (the next review session
     # retries the same PR)...
-    assert any(kwargs.get("add") == "ai-fix-needed" for kwargs in edits)
+    assert ["ai-fix-needed"] in edits
     # ...the review ran (run_review was called: the findings comment
     # was posted to the Issue)...
     assert runner.comment_issue.called
     # ...and the delivery was NOT marked blocked.
-    assert not any(kwargs.get("add") == "ai-blocked" for kwargs in edits)
+    assert ["ai-blocked"] not in edits
     # The progress failure is logged as bypass.
     assert any(
         "progress_publish_failed" in line
@@ -2072,12 +2085,12 @@ def test_review_and_merge_clean_verdict_merges_despite_progress_404(
     )
     assert merged is True
     # The merge landed and the Issue is ai-merged...
-    assert any(kwargs.get("add") == "ai-merged" for kwargs in edits)
+    assert ["ai-merged"] in edits
     # ...the merged PR scene comment was posted (delivery record, not
     # progress)...
     assert runner.comment_issue.called
     # ...and the delivery was NOT marked blocked.
-    assert not any(kwargs.get("add") == "ai-blocked" for kwargs in edits)
+    assert ["ai-blocked"] not in edits
     # The progress failures are logged as bypass (the merged milestone
     # and the delivered finish were both attempted and 404'd).
     assert caplog.text.count("progress_publish_failed") >= 2, caplog.text
@@ -2115,8 +2128,8 @@ def test_review_and_merge_findings_publish_failure_does_not_block_issue(
         ),
     )
     assert merged is False
-    assert any(kwargs.get("add") == "ai-fix-needed" for kwargs in edits)
-    assert not any(kwargs.get("add") == "ai-blocked" for kwargs in edits)
+    assert ["ai-fix-needed"] in edits
+    assert ["ai-blocked"] not in edits
     assert any("progress_publish_failed" in line
                for line in caplog.text.splitlines()), caplog.text
     # The ensure succeeded (only the findings milestone/finish 404'd)...
@@ -2485,8 +2498,9 @@ def test_delivery_step_closed_unmerged_progress_failure_still_releases(
         posted=posted,
     )
     edits = []
-    monkeypatch.setattr(seam, "edit_issue",
-        lambda number, **kwargs: edits.append(kwargs),
+    monkeypatch.setattr(
+        seam, "set_issue_labels",
+        lambda number, *, repo, labels: edits.append(list(labels)),
     )
     comments = []
     monkeypatch.setattr(seam, "comment_issue",
@@ -2503,12 +2517,10 @@ def test_delivery_step_closed_unmerged_progress_failure_still_releases(
         config_domain.RunnerConfig(), "owner/repo",
     )
 
-    # The `ai-blocked` transition (the blocked patch clears every
-    # delivery-state label that is present — here only `ai-fix-needed`)
-    # completed even though the progress publishing 404'd...
-    # Issue #2357: the removal lands first, the terminal add last.
-    assert {"repo": "owner/repo", "remove": "ai-fix-needed"} in edits
-    assert edits[-1] == {"repo": "owner/repo", "add": "ai-blocked"}
+    # The `ai-blocked` transition (ONE whole-set write that clears every
+    # delivery-state label present — here only `ai-fix-needed`) completed
+    # even though the progress publishing 404'd (Issue #2426)...
+    assert edits[-1] == ["ai-blocked"]
     # ...the failure comment was posted...
     assert any(
         "closed without a merge" in kwargs.get("body", "")
@@ -2563,8 +2575,9 @@ def test_delivery_step_review_failure_progress_failure_still_releases(
         posted=posted,
     )
     edits = []
-    monkeypatch.setattr(seam, "edit_issue",
-        lambda number, **kwargs: edits.append(kwargs),
+    monkeypatch.setattr(
+        seam, "set_issue_labels",
+        lambda number, *, repo, labels: edits.append(list(labels)),
     )
     comments = []
     monkeypatch.setattr(seam, "comment_issue",
@@ -2582,10 +2595,8 @@ def test_delivery_step_review_failure_progress_failure_still_releases(
     )
 
     # The `ai-blocked` transition completed even though the progress
-    # publishing 404'd...
-    # Issue #2357: the removal lands first, the terminal add last.
-    assert {"repo": "owner/repo", "remove": "ai-pr-opened"} in edits
-    assert edits[-1] == {"repo": "owner/repo", "add": "ai-blocked"}
+    # publishing 404'd: ONE whole-set write (Issue #2426)...
+    assert edits[-1] == ["ai-blocked"]
     # ...the failure comment was posted...
     assert any(
         "independent review" in kwargs.get("body", "")
@@ -2847,8 +2858,9 @@ def test_delivery_step_external_closed_requeues_for_internal_redo(
     Issue (docs/contributing.mdx)."""
     _external_wait_fake(monkeypatch, pr_state="CLOSED")
     edits = []
-    monkeypatch.setattr(seam, "edit_issue",
-        lambda number, **kwargs: edits.append(kwargs),
+    monkeypatch.setattr(
+        seam, "set_issue_labels",
+        lambda number, *, repo, labels: edits.append(list(labels)),
     )
     commented = []
     monkeypatch.setattr(seam, "comment_issue",
@@ -2868,10 +2880,7 @@ def test_delivery_step_external_closed_requeues_for_internal_redo(
         config_domain.RunnerConfig(repo_dir=Path("/srv/repo"), base_branch="main"),
         "xqliu/orbi", external_takeover=True,
     )
-    assert edits == [{
-        "repo": "xqliu/orbi", "add": "ai-ready",
-        "remove": "ai-pr-opened",
-    }]
+    assert edits == [["ai-ready"]]
     assert any(
         "closed without" in kwargs.get("body", "")
         and "internal" in kwargs.get("body", "")

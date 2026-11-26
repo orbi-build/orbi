@@ -934,8 +934,9 @@ def test_process_issue_fails_fast_when_the_run_state_is_missing(
         lambda *args, **kwargs: run_pi_calls.append(1) or "done",
     )
     edits = []
-    monkeypatch.setattr(seam, "edit_issue",
-        lambda *args, **kwargs: edits.append((args, kwargs)),
+    monkeypatch.setattr(
+        seam, "set_issue_labels",
+        lambda number, *, repo, labels: edits.append(list(labels)),
     )
     caplog.set_level("INFO")
     with pytest.raises(RuntimeError, match="run state"):
@@ -949,14 +950,9 @@ def test_process_issue_fails_fast_when_the_run_state_is_missing(
         )
     # No fresh run was started.
     assert run_pi_calls == []
-    # Issue #2357: the removal is written before the terminal add, so
-    # the timeline ends on ai-blocked alone.
-    assert edits[-2] == ((4,), {
-        "repo": "xqliu/orbi-backlog", "remove": "ai-in-progress",
-    })
-    assert edits[-1] == ((4,), {
-        "repo": "xqliu/orbi-backlog", "add": "ai-blocked",
-    })
+    # Issue #2426: the terminal is ONE whole-set replacement, so the
+    # Issue ends ai-blocked alone.
+    assert edits[-1] == ["ai-blocked"]
     # The failure comment carries the reason and the run marker.
     failed = [
         body for body in comment_bodies

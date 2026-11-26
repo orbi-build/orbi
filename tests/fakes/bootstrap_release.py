@@ -453,9 +453,9 @@ def make_release_process_env(monkeypatch, *, body=RELEASE_DECLARATION_BODY,
         "edits": [], "comments": [], "commands": [],
         "run_ids": [], "active_runs": [],
         "published": [],
-        # Issue #2357: the release Issue's real labels, so the terminal
-        # transition reads what is actually on it (the claim removed the
-        # queue label; `ai-release` is a type marker).
+        # The release Issue's real labels, so every transition reads what
+        # is actually on it (the claim removed the queue label;
+        # `ai-release` is a type marker).
         "labels": {"ai-ready", "ai-release"},
     }
 
@@ -463,11 +463,18 @@ def make_release_process_env(monkeypatch, *, body=RELEASE_DECLARATION_BODY,
         state["commands"].append((command, kwargs))
         if (command[0:4] == ["gh", "api", "--method", "PUT"]
                 and command[4].endswith("/labels")):
-            # Issue #2369: the claim's whole-set label replacement.
-            state["labels"] = {
+            # Issues #2369/#2426: ONE whole-set label replacement, which
+            # is the observable result of every delivery-label change.
+            written = sorted(
                 value[len("labels[]="):] for value in command
                 if value.startswith("labels[]=")
-            }
+            )
+            if fail_merged_add and "ai-merged" in written:
+                # The terminal write fails as a whole: nothing is applied,
+                # so the Issue keeps the labels it had (Issue #2426).
+                raise RuntimeError("GitHub unavailable")
+            state["edits"].append(written)
+            state["labels"] = set(written)
             return json.dumps([
                 {"name": name} for name in sorted(state["labels"])
             ])
@@ -627,9 +634,6 @@ def make_release_process_env(monkeypatch, *, body=RELEASE_DECLARATION_BODY,
                         lambda r, s, n: existing_run_id)
     monkeypatch.setattr(seam, "freeze_base", lambda r, b: "abc123")
     def fake_edit_issue(n, **k):
-        if fail_merged_add and k.get("add") == "ai-merged":
-            # Issue #2357: the terminal add fails after the removals.
-            raise RuntimeError("GitHub unavailable")
         state["edits"].append((n, k))
         if k.get("add"):
             state["labels"].add(k["add"])

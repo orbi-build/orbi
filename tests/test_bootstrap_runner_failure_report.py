@@ -190,7 +190,7 @@ def test_blocked_failure_suffix_stays_inside_closed_diagnostics(
         source_repo="owner/repo", run_id="abcdef12", pr_url=None,
         worktree=tmp_path, branch="orbi/task", role=runner.ROLE_REVIEW,
         classify=True, blocked_suffix="the preserved PR needs a decision",
-        current_labels=set(), language_code="en",
+        language_code="en",
     )
 
     assert posted[0].count("<details>") == 1
@@ -213,7 +213,7 @@ def test_no_run_id_failure_still_preserves_action_and_evidence(
         worktree=tmp_path, branch="orbi/task", role=runner.ROLE_IMPLEMENT,
         action="Repair provider access.", reason="delivery failed",
         diagnosis="provider failed", classify=False, evidence=True,
-        current_labels=set(), language_code="en",
+        language_code="en",
     )
 
     assert "**Action:** Repair provider access." in posted[0]

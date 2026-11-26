@@ -1012,8 +1012,8 @@ def test_merge_gate_skips_merge_when_issue_is_blocked(monkeypatch, tmp_path):
     ])
     monkeypatch.setattr(seam, "comment_issue",
                         lambda *a, **k: comments.append(k))
-    monkeypatch.setattr(seam, "edit_issue",
-                        lambda *a, **k: calls.append(("edit", k)))
+    monkeypatch.setattr(seam, "set_issue_labels",
+                        lambda number, *, repo, labels: calls.append(("labels", list(labels))))
 
     def fake_run(command, **kwargs):
         calls.append(command)
@@ -1062,8 +1062,8 @@ def test_merge_gate_issue_blocked_skip_comment_follows_the_language(
     ])
     monkeypatch.setattr(seam, "comment_issue",
                         lambda *a, **k: comments.append(k))
-    monkeypatch.setattr(seam, "edit_issue",
-                        lambda *a, **k: calls.append(("edit", k)))
+    monkeypatch.setattr(seam, "set_issue_labels",
+                        lambda number, *, repo, labels: calls.append(("labels", list(labels))))
 
     def fake_run(command, **kwargs):
         calls.append(command)
@@ -1101,8 +1101,8 @@ def test_merge_gate_issue_blocked_comment_failure_is_bypass(
         raise RuntimeError("comment endpoint down")
 
     monkeypatch.setattr(seam, "comment_issue", failing_comment)
-    monkeypatch.setattr(seam, "edit_issue",
-                        lambda *a, **k: calls.append(("edit", k)))
+    monkeypatch.setattr(seam, "set_issue_labels",
+                        lambda number, *, repo, labels: calls.append(("labels", list(labels))))
 
     def fake_run(command, **kwargs):
         calls.append(command)
@@ -1553,8 +1553,10 @@ def test_review_handoff_marks_issue_awaiting_merge(monkeypatch, tmp_path):
             ):
         monkeypatch.setattr(seam, "comment_issue",
                             lambda *a, **k: calls.append(k.get("body")))
-        monkeypatch.setattr(seam, "edit_issue",
-                            lambda *a, **k: calls.append(k))
+        monkeypatch.setattr(
+            seam, "set_issue_labels",
+            lambda number, *, repo, labels: calls.append(list(labels)),
+        )
         make_fake_gh(monkeypatch)
         assert review_merge.review_and_merge_if_clean(
             tmp_path, "branch", "main", _review_merge_config(tmp_path),
@@ -1567,8 +1569,7 @@ def test_review_handoff_marks_issue_awaiting_merge(monkeypatch, tmp_path):
             and "maintainer merge" not in call and "merge it" not in call
             for call in calls
         )
-        assert any(call.get("add") == "ai-awaiting-merge" for call in calls
-                   if isinstance(call, dict))
+        assert ["ai-awaiting-merge"] in calls
 
 
 def _drive_merge_handoff(monkeypatch, tmp_path, state, *, preflight=None,
@@ -1596,8 +1597,9 @@ def _drive_merge_handoff(monkeypatch, tmp_path, state, *, preflight=None,
     )
     monkeypatch.setattr(seam, "comment_issue", fake_comment_issue)
     monkeypatch.setattr(
-        seam, "edit_issue",
-        lambda *a, **k: state["label_patches"].append(k),
+        seam, "set_issue_labels",
+        lambda number, *, repo, labels: state["label_patches"].append(
+            list(labels)),
     )
     make_fake_gh(monkeypatch)
     with patch.object(
@@ -1631,13 +1633,18 @@ def _handoff_state(labels):
 def test_awaiting_merge_retry_does_not_repost_the_same_wait(
         monkeypatch, tmp_path, caplog):
     """Issue #1422: the same head + blocker announces once, then only
-    journals; the retry posts no comment and applies no label patch."""
+    journals; the retry posts no comment and writes no label.
+
+    Issue #2426: the label change is one whole-set replacement, so an
+    `ai-awaiting-merge` Issue it would not change gets no write at all —
+    where the pre-#2426 sequence issued an idempotent add on the first
+    call."""
     state = _handoff_state(["ai-awaiting-merge"])
     with caplog.at_level("INFO", logger="orbi.bootstrap"):
         assert _drive_merge_handoff(monkeypatch, tmp_path, state) is False
         assert _drive_merge_handoff(monkeypatch, tmp_path, state) is False
     assert len(state["comments_posted"]) == 1
-    assert len(state["label_patches"]) == 1
+    assert state["label_patches"] == []
     assert "delivery_awaiting_human_merge " in caplog.text
     assert "delivery_awaiting_human_merge_unchanged" in caplog.text
 
@@ -1672,10 +1679,7 @@ def test_awaiting_merge_first_entry_still_posts_and_labels(
     state = _handoff_state(["ai-pr-opened"])
     assert _drive_merge_handoff(monkeypatch, tmp_path, state) is False
     assert len(state["comments_posted"]) == 1
-    assert any(
-        patch.get("add") == "ai-awaiting-merge"
-        for patch in state["label_patches"]
-    )
+    assert state["label_patches"] == [["ai-awaiting-merge"]]
 
 
 def test_awaiting_merge_retry_ignores_a_public_comment_copy(
@@ -1728,7 +1732,8 @@ def test_resumed_awaiting_merge_succeeds_without_review(monkeypatch, tmp_path):
     )
     monkeypatch.setattr(seam, "issue_comments", lambda *a, **k: [])
     monkeypatch.setattr(
-        seam, "edit_issue", lambda *a, **k: calls.append(k),
+        seam, "set_issue_labels",
+        lambda number, *, repo, labels: calls.append(list(labels)),
     )
     monkeypatch.setattr(seam, "comment_issue", lambda *a, **k: None)
     make_fake_gh(monkeypatch)
@@ -1751,11 +1756,9 @@ def test_resumed_awaiting_merge_succeeds_without_review(monkeypatch, tmp_path):
             "owner/repo", 4, title="Review task", priority="normal",
             scene=_scene(), merge_only=True,
         ) is True
-    # Issue #2357: the removal is written before the terminal add.
-    assert calls == [
-        {"repo": "owner/repo", "remove": "ai-awaiting-merge"},
-        {"repo": "owner/repo", "add": "ai-merged"},
-    ]
+    # Issue #2426: the terminal is ONE whole-set replacement that ends on
+    # ai-merged alone.
+    assert calls == [["ai-merged"]]
 
 
 # ---------------------------------------------------------------------------
@@ -2676,7 +2679,10 @@ def test_review_and_merge_skips_ai_merged_when_issue_blocked(
         )
 
     monkeypatch.setattr(seam, "merge_gate", blocked_gate)
-    monkeypatch.setattr(seam, "edit_issue", lambda *a, **k: calls.append(k))
+    monkeypatch.setattr(
+        seam, "set_issue_labels",
+        lambda number, *, repo, labels: calls.append(list(labels)),
+    )
     monkeypatch.setattr(seam, "comment_issue", lambda *a, **k: None)
     merged = review_merge.review_and_merge_if_clean(
         tmp_path, "branch", "main", _review_merge_config(tmp_path),
@@ -2707,8 +2713,10 @@ def test_review_and_merge_clean_verdict_merges_and_labels_merged(
     )
     monkeypatch.setattr(merge_exec, "sync_base_checkout",
                         lambda *a, **k: calls.append("sync"))
-    monkeypatch.setattr(seam, "edit_issue",
-        lambda *a, **k: calls.append(("edit", k)),
+    monkeypatch.setattr(
+        seam, "set_issue_labels",
+        lambda number, *, repo, labels: calls.append(
+            ("labels", list(labels))),
     )
     monkeypatch.setattr(seam, "comment_issue",
         lambda *a, **k: calls.append(("comment", k.get("body"))),
@@ -2722,17 +2730,10 @@ def test_review_and_merge_clean_verdict_merges_and_labels_merged(
     )
     assert merged is True
     assert "sync" in calls
-    # Issue #2357: every removal is written before the terminal add, so
-    # the timeline ends on ai-merged.
-    assert ("edit", {"repo": "owner/repo", "remove": "ai-pr-opened"}) in calls
-    # Issue #1526: the merge also clears the ready queue entry, so the
-    # Issue ends `ai-merged` ALONE.
-    assert ("edit", {"repo": "owner/repo", "remove": "ai-ready"}) in calls
-    assert [c[1] for c in calls if c[0] == "edit"] == [
-        {"repo": "owner/repo", "remove": "ai-pr-opened"},
-        {"repo": "owner/repo", "remove": "ai-ready"},
-        {"repo": "owner/repo", "add": "ai-merged"},
-    ]
+    # Issue #2426: the terminal is ONE whole-set replacement that clears
+    # the opened-PR state and the ready queue entry (#1526), so the Issue
+    # ends `ai-merged` ALONE.
+    assert [c[1] for c in calls if c[0] == "labels"] == [["ai-merged"]]
     comments = [c[1] for c in calls if c[0] == "comment"]
     receipts = [body for body in comments if "Orbi merged PR: u" in body]
     assert len(receipts) == 1, comments
@@ -2742,7 +2743,7 @@ def test_review_and_merge_clean_verdict_merges_and_labels_merged(
     # must not reword a comment or reorder a label patch.
     assert comment == closeout_golden()["merged-comment"]
     assert json.dumps(
-        [c[1] for c in calls if c[0] == "edit"], indent=2,
+        [c[1] for c in calls if c[0] == "labels"], indent=2,
     ) == closeout_golden()["merged-labels"]
     assert "merge_commit=m1" in comment
     assert "review_rounds=1" in comment
@@ -2762,8 +2763,7 @@ def test_review_and_merge_clean_verdict_merges_and_labels_merged(
     assert "- review_rounds: 1\n" in milestone[0]
     # Delivery labels land before the local checkout sync: a sync
     # failure must not rewrite a landed merge as ai-blocked.
-    assert calls.index(("edit", {"repo": "owner/repo",
-                                 "add": "ai-merged"})) < calls.index("sync")
+    assert calls.index(("labels", ["ai-merged"])) < calls.index("sync")
     # Issue #1660: the review/merge phase PATCHes the run's LIVE progress
     # comment, so the round's context and publisher carry the bound
     # message language: a zh-bound delivery renders the header and the
@@ -2816,8 +2816,12 @@ def _merged_round(monkeypatch, tmp_path, *, gate, state="MERGED",
     # The fake gh call list IS the event list: the close command lands in
     # it, so the label, the record and the close need one shared order.
     events, _posted = make_fake_gh(monkeypatch)
+    # Issue #2426: a label change is ONE whole-set replacement, so the
+    # event list carries the set the transition wrote.
     monkeypatch.setattr(
-        seam, "edit_issue", lambda *a, **k: events.append(("edit", k)),
+        seam, "set_issue_labels",
+        lambda number, *, repo, labels: events.append(
+            ("labels", list(labels))),
     )
     monkeypatch.setattr(
         seam, "comment_issue",
@@ -2863,7 +2867,7 @@ def test_review_and_merge_closes_the_issue_of_a_landed_unmerged_merge(
     labelled_at = [
         index for index, call in enumerate(events)
         if isinstance(call, tuple)
-        and call[0] == "edit" and call[1].get("add") == "ai-merged"
+        and call[0] == "labels" and call[1] == ["ai-merged"]
     ]
     assert len(labelled_at) == 1
     commented_at = [
@@ -2896,8 +2900,8 @@ def test_review_and_merge_keeps_the_merged_fact_when_the_close_fails(
         )
     assert merged is True
     assert any(
-        isinstance(call, tuple) and call[0] == "edit"
-        and call[1].get("add") == "ai-merged"
+        isinstance(call, tuple) and call[0] == "labels"
+        and call[1] == ["ai-merged"]
         for call in events
     )
     record = [
@@ -2946,8 +2950,8 @@ def test_review_and_merge_skips_checkout_sync_for_a_locked_engine_source(
     )
     monkeypatch.setattr(merge_exec, "sync_base_checkout",
                         lambda *a, **k: calls.append("sync"))
-    monkeypatch.setattr(seam, "edit_issue",
-        lambda *a, **k: calls.append(("edit", k)),
+    monkeypatch.setattr(seam, "set_issue_labels",
+        lambda number, *, repo, labels: calls.append(("labels", list(labels))),
     )
     monkeypatch.setattr(seam, "comment_issue",
         lambda *a, **k: calls.append(("comment", k.get("body"))),
@@ -3017,7 +3021,9 @@ def test_review_and_merge_fix_round_clears_live_delivery_labels(
         lambda *a, **k: {"state": "MERGED", "merge_commit": "m1"},
     )
     monkeypatch.setattr(merge_exec, "sync_base_checkout", lambda *a, **k: None)
-    monkeypatch.setattr(seam, "edit_issue", lambda *a, **k: calls.append(k),
+    monkeypatch.setattr(
+        seam, "set_issue_labels",
+        lambda number, *, repo, labels: calls.append(list(labels)),
     )
     monkeypatch.setattr(seam, "comment_issue", lambda *a, **k: None)
     make_fake_gh(monkeypatch)
@@ -3027,14 +3033,9 @@ def test_review_and_merge_fix_round_clears_live_delivery_labels(
         "owner/repo", 4, title="Review task", priority="normal",
     scene=_scene(),
     ) is True
-    # Issue #2357: every state label is removed before the terminal add,
-    # so the timeline ends on ai-merged and the Issue carries it alone.
-    assert calls == [
-        {"repo": "owner/repo", "remove": "ai-in-progress"},
-        {"repo": "owner/repo", "remove": "ai-fix-needed"},
-        {"repo": "owner/repo", "remove": "ai-ready"},
-        {"repo": "owner/repo", "add": "ai-merged"},
-    ]
+    # Issue #2426: every state label goes in ONE whole-set replacement, so
+    # the Issue carries ai-merged alone.
+    assert calls == [["ai-merged"]]
 
 
 def test_review_and_merge_defers_a_head_pushed_in_the_same_tick(
@@ -3321,8 +3322,8 @@ def test_review_and_merge_keeps_merged_when_checkout_sync_fails(
         raise RuntimeError("deployment checkout cannot fast-forward")
 
     monkeypatch.setattr(merge_exec, "sync_base_checkout", boom)
-    monkeypatch.setattr(seam, "edit_issue",
-        lambda *a, **k: calls.append(("edit", k)),
+    monkeypatch.setattr(seam, "set_issue_labels",
+        lambda number, *, repo, labels: calls.append(("labels", list(labels))),
     )
     monkeypatch.setattr(seam, "comment_issue",
         lambda *a, **k: calls.append(("comment", k.get("body"))),
@@ -3335,14 +3336,13 @@ def test_review_and_merge_keeps_merged_when_checkout_sync_fails(
         scene=_scene(),
     )
     assert merged is True
-    assert ("edit", {"repo": "owner/repo", "remove": "ai-pr-opened"}) in calls
-    assert ("edit", {"repo": "owner/repo", "add": "ai-merged"}) in calls
+    assert ("labels", ["ai-merged"]) in calls
     assert any(
         c[0] == "comment" and "Orbi merged PR:" in (c[1] or "")
         for c in calls
     )
     assert not any(
-        isinstance(c, tuple) and c[0] == "edit" and c[1].get("add") == "ai-blocked"
+        isinstance(c, tuple) and c[0] == "labels" and c[1] == ["ai-blocked"]
         for c in calls
     )
 
@@ -3363,8 +3363,8 @@ def test_review_and_merge_findings_labels_fix_needed_and_comments(
     monkeypatch.setattr(
         failure_report, "comment_pr", lambda *a, **k: calls.append(("pr", k.get("body"))),
     )
-    monkeypatch.setattr(seam, "edit_issue",
-        lambda *a, **k: calls.append(("edit", k)),
+    monkeypatch.setattr(seam, "set_issue_labels",
+        lambda number, *, repo, labels: calls.append(("labels", list(labels))),
     )
     make_fake_gh(monkeypatch)
     merged = review_merge.review_and_merge_if_clean(
@@ -3386,8 +3386,7 @@ def test_review_and_merge_findings_labels_fix_needed_and_comments(
     assert calls[0][1] == calls[1][1]
     # ...and the Issue moves to the explicit fix state (the #45 fix loop
     # repairs the same PR; a clean PR is never sent to the Fixer).
-    assert calls[2] == ("edit", {"repo": "owner/repo", "add": "ai-fix-needed",
-                                 "remove": "ai-pr-opened"})
+    assert calls[2] == ("labels", ["ai-fix-needed"])
 
 
 def test_review_and_merge_behind_base_labels_fix_needed(monkeypatch, tmp_path):
@@ -3411,8 +3410,8 @@ def test_review_and_merge_behind_base_labels_fix_needed(monkeypatch, tmp_path):
     monkeypatch.setattr(
         failure_report, "comment_pr", lambda *a, **k: calls.append(("pr", k.get("body"))),
     )
-    monkeypatch.setattr(seam, "edit_issue",
-        lambda *a, **k: calls.append(("edit", k)),
+    monkeypatch.setattr(seam, "set_issue_labels",
+        lambda number, *, repo, labels: calls.append(("labels", list(labels))),
     )
     make_fake_gh(monkeypatch)
     merged = review_merge.review_and_merge_if_clean(
@@ -3429,8 +3428,7 @@ def test_review_and_merge_behind_base_labels_fix_needed(monkeypatch, tmp_path):
     # merge conflict.
     assert "behind latest remote base origin/main (b2)" in calls[0][1]
     assert "behind the latest base or has a merge conflict" not in calls[0][1]
-    assert calls[2] == ("edit", {"repo": "owner/repo", "add": "ai-fix-needed",
-                                 "remove": "ai-pr-opened"})
+    assert calls[2] == ("labels", ["ai-fix-needed"])
 
 def test_review_gate_comment_outage_never_blocks_fix_needed(
         monkeypatch, tmp_path, caplog):
@@ -3457,8 +3455,9 @@ def test_review_gate_comment_outage_never_blocks_fix_needed(
         lambda *a, **k: (_ for _ in ()).throw(RuntimeError("comments down")),
     )
     monkeypatch.setattr(failure_report, "comment_pr", lambda *a, **k: None)
-    monkeypatch.setattr(seam, "edit_issue",
-        lambda *a, **k: edits.append(k),
+    monkeypatch.setattr(
+        seam, "set_issue_labels",
+        lambda number, *, repo, labels: edits.append(list(labels)),
     )
     make_fake_gh(monkeypatch)
     with caplog.at_level("ERROR"):
@@ -3470,8 +3469,7 @@ def test_review_gate_comment_outage_never_blocks_fix_needed(
         )
     assert merged is False
     assert "delivery_ci_evidence_publish_failed" in caplog.text
-    assert edits[-1] == {"repo": "owner/repo", "add": "ai-fix-needed",
-                        "remove": "ai-pr-opened"}
+    assert edits[-1] == ["ai-fix-needed"]
 
 
 def _install_base_probe(monkeypatch, ancestor: list, *,
@@ -3536,8 +3534,8 @@ def test_review_and_merge_absorb_abandon_is_machine_named(
     monkeypatch.setattr(
         failure_report, "comment_pr", lambda *a, **k: calls.append(("pr", k.get("body"))),
     )
-    monkeypatch.setattr(seam, "edit_issue",
-        lambda *a, **k: calls.append(("edit", k)),
+    monkeypatch.setattr(seam, "set_issue_labels",
+        lambda number, *, repo, labels: calls.append(("labels", list(labels))),
     )
     with caplog.at_level("ERROR"):
         merged = review_merge.review_and_merge_if_clean(
@@ -3557,8 +3555,7 @@ def test_review_and_merge_absorb_abandon_is_machine_named(
     # absorb with the reason.
     assert "attempted-and-abandoned absorb" in calls[0][1]
     assert "review_absorb_abandoned" in caplog.text
-    assert calls[2] == ("edit", {"repo": "owner/repo", "add": "ai-fix-needed",
-                                 "remove": "ai-pr-opened"})
+    assert calls[2] == ("labels", ["ai-fix-needed"])
 
 
 def test_review_and_merge_unreadable_mergeability_leaves_round_unarmed(
@@ -3600,8 +3597,8 @@ def test_review_and_merge_unreadable_mergeability_leaves_round_unarmed(
     monkeypatch.setattr(
         failure_report, "comment_pr", lambda *a, **k: calls.append(("pr", k.get("body"))),
     )
-    monkeypatch.setattr(seam, "edit_issue",
-        lambda *a, **k: calls.append(("edit", k)),
+    monkeypatch.setattr(seam, "set_issue_labels",
+        lambda number, *, repo, labels: calls.append(("labels", list(labels))),
     )
     merged = review_merge.review_and_merge_if_clean(
         tmp_path, "branch", "main", _review_merge_config(tmp_path),
@@ -3643,8 +3640,8 @@ def test_review_and_merge_gate_time_probe_unreadable_keeps_plain_comment(
     monkeypatch.setattr(
         failure_report, "comment_pr", lambda *a, **k: calls.append(("pr", k.get("body"))),
     )
-    monkeypatch.setattr(seam, "edit_issue",
-        lambda *a, **k: calls.append(("edit", k)),
+    monkeypatch.setattr(seam, "set_issue_labels",
+        lambda number, *, repo, labels: calls.append(("labels", list(labels))),
     )
     merged = review_merge.review_and_merge_if_clean(
         tmp_path, "branch", "main", _review_merge_config(tmp_path),
@@ -3687,8 +3684,8 @@ def test_review_and_merge_midround_base_advance_is_not_a_violation(
     monkeypatch.setattr(
         failure_report, "comment_pr", lambda *a, **k: calls.append(("pr", k.get("body"))),
     )
-    monkeypatch.setattr(seam, "edit_issue",
-        lambda *a, **k: calls.append(("edit", k)),
+    monkeypatch.setattr(seam, "set_issue_labels",
+        lambda number, *, repo, labels: calls.append(("labels", list(labels))),
     )
     merged = review_merge.review_and_merge_if_clean(
         tmp_path, "branch", "main", _review_merge_config(tmp_path),
@@ -3736,8 +3733,8 @@ def test_review_and_merge_absorbed_head_is_not_a_violation(
     monkeypatch.setattr(
         failure_report, "comment_pr", lambda *a, **k: calls.append(("pr", k.get("body"))),
     )
-    monkeypatch.setattr(seam, "edit_issue",
-        lambda *a, **k: calls.append(("edit", k)),
+    monkeypatch.setattr(seam, "set_issue_labels",
+        lambda number, *, repo, labels: calls.append(("labels", list(labels))),
     )
     merged = review_merge.review_and_merge_if_clean(
         tmp_path, "branch", "main", _review_merge_config(tmp_path),
@@ -3774,7 +3771,7 @@ def test_review_and_merge_ci_failure_labels_fix_needed(monkeypatch, tmp_path):
     monkeypatch.setattr(
         failure_report, "comment_pr", lambda *a, **k: calls.append(("pr", k.get("body"))),
     )
-    monkeypatch.setattr(seam, "edit_issue", lambda *a, **k: calls.append(("edit", k)),
+    monkeypatch.setattr(seam, "set_issue_labels", lambda number, *, repo, labels: calls.append(("labels", list(labels))),
     )
     make_fake_gh(monkeypatch)
     assert review_merge.review_and_merge_if_clean(
@@ -3784,8 +3781,7 @@ def test_review_and_merge_ci_failure_labels_fix_needed(monkeypatch, tmp_path):
     ) is False
     assert "CI merge gate blocked" in calls[0][1]
     assert "actions/runs/42" in calls[0][1]
-    assert calls[2] == ("edit", {"repo": "owner/repo", "add": "ai-fix-needed",
-                                 "remove": "ai-pr-opened"})
+    assert calls[2] == ("labels", ["ai-fix-needed"])
 
 
 def test_review_and_merge_ci_failure_comment_counts_toward_round_budget(
@@ -3818,7 +3814,7 @@ def test_review_and_merge_ci_failure_comment_counts_toward_round_budget(
     monkeypatch.setattr(
         failure_report, "comment_pr", lambda *a, **k: calls.append(("pr", k.get("body"))),
     )
-    monkeypatch.setattr(seam, "edit_issue", lambda *a, **k: calls.append(("edit", k)),
+    monkeypatch.setattr(seam, "set_issue_labels", lambda number, *, repo, labels: calls.append(("labels", list(labels))),
     )
     make_fake_gh(monkeypatch)
     assert review_merge.review_and_merge_if_clean(
@@ -3840,8 +3836,7 @@ def test_review_and_merge_ci_failure_comment_counts_toward_round_budget(
     # reads review_round=1 from it (the budget's new carrier, #788).
     assert "orbi:scene:v1" in calls[0][1]
     assert '"review_round": 1' in calls[0][1]
-    assert calls[2] == ("edit", {"repo": "owner/repo", "add": "ai-fix-needed",
-                                 "remove": "ai-pr-opened"})
+    assert calls[2] == ("labels", ["ai-fix-needed"])
 
 
 def test_review_and_merge_preexisting_ci_failure_is_not_swallowed(
@@ -3869,7 +3864,7 @@ def test_review_and_merge_preexisting_ci_failure_is_not_swallowed(
     monkeypatch.setattr(
         failure_report, "comment_pr", lambda *a, **k: calls.append(("pr", k.get("body"))),
     )
-    monkeypatch.setattr(seam, "edit_issue", lambda *a, **k: calls.append(("edit", k)),
+    monkeypatch.setattr(seam, "set_issue_labels", lambda number, *, repo, labels: calls.append(("labels", list(labels))),
     )
     make_fake_gh(monkeypatch)
     with pytest.raises(failure_report.PreExistingCIFailure):
@@ -3903,8 +3898,8 @@ def test_review_and_merge_deferred_gate_writes_no_comment_and_no_label(
     monkeypatch.setattr(seam, "comment_issue",
         lambda *a, **k: calls.append(("issue", k.get("body"))),
     )
-    monkeypatch.setattr(seam, "edit_issue",
-        lambda *a, **k: calls.append(("edit", k)),
+    monkeypatch.setattr(seam, "set_issue_labels",
+        lambda number, *, repo, labels: calls.append(("labels", list(labels))),
     )
     api_calls = make_fake_gh(monkeypatch, comments=[{
         "id": 7, "body": progress_comment_body("a1b2c3d4"),
@@ -4212,7 +4207,10 @@ def test_merge_only_gate_failure_clears_the_record_for_the_next_review(
     edits = []
     monkeypatch.setattr(seam, "comment_issue", lambda *a, **k: None)
     monkeypatch.setattr(failure_report, "comment_pr", lambda *a, **k: None)
-    monkeypatch.setattr(seam, "edit_issue", lambda *a, **k: edits.append(k))
+    monkeypatch.setattr(
+        seam, "set_issue_labels",
+        lambda number, *, repo, labels: edits.append(list(labels)),
+    )
     make_fake_gh(monkeypatch)
     assert review_merge.review_and_merge_if_clean(
         tmp_path, "branch", "main", _review_merge_config(tmp_path),
@@ -4221,8 +4219,7 @@ def test_merge_only_gate_failure_clears_the_record_for_the_next_review(
         review_record=review_wait.read_reviewed(tmp_path),
         issue_body_sha256=_REVIEW_BODY_SHA,
     ) is False
-    assert {"repo": "owner/repo", "add": "ai-fix-needed",
-            "remove": "ai-pr-opened"} in edits
+    assert ["ai-fix-needed"] in edits
     assert review_wait.read_reviewed(tmp_path) is None
 
 
@@ -4478,8 +4475,8 @@ def test_review_and_merge_conflict_labels_fix_needed(monkeypatch, tmp_path):
     monkeypatch.setattr(
         failure_report, "comment_pr", lambda *a, **k: calls.append(("pr", k.get("body"))),
     )
-    monkeypatch.setattr(seam, "edit_issue",
-        lambda *a, **k: calls.append(("edit", k)),
+    monkeypatch.setattr(seam, "set_issue_labels",
+        lambda number, *, repo, labels: calls.append(("labels", list(labels))),
     )
     make_fake_gh(monkeypatch)
     merged = review_merge.review_and_merge_if_clean(
@@ -4494,8 +4491,7 @@ def test_review_and_merge_conflict_labels_fix_needed(monkeypatch, tmp_path):
     # and never claims the PR is behind the base.
     assert "mergeable=CONFLICTING" in calls[0][1]
     assert "behind" not in calls[0][1]
-    assert calls[2] == ("edit", {"repo": "owner/repo", "add": "ai-fix-needed",
-                                 "remove": "ai-pr-opened"})
+    assert calls[2] == ("labels", ["ai-fix-needed"])
 
 
 def test_review_and_merge_reraises_non_fixable_gate_error(monkeypatch, tmp_path):

@@ -53,7 +53,7 @@ from orbi.failure_evidence import (
 )
 from orbi.github import (
     pr_number, apply_label_patch, comment_issue, issue_comments,
-    issue_labels, issue_priority, pr_comments, run_gh_write_command,
+    issue_priority, pr_comments, run_gh_write_command,
     update_issue_comment,
 )
 from orbi.issue_images import Unreadable
@@ -396,7 +396,6 @@ def block_scene_failure(issue: dict, error: ValueError, repo: str,
                 status_url=status_url, number=number, error=error,
                 title=issue.get("title"),
             ),
-            current_labels={delivery_labels.FIX_NEEDED_LABEL, ready_label},
             language_code=language_code, ready_label=ready_label,
         )
     except Exception:
@@ -404,8 +403,7 @@ def block_scene_failure(issue: dict, error: ValueError, repo: str,
 
 
 def block_repo_config_failure(number: int, source_repo: str,
-                              error: ValueError, run_id: str,
-                              current_labels=(), *,
+                              error: ValueError, run_id: str, *,
                               language_code: str, ready_label: str | None = None,
                               status_url: str | None = None,
                               ) -> None:
@@ -431,7 +429,6 @@ def block_repo_config_failure(number: int, source_repo: str,
                     status_url=status_url, number=number, error=error,
                 )
             ),
-            current_labels=set(current_labels),
             language_code=language_code, ready_label=ready_label,
         )
     except Exception:
@@ -489,7 +486,6 @@ def _report_resume_failure(*, number: int, source_repo: str, run_id: str,
                 language_code=language_code,
             )
         ),
-        current_labels={delivery_labels.IN_PROGRESS_LABEL, ready_label},
         language_code=language_code, ready_label=ready_label,
     )
 
@@ -624,7 +620,7 @@ def report_delivery_failure(
     branch: str | None, role: str, cause: str | None = None,
     action: str = "", reason: str | None = None,
     diagnosis: str | None = None, evidence: bool = False,
-    classify: bool = True, current_labels: set[str] | None = None,
+    classify: bool = True,
     blocked_suffix: str = "", review_round: int | None = None,
     review_scene_block: str | None = None,
     finish: bool = True, publisher: ProgressPublisher | None = None,
@@ -652,9 +648,7 @@ def report_delivery_failure(
     the plain `Orbi failed:` template and the run scene is
     space-joined to the FIRST body line, where `format_status_comment`
     lifts its fields into the structured-alert field block.
-    `current_labels` pins the label-patch source (the implement-phase
-    handler derives the current delivery label locally); None reads
-    the labels from GitHub. `blocked_suffix` extends the classified
+    `blocked_suffix` extends the classified
     blocked body (the resume verification's preserved-PR note).
     `review_round` pins the terminal scene's round (the implement phase has
     none); None reads the round the current PR's review is on — the review
@@ -720,7 +714,7 @@ def report_delivery_failure(
                 stop_question, issue=issue, source_repo=source_repo,
                 run_id=run_id, language_code=language_code,
                 status_url=status_url, pr_url=pr_url,
-                current_labels=current_labels, ready_label=ready_label,
+                ready_label=ready_label,
             )
             if taken is not None:
                 return taken
@@ -776,7 +770,7 @@ def report_delivery_failure(
     if not classify and run_id:
         requeued = requeue.report_once(
             failure_record, issue=issue, source_repo=source_repo,
-            run_id=run_id, reason=reason, current_labels=current_labels,
+            run_id=run_id, reason=reason,
             ready_label=ready_label, language_code=language_code,
             status_url=status_url,
         )
@@ -815,10 +809,6 @@ def report_delivery_failure(
             language_code=language_code,
         )
 
-    labels = (
-        current_labels if current_labels is not None
-        else issue_labels(number, source_repo)
-    )
     # Base-branch-red (Issue #1825) owns its body: no evidence segment.
     red = getattr(exc, "base_ci_red", None)
     evidence_detail = "" if red is not None or not evidence else (
@@ -840,7 +830,7 @@ def report_delivery_failure(
         # the blocked exit owns its own patch (Issue #1730).
         apply_label_patch(
             number, repo=source_repo, event=EVENT_FIX_NEEDED,
-            current_labels=labels, ready_label=ready_label,
+            ready_label=ready_label,
         )
         if review_scene_block is not None:
             scene += f"\n{redact_local_paths(review_scene_block)}"
@@ -917,8 +907,7 @@ def report_delivery_failure(
         # #1730): the label lands first, the comment second.
         post_blocked_comment(
             number, repo=source_repo, body=body,
-            current_labels=labels, language_code=language_code,
-            ready_label=ready_label)
+            language_code=language_code, ready_label=ready_label)
     elif post_new_comment:
         comment_issue(number, repo=source_repo, body=body)
         if pr_url:

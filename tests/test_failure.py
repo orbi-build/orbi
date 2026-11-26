@@ -1082,15 +1082,17 @@ def test_a_re_queue_marker_from_an_untrusted_comment_is_ignored(monkeypatch):
     assert "ai-blocked" not in gh.issues[REQUEUE_ISSUE]["labels"]
 
 
-def test_the_re_queue_patch_uses_the_caller_labels(monkeypatch):
-    """The implement-phase handler pins the labels it already knows: the
-    re-queue adds the dispatch label and clears the in-flight one."""
+def test_the_re_queue_patch_reads_the_issues_real_labels(monkeypatch):
+    """The re-queue adds the dispatch label and clears the in-flight one,
+    computed from the labels the Issue really carries — the caller's
+    snapshot is never the source of a label write (Issue #2426)."""
     gh = _requeue_github(monkeypatch)
-    labels = gh.issues[REQUEUE_ISSUE]["labels"]
-    labels[:] = ["ai-in-progress"]
-    outcome = _report_implement_failure(current_labels={"ai-in-progress"})
+    gh.issues[REQUEUE_ISSUE]["labels"][:] = ["ai-in-progress", "bug"]
+    outcome = _report_implement_failure()
     assert outcome == "requeued"
-    assert labels == ["ai-ready"]
+    # The whole set is rebuilt in the Issue's own label order and ends on
+    # the queue label; the unrelated `bug` survives.
+    assert gh.issues[REQUEUE_ISSUE]["labels"] == ["bug", "ai-ready"]
 
 
 def test_a_failed_history_read_still_re_queues_once(monkeypatch):

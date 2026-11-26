@@ -26,7 +26,7 @@ from orbi.github import apply_label_patch, comment_issue, issue_title
 
 
 def post_blocked_comment(number: int, *, repo: str, body: str,
-                         current_labels, language_code: str,
+                         language_code: str,
                          ready_label: str | None = None) -> None:
     """Block `number`: apply the `ai-blocked` label patch, then comment.
 
@@ -43,7 +43,7 @@ def post_blocked_comment(number: int, *, repo: str, body: str,
     ready_label = delivery_labels.queue_label(ready_label)
     apply_label_patch(
         number, repo=repo, event=EVENT_BLOCKED,
-        current_labels=current_labels, ready_label=ready_label,
+        ready_label=ready_label,
     )
     posted = (
         f"{with_stop_record(body)}\n\n"

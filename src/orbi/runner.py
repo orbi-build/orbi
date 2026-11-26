@@ -219,7 +219,6 @@ from orbi.github import (
     has_in_progress_label,
     issue_comments,
     issue_comment_rest_id,
-    issue_labels,
     issue_priority,
     issue_view,
     list_issues,
@@ -640,10 +639,9 @@ def _route_external_pr_ticket(issue: dict, repo: str, *,
         )
         return True
     if state in ("OPEN", "CLOSED"):
-        labels = issue_labels(number, repo=repo)
         apply_label_patch(
             number, repo=repo, event=EVENT_REQUEUE,
-            current_labels=labels, ready_label=ready_label,
+            ready_label=ready_label,
         )
         comment_issue(
             number, repo=repo,
@@ -971,7 +969,6 @@ def process_ticket_only(issue: dict, config: config_domain.RunnerConfig, source_
     started = time.monotonic()
     apply_label_patch(
         number, repo=source_repo, event=EVENT_CLAIM,
-        current_labels=label_name_set(issue),
         ready_label=delivery_labels.queue_label(config.dispatch_label),
     )
     ticket_ctx = RunContext(
@@ -1698,11 +1695,6 @@ def delivery_step(pr_url: str, issue: dict, config: config_domain.RunnerConfig,
                 status_url=config.status_url,
                 ready_label=delivery_labels.queue_label(config.dispatch_label))
             return
-        # The current labels are read ONCE before the transition:
-        # the terminal patch clears every delivery-state label that
-        # is present (`ai-pr-opened`, and `ai-fix-needed` when the
-        # PR was closed while awaiting the next review session).
-        labels = issue_labels(number, source_repo)
         event(
             "delivery_closed_unmerged", issue=number, pr=pr_url,
         )
@@ -1715,7 +1707,7 @@ def delivery_step(pr_url: str, issue: dict, config: config_domain.RunnerConfig,
         )
         post_blocked_comment(
             number, repo=source_repo, body=body,
-            current_labels=labels, language_code=language.of(config),
+            language_code=language.of(config),
             ready_label=delivery_labels.queue_label(config.dispatch_label),
         )
         if run_id:
@@ -2206,7 +2198,6 @@ def main(argv: list[str] | None = None) -> int:
                 language_code=language.of(config),
                 status_url=config.status_url,
                 ready_label=delivery_labels.queue_label(config.dispatch_label),
-                current_labels=label_name_set(issue),
             )
             return 0
         # Fuse the entry fallback UNCONDITIONALLY: with no policy file

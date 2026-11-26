@@ -596,7 +596,7 @@ def _stop_report(gh, exc, *, classify: bool, action: str, reason: str):
         source_repo=REPO, run_id=None, pr_url=None, worktree=None,
         branch="b", role="implement", language_code="en",
         classify=classify, evidence=False, finish=False,
-        ready_label="ai-ready", current_labels={"ai-in-progress", "ai-ready"},
+        ready_label="ai-ready",
         action=action, reason=reason,
     )
     return gh.issues[4]

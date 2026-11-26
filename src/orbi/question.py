@@ -63,7 +63,7 @@ from orbi.comment_kind import (
 from orbi.delivery_labels import EVENT_FIX_NEEDED, EVENT_REQUEUE
 from orbi import delivery_labels
 from orbi.github import (
-    apply_label_patch, comment_issue, issue_comments, issue_labels,
+    apply_label_patch, comment_issue, issue_comments,
 )
 from orbi.journal import LOGGER, event
 from orbi.progress import run_marker
@@ -706,7 +706,7 @@ def amended_body(body: object, criterion: str, language_code: str,
 
 def report_once(stop: StopQuestion | None, *, issue: dict, source_repo: str,
                 run_id: str, language_code: str, status_url: str | None,
-                pr_url: str | None, current_labels,
+                pr_url: str | None,
                 ready_label: str | None = None) -> str | None:
     """Answer the stop once, or return None to keep the terminal report.
 
@@ -744,14 +744,10 @@ def report_once(stop: StopQuestion | None, *, issue: dict, source_repo: str,
         stop, option, issue=issue, run_id=run_id, language_code=language_code,
         status_url=status_url,
     ))
-    labels = (
-        current_labels if current_labels is not None
-        else issue_labels(number, source_repo)
-    )
     apply_label_patch(
         number, repo=source_repo,
         event=EVENT_FIX_NEEDED if pr_url else EVENT_REQUEUE,
-        current_labels=labels, ready_label=ready_label,
+        ready_label=ready_label,
     )
     notify.send_if_enabled(language.text(
         language_code, "question.telegram", decision=option.label,

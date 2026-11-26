@@ -963,7 +963,6 @@ def _report(monkeypatch, tmp_path: Path, *, session: bool,
         failure_report, "comment_pr",
         lambda number, *, repo, body: pr_comments.append(body),
     )
-    monkeypatch.setattr(failure_report, "issue_labels", lambda *a, **k: set())
     # One read serves the dedup, the #825 guard and the round count: the
     # guard fixture supplies the trusted history, every other test the
     # empty list (Issue #1701).
@@ -1327,7 +1326,7 @@ def test_recoverable_failure_without_a_pr_posts_the_issue_comment_only(
         issue=dict(ISSUE), source_repo=SOURCE_REPO, run_id=RUN_ID,
         pr_url=None, worktree=_worktree(tmp_path, session=False),
         branch=BRANCH, role=runner.ROLE_REVIEW, classify=True,
-        finish=False, publisher=publisher, current_labels=set(),
+        finish=False, publisher=publisher,
         language_code="en",
     )
     assert outcome == "fix_needed"
@@ -1347,7 +1346,6 @@ def test_evidence_redacts_local_paths(monkeypatch, tmp_path):
         lambda number, *, repo, body: posted.append(body),
     )
     monkeypatch.setattr(failure_report, "comment_pr", lambda *a, **k: None)
-    monkeypatch.setattr(failure_report, "issue_labels", lambda *a, **k: set())
     monkeypatch.setattr(failure_report, "issue_comments", lambda *a, **k: [])
     # The seam fans the read out to every module that binds it, so the
     # golden bodies stay deterministic without pinning one home.

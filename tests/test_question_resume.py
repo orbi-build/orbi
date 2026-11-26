@@ -339,7 +339,7 @@ def test_a_deadlock_without_an_open_pr_requeues_the_ticket_ready(gh):
     outcome = question.report_once(
         _stop(), issue={"number": ISSUE_NUMBER, "title": TITLE, "body": BODY},
         source_repo=REPO, run_id=RUN_ID, language_code="en", status_url=None,
-        pr_url=None, current_labels=None,
+        pr_url=None,
     )
     assert outcome == requeue.OUTCOME_REQUEUED
     assert _labels(gh) == {"ai-ready"}

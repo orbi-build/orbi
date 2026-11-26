@@ -579,18 +579,19 @@ def test_the_label_patch_never_sends_the_blocked_alert(monkeypatch):
     with TelegramEndpoint() as endpoint:
         endpoint.point(monkeypatch)
         bind(monkeypatch)
-        monkeypatch.setattr(seam, "edit_issue", lambda *a, **k: None)
+        monkeypatch.setattr(
+            seam, "run_command", lambda command, **k: "",
+        )
         monkeypatch.setattr(
             seam, "issue_view",
             lambda *a, **k: reads.append(a) or {
                 "title": "Fix the thing",
-                # The terminal transition reads the real labels (#2357).
+                # The transition reads the Issue's real labels.
                 "labels": [{"name": "ai-ready"}],
             },
         )
         github.apply_label_patch(
             7, repo="o/r", event=EVENT_BLOCKED,
-            current_labels={"ai-ready"},
         )
         assert endpoint.requests == []
         # Only the label presence read ran; no title read for a message.
@@ -610,8 +611,7 @@ def test_a_blocked_stop_alert_quotes_and_links_the_comment_it_posted(
         endpoint.point(monkeypatch)
         bind(monkeypatch)
         blocked_comment.post_blocked_comment(
-            ISSUE, repo=REPO, body=stop_body(),
-            current_labels={"ai-ready"}, language_code="en",
+            ISSUE, repo=REPO, body=stop_body(), language_code="en",
         )
         posted = gh.issues[ISSUE]["comments"][-1]
         assert endpoint.texts() == [
@@ -633,13 +633,17 @@ def test_apply_label_patch_notifies_awaiting_merge(monkeypatch):
     with TelegramEndpoint() as endpoint:
         endpoint.point(monkeypatch)
         bind(monkeypatch)
-        monkeypatch.setattr(seam, "edit_issue", lambda *a, **k: None)
         monkeypatch.setattr(
-            seam, "issue_view", lambda *a, **k: {"title": "Ready to merge"},
+            seam, "run_command", lambda command, **k: "",
+        )
+        monkeypatch.setattr(
+            seam, "issue_view", lambda *a, **k: {
+                "title": "Ready to merge",
+                "labels": [{"name": "ai-ready"}, {"name": "ai-pr-opened"}],
+            },
         )
         github.apply_label_patch(
             7, repo="o/r", event=EVENT_AWAITING_MERGE,
-            current_labels={"ai-ready", "ai-pr-opened"},
         )
         assert endpoint.texts() == [
             "Orbi · Needs your attention: "
@@ -657,23 +661,26 @@ def test_the_gate_label_patch_never_notifies(monkeypatch):
     with TelegramEndpoint() as endpoint:
         endpoint.point(monkeypatch)
         bind(monkeypatch)
-        monkeypatch.setattr(seam, "edit_issue", lambda *a, **k: None)
+        monkeypatch.setattr(
+            seam, "run_command", lambda command, **k: "",
+        )
         reads = []
         monkeypatch.setattr(
             seam, "issue_view",
-            lambda *a, **k: reads.append(a) or {"title": "Review me"},
+            lambda number, field, *, repo, **k: reads.append(field) or {
+                "title": "Review me",
+                "labels": [{"name": "ai-pr-opened"}],
+            },
         )
         github.apply_label_patch(
             7, repo="o/r", event=EVENT_HUMAN_REVIEW_WAITING,
-            current_labels={"ai-pr-opened"},
         )
         github.apply_label_patch(
             7, repo="o/r", event=EVENT_HUMAN_REVIEW_WAITING,
-            current_labels={"ai-pr-opened", "ai-ready"},
         )
         assert endpoint.texts() == []
         # No message means no title read: the patch is pure label work.
-        assert reads == []
+        assert "title" not in reads
 
 
 def test_human_review_waiting_sends_the_wait_message(monkeypatch):
@@ -734,9 +741,7 @@ def test_apply_label_patch_does_not_notify_a_non_attention_add(monkeypatch):
             seam, "issue_view",
             lambda *a, **k: reads.append(a) or {"labels": []},
         )
-        github.apply_label_patch(
-            7, repo="o/r", event=EVENT_CLAIM, current_labels=(),
-        )
+        github.apply_label_patch(7, repo="o/r", event=EVENT_CLAIM)
         assert endpoint.requests == []
         # Issue #2369: the claim reads the labels ONCE (the whole-set
         # replacement needs the current set) and never the title.
@@ -753,11 +758,14 @@ def test_apply_label_patch_sends_nothing_when_the_label_write_fails(
         def boom(*args, **kwargs):
             raise RuntimeError("gh write failed")
 
-        monkeypatch.setattr(seam, "edit_issue", boom)
+        monkeypatch.setattr(seam, "run_command", boom)
+        monkeypatch.setattr(
+            seam, "issue_view",
+            lambda *a, **k: {"labels": [{"name": "ai-ready"}]},
+        )
         with pytest.raises(RuntimeError, match="gh write failed"):
             github.apply_label_patch(
                 7, repo="o/r", event=EVENT_AWAITING_MERGE,
-                current_labels={"ai-ready", "ai-pr-opened"},
             )
         assert endpoint.requests == []
 
@@ -768,15 +776,18 @@ def test_apply_label_patch_sends_without_a_title_when_the_read_fails(
     with TelegramEndpoint() as endpoint:
         endpoint.point(monkeypatch)
         bind(monkeypatch)
-        monkeypatch.setattr(seam, "edit_issue", lambda *a, **k: None)
+        monkeypatch.setattr(
+            seam, "run_command", lambda command, **k: "",
+        )
 
-        def boom(*args, **kwargs):
+        def view(number, field, **kwargs):
+            if field == "labels":
+                return {"labels": [{"name": "ai-ready"}]}
             raise RuntimeError("gh issue view failed")
 
-        monkeypatch.setattr(seam, "issue_view", boom)
+        monkeypatch.setattr(seam, "issue_view", view)
         github.apply_label_patch(
             7, repo="o/r", event=EVENT_AWAITING_MERGE,
-            current_labels={"ai-ready", "ai-pr-opened"},
         )
         assert endpoint.texts() == [
             "Orbi · Needs your attention: "
@@ -792,17 +803,22 @@ def test_apply_label_patch_makes_no_github_read_when_notifications_are_off(
     with TelegramEndpoint() as endpoint:
         endpoint.point(monkeypatch)
         bind(monkeypatch, config=config_for(chat_id=None), token=None)
-        monkeypatch.setattr(seam, "edit_issue", lambda *a, **k: None)
+        monkeypatch.setattr(
+            seam, "run_command", lambda command, **k: "",
+        )
         reads = []
         monkeypatch.setattr(
             seam, "issue_view",
-            lambda *a, **k: reads.append(a) or {"title": "t"},
+            lambda number, field, *, repo, **k: reads.append(field) or {
+                "title": "t",
+                "labels": [{"name": "ai-ready"}],
+            },
         )
         github.apply_label_patch(
             7, repo="o/r", event=EVENT_AWAITING_MERGE,
-            current_labels={"ai-ready", "ai-pr-opened"},
         )
-        assert reads == []
+        # Only the label read the write needs ran; no title read.
+        assert reads == ["labels"]
         assert endpoint.requests == []
 
 

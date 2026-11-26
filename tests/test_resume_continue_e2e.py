@@ -38,6 +38,7 @@ import pytest
 
 from conftest import git
 
+import orbi.github as github
 import orbi.runner as runner
 from seam import seam
 
@@ -324,21 +325,19 @@ def run_first_attempt(monkeypatch, tmp_path: Path, clone: Path,
     install_fake_pi(monkeypatch, tmp_path, FAKE_PI_INTERRUPTED)
     install_fake_gh(monkeypatch, comments, labels)
     monkeypatch.setattr(seam, "new_run_id", lambda: "a1b2c3d4")
-    real_edit_issue = runner.edit_issue
+    real_write = github.set_issue_labels
 
-    def claiming_edit(number, **kwargs):
-        # Only the claim edit reaches GitHub before the kill; the
-        # failure path's label transition never happens. The blocked
-        # edit RAISING (Issue #256) is what keeps the Issue recoverable
-        # (ai-in-progress) — the terminal worktree cleanup is gated on
-        # the ai-blocked transition actually landing.
-        if kwargs.get("add") == "ai-in-progress" \
-                and kwargs.get("remove") is None:
-            real_edit_issue(number, **kwargs)
-            return
-        raise AssertionError("kill simulation: label edit must not land")
+    def claiming_write(number, *, repo, labels):
+        # Only the claim write reaches GitHub before the kill; the failure
+        # path's terminal write never happens. That write RAISING (Issue
+        # #256) is what keeps the Issue recoverable (ai-in-progress) — the
+        # terminal worktree cleanup is gated on the ai-blocked transition
+        # actually landing.
+        if "ai-in-progress" in labels and "ai-blocked" not in labels:
+            return real_write(number, repo=repo, labels=labels)
+        raise AssertionError("kill simulation: label write must not land")
 
-    monkeypatch.setattr(seam, "edit_issue", claiming_edit)
+    monkeypatch.setattr(seam, "set_issue_labels", claiming_write)
     # Issue #239: the failure path runs (the `claiming_edit` above
     # suppresses its label transition, simulating the kill) and
     # `process_issue` returns `None` instead of re-raising.
@@ -346,7 +345,7 @@ def run_first_attempt(monkeypatch, tmp_path: Path, clone: Path,
                                                     source_repo),
                                 source_repo).kind == "failed"
     # The runner is back: label transitions work again.
-    monkeypatch.setattr(seam, "edit_issue", real_edit_issue)
+    monkeypatch.setattr(seam, "set_issue_labels", real_write)
     worktree = worktree_for(clone, source_repo, "a1b2c3d4")
     assert worktree.is_dir()
     assert "ai-in-progress" in labels[ISSUE_NUMBER]

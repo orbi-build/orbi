@@ -365,7 +365,7 @@ GitHub 标签是外部状态机。它们不是 commit 创建的——每个仓�
 | `ai-in-progress` | 已领取、正在执行。接续 opened-PR 交付时不再加回该标签：opened-PR 标签保留，从 `ai-fix-needed` 接续的轮次最后只剩 `ai-pr-opened`（Issue #2357）；被杀后的残留由下一 tick 接回（前提是本部署仍持有该任务 worktree 与 run state 文件；不是本部署启动的 Issue 属于另一个部署，会被跳过，Issue #2256）。实现阶段的运行只靠这个标签被找到（Issue #2309） |
 | `ai-pr-opened` | PR 已创建并验收；等待独立审查 |
 | `ai-fix-needed` | PR head 尚不可合并，或已有 run/PR 的可恢复失败（Issue #50）；下一 tick 在同一 run、branch、worktree、PR 上继续 |
-| `ai-merged` | 成功终态；Runner 已合并 PR 并确认 merge commit 落在保护分支。合并同时清除 `ai-ready` 残留，因此合并后的 Issue 只剩 `ai-merged`（Issue #1526；不回溯已合并的 Issue）。旧的状态标签先摘掉再加 `ai-merged`，所以它是 Issue 上最后一个标签事件；加失败时会把摘掉的标签加回去（Issue #2357） |
+| `ai-merged` | 成功终态；Runner 已合并 PR 并确认 merge commit 落在保护分支。合并同时清除 `ai-ready` 残留，因此合并后的 Issue 只剩 `ai-merged`（Issue #1526；不回溯已合并的 Issue）。每次交付标签变更都是基于 Issue 真实标签的一次整体替换：失败后 Issue 要么保持变更前的标签，要么正是变更想要的标签，而 `bug`、`p0` 这类非交付标签始终保留（Issue #2426） |
 | `ai-awaiting-merge` | 评审和检查已通过，但已知仓库策略仍阻塞合并；评论写明维护者动作。只在队列无事可做的 tick 重试（Issue #1745），随后由 Orbi 合并指定 PR head |
 | `ai-blocked` | 交付已停下且无法自动恢复：AI 无法安全判断或修复的外部前置条件（Issue #50），或动作为 `fix_ticket`、`decide` 的失败（如 `no_commit_delivered`、`release_failed`、`review_budget_exhausted`，见下文「失败记录」一节的原因表）。blocked comment 写明原因和动作；人工必须决定下一步 |
 | `ai-human-review` | 人工验收门禁（Issue #763）：人已确认该交付的验收清单。只有人能打或摘——Runner 永不增删 |

@@ -295,12 +295,15 @@ def install_fake_gh(monkeypatch, comments: list[str],
                 return ""
             if command[1] == "api":
                 if command[2:4] == ["--method", "PUT"]:
-                    # Issue #2369: the whole-set label replacement.
+                    # Issues #2369/#2426: the whole-set label replacement,
+                    # which IS the observable result of a label change.
                     new_labels = [
                         value[len("labels[]="):] for value in command
                         if value.startswith("labels[]=")
                     ]
                     labels[:] = new_labels
+                    if edits is not None:
+                        edits.append(new_labels)
                     return json.dumps([
                         {"name": name} for name in new_labels
                     ])
@@ -890,13 +893,10 @@ def test_e2e_public_comment_scene_is_never_resumed(
         REPO, tmp_path / "slots", 1,
         hooks=resume_deps(), language_code="en",
     ) is None
-    # The blocked transition happened (the terminal add; the erroneous
-    # ai-pr-opened label is deliberately preserved, Issue #672) and the
-    # failure comment names the reason...
-    assert [
-        "gh", "issue", "edit", str(ISSUE_NUMBER), "--repo", REPO,
-        "--add-label", "ai-blocked",
-    ] in edits
+    # The blocked transition happened (ONE whole-set replacement ending on
+    # ai-blocked alone, Issue #2426) and the failure comment names the
+    # reason...
+    assert ["ai-blocked"] in edits
     assert len(comments) == 1
     assert "Orbi failed:" in comments[0]
     assert "trusted" in comments[0]
@@ -936,12 +936,9 @@ def test_e2e_review_failure_keeps_pr_and_stays_fix_needed(
     runner.set_run_id(run_id)
     runner.delivery_step(result.url, issue(), config, REPO)
 
-    # The Issue is marked ai-fix-needed (leaving the opened-PR state)
-    # — never ai-blocked (Issue #50) ...
-    assert [
-        "gh", "issue", "edit", str(ISSUE_NUMBER), "--repo", REPO,
-        "--add-label", "ai-fix-needed", "--remove-label", "ai-pr-opened",
-    ] in edits
+    # The Issue is marked ai-fix-needed (leaving the opened-PR state) in
+    # ONE whole-set replacement (Issue #2426) — never ai-blocked (#50) ...
+    assert ["ai-fix-needed"] in edits
     assert not any("ai-blocked" in edit for edit in edits)
     # ...the PR, branch and worktree are all preserved (never deleted,
     # never force-pushed).
@@ -998,21 +995,9 @@ def test_e2e_pr_closed_while_fix_needed_removes_leftover_label(
 
     # The Issue is marked ai-blocked; the blocked patch clears every
     # delivery-state label that is present — here only `ai-fix-needed`
-    # (the delivery was awaiting the next review session) — REMOVAL
-    # FIRST and the terminal add last (Issue #2357), so the timeline ends
-    # on the new state.
-    assert [
-        "gh", "issue", "edit", str(ISSUE_NUMBER), "--repo", REPO,
-        "--remove-label", "ai-fix-needed",
-    ] in edits
-    assert [
-        "gh", "issue", "edit", str(ISSUE_NUMBER), "--repo", REPO,
-        "--add-label", "ai-blocked",
-    ] in edits
-    assert edits[-1] == [
-        "gh", "issue", "edit", str(ISSUE_NUMBER), "--repo", REPO,
-        "--add-label", "ai-blocked",
-    ]
+    # (the delivery was awaiting the next review session) — in ONE
+    # whole-set write (Issue #2426), so the change cannot half-apply.
+    assert edits[-1] == ["ai-blocked"]
     # The terminal state is ai-blocked alone.
     assert labels == ["ai-blocked"]
     # The failure comment carries the run marker.
