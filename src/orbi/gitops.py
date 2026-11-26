@@ -198,7 +198,11 @@ def create_worktree(repo_dir: Path, source_repo: str, number: int,
     A local branch that already exists only in the orphan scene (no remote
     counterpart, handled by `existing_branch=False`) is reused as-is rather
     than re-created with `-b`: git exits 255 on an existing branch, which
-    used to burn the re-claimed Issue into terminal `ai-blocked`.
+    used to burn the re-claimed Issue into terminal `ai-blocked`. The one
+    exception is a leftover worktree still holding that branch (a re-queued
+    Issue whose previous run pushed nothing, so it has no PR): that scene is
+    reclaimed and the branch re-created from the frozen base, because
+    `git worktree add` refuses a branch checked out elsewhere (Issue #2441).
     """
     if existing is not None and existing.is_dir():
         return existing
