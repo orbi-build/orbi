@@ -19,6 +19,19 @@ Orbi is an open-source **software dark factory**: a software delivery system for
 Website [orbi.build](https://orbi.build/?ref=gh-readme-links) ｜ Documentation <https://docs.orbi.build/> ｜ [Discussions](https://github.com/orbi-build/orbi/discussions) ｜ Docker [GHCR](https://ghcr.io/orbi-build/orbi) · [Docker Hub](https://hub.docker.com/r/orbibuild/orbi)
 
 **Prefer to run it yourself?** Follow the Quick start below. Cloud founding members get 50% off for life (6 places); the discount is applied automatically at checkout, with no code to enter.
+
+## Merged upstream
+
+Fixes Orbi wrote for projects we don't own, merged by their maintainers:
+
+| Project | What Orbi fixed | Merged PR |
+|---|---|---|
+| [brig](https://github.com/brig-sh/brig) | `--help` and `-h` on top-level commands | [#402](https://github.com/brig-sh/brig/pull/402) |
+| [LLMVault](https://github.com/CyberSunil/LLMVault) | Flask debug mode left on by default | [#39](https://github.com/CyberSunil/LLMVault/pull/39) |
+| [pyinfra](https://github.com/pyinfra-dev/pyinfra) | Result table misaligned by CJK text | [#1977](https://github.com/pyinfra-dev/pyinfra/pull/1977) |
+
+[How each fix was made →](https://orbi.build/blog/ai-contribute-to-open-source/?ref=gh-readme-oss)
+
 ## Quick start
 
 ```bash
