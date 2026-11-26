@@ -174,9 +174,9 @@ def run_gh_write_command(
     GitHub may execute a mutation and lose the response.  ``already_applied``
     is therefore checked before each retry; it lets comment callers use the
     run marker/body as an idempotency key rather than creating duplicates.
-    Permission and validation failures are re-raised immediately. The
-    response status decides transience; a `gh` subcommand that prints no
-    response headers keeps GitHub's own server-failure sentences.
+    Permission and validation failures are re-raised immediately, as is the
+    exhausted retry — that STRUCTURED failure is what the classifier reads,
+    so a transport timeout stays `github_transient` (Issue #2443).
     """
     execute = command_runner or run_command
     command = gh_response.include_headers(command)
@@ -208,7 +208,7 @@ def run_gh_write_command(
                     )
             elapsed = time.monotonic() - started
             if attempt >= GH_WRITE_MAX_ATTEMPTS or elapsed >= GH_WRITE_MAX_SECONDS:
-                raise
+                raise failure
             delay = min(
                 GH_WRITE_BACKOFF_SECONDS * (2 ** (attempt - 1)),
                 max(0, GH_WRITE_MAX_SECONDS - elapsed),

@@ -1818,6 +1818,37 @@ def test_report_failure_different_fingerprint_breaks_the_streak(
     assert "Orbi needs a fix:" in captured["comments"][0]
 
 
+def test_the_streak_guard_sees_a_new_ip_address_as_the_same_failure(
+        monkeypatch, tmp_path, caplog):
+    """Issue #2443 acceptance 6: GitHub's address changes between rounds of
+    the SAME outage, so two rounds that differ only in `<ip>:port` are the
+    same failure — with the third such round the delivery stops at the
+    existing #825 limit instead of restarting the streak forever."""
+    first_comment = _failure_history(1, runner_health.failure_fingerprint(
+        RuntimeError(
+            "gh api repos/o/r failed: "
+            "dial tcp 140.82.121.6:443: i/o timeout",
+        ),
+    ))
+    second_comment = _failure_history(1, runner_health.failure_fingerprint(
+        RuntimeError(
+            "gh api repos/o/r failed: "
+            "dial tcp 140.82.112.5:443: i/o timeout",
+        ),
+    ))[0]
+    second_comment["id"] = 950
+    captured = make_report_fake(
+        monkeypatch, history=[*first_comment, second_comment],
+    )
+    caplog.set_level("INFO")
+    _report(RuntimeError(
+        "gh api repos/o/r failed: dial tcp 140.82.113.7:443: i/o timeout",
+    ))
+    assert captured["edits"] == [["ai-blocked"]]
+    assert "failure_streak_escalated" in caplog.text
+    assert "3 consecutive times" in captured["comments"][-1]
+
+
 def test_report_failure_history_read_failure_degrades_fail_open(
         monkeypatch, tmp_path, caplog):
     """Issue #825: a failed history read must never break the failure

@@ -1042,6 +1042,40 @@ def test_report_delivery_failure_classifies_a_transient_github_error(monkeypatch
     assert "blocked" not in body
 
 
+def test_a_persistent_dns_failure_re_queues_instead_of_blocking(monkeypatch):
+    """Issue #2443 acceptance 3 (#2255): a `gh` call that keeps failing with
+    `error connecting to api.github.com` is recorded `github_transient` and
+    takes the existing single automatic re-queue (#2202) — never
+    `ai-blocked` with `unclassified / fix_ticket`."""
+    from orbi import gh_response
+
+    gh = _requeue_github(monkeypatch)
+    error = gh_response.failed_request(subprocess.CalledProcessError(
+        1, ["gh", "issue", "list", "--repo", REQUEUE_REPO],
+        stderr="error connecting to api.github.com",
+    ))
+    publisher = _RecordingPublisher()
+    outcome = _report_implement_failure(
+        error=error, publisher=publisher, finish=True,
+    )
+
+    assert failure.classify(
+        runner.failure_detail(error), error=error,
+    ) == failure.Failure(
+        reason_code="github_transient", action_code="requeue",
+        retry_safe=True, outcome="blocked",
+    )
+    assert outcome == "requeued"
+    labels = gh.issues[REQUEUE_ISSUE]["labels"]
+    assert "ai-ready" in labels
+    assert "ai-blocked" not in labels
+    posted = _bot_comments(gh)
+    assert len(posted) == 1
+    assert comment_kind(posted[0]) == COMMENT_KIND_REQUEUED
+    assert "orbi:failure:v1" not in posted[0]
+    assert publisher.milestones == []
+
+
 def test_a_second_transient_failure_after_the_re_queue_is_terminal(monkeypatch):
     """Acceptance 2: a runner-authored re-queue marker on the Issue makes
     the same failure terminal exactly as before — `ai-blocked` with the
