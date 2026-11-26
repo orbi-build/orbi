@@ -101,8 +101,8 @@ def test_prompt_template_requires_fixes_keyword_for_the_source_issue():
     ).read_text(encoding="utf-8")
     assert "Fixes #{{ISSUE_NUMBER}}" in template
     rendered = pi_session.render_prompt(template, {
-        "SOURCE_REPO": "xqliu/orbi",
-        "SOURCE_REPOS": "xqliu/orbi",
+        "SOURCE_REPO": "owner.invalid/repo",
+        "SOURCE_REPOS": "owner.invalid/repo",
         "ISSUE_NUMBER": "53",
         "ISSUE_TITLE": "t",
         "ISSUE_BODY": "b",
@@ -140,8 +140,8 @@ def test_prompt_templates_carry_the_issue_comments_placeholder():
 
 
 def test_issue_context_uses_owner_repo_number_form():
-    assert runner.issue_context("xqliu/orbi", 40) == (
-        "xqliu/orbi#40"
+    assert runner.issue_context("owner.invalid/repo", 40) == (
+        "owner.invalid/repo#40"
     )
 
 
@@ -844,7 +844,7 @@ def test_stream_pi_sets_pi_env_on_the_process(tmp_path):
         "import os, sys\n"
         "sys.stdout.write(os.environ.get('PI_CODING_AGENT_DIR', ''))\n"
     )
-    result = pi_session.stream_pi([sys.executable, "-c", script], ctx=RunContext(run_id="deadbeef", issue=24, branch="b", worktree=tmp_path, source_repo="xqliu/orbi"), watch=PiWatchOptions(poll_interval=0.1), cwd=tmp_path, pi_env={"PI_CODING_AGENT_DIR": "/agent-dir"})
+    result = pi_session.stream_pi([sys.executable, "-c", script], ctx=RunContext(run_id="deadbeef", issue=24, branch="b", worktree=tmp_path, source_repo="owner.invalid/repo"), watch=PiWatchOptions(poll_interval=0.1), cwd=tmp_path, pi_env={"PI_CODING_AGENT_DIR": "/agent-dir"})
     assert result == "/agent-dir"
 
 
@@ -856,7 +856,7 @@ def test_stream_pi_without_pi_env_keeps_inherited_env(tmp_path, monkeypatch):
         "import os, sys\n"
         "sys.stdout.write(os.environ.get('ORBI_TEST_ENV_MARKER', ''))\n"
     )
-    result = pi_session.stream_pi([sys.executable, "-c", script], ctx=RunContext(run_id="deadbeef", issue=24, branch="b", worktree=tmp_path, source_repo="xqliu/orbi"), watch=PiWatchOptions(poll_interval=0.1), cwd=tmp_path)
+    result = pi_session.stream_pi([sys.executable, "-c", script], ctx=RunContext(run_id="deadbeef", issue=24, branch="b", worktree=tmp_path, source_repo="owner.invalid/repo"), watch=PiWatchOptions(poll_interval=0.1), cwd=tmp_path)
     assert result == "inherited"
 
 
@@ -880,7 +880,7 @@ def test_stream_pi_strips_the_telegram_token_from_the_child_env(
     result = pi_session.stream_pi(
         [sys.executable, "-c", script],
         ctx=RunContext(run_id="deadbeef", issue=24, branch="b",
-                       worktree=tmp_path, source_repo="xqliu/orbi"),
+                       worktree=tmp_path, source_repo="owner.invalid/repo"),
         watch=PiWatchOptions(poll_interval=0.1), cwd=tmp_path,
     )
     assert result == "inherited|ABSENT"

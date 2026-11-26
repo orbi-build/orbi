@@ -39,7 +39,7 @@ REAP_GRACE_SECONDS = 0.3
 def _ctx(tmp_path) -> RunContext:
     return RunContext(
         run_id="deadbeef", issue=1995, branch="b",
-        worktree=tmp_path, source_repo="xqliu/orbi",
+        worktree=tmp_path, source_repo="owner.invalid/repo",
     )
 
 

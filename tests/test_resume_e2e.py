@@ -518,6 +518,7 @@ def test_fake_gh_ignores_unknown_api_methods(monkeypatch):
 
 
 def test_e2e_base_advances_and_review_fixes_the_same_pr_in_session(
+    allow_external_commands,
     clone, tmp_path, monkeypatch, caplog,
 ):
     """Issue #82: when the base advances with a conflict, the review

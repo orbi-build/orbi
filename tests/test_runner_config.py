@@ -1364,7 +1364,7 @@ def test_validate_config_fails_before_issue_claim_when_path_missing(tmp_path):
 
 def test_validate_config_rejects_missing_repo_dir(tmp_path):
     with pytest.raises(FileNotFoundError, match="missing-repo"):
-        runner.validate_config(config_domain.RunnerConfig(repo_dir=tmp_path / "missing-repo", deploy_home=tmp_path, prompt=tmp_path / "prompt.md", skills=(), context_files=(), source_repos=("xqliu/orbi",)))
+        runner.validate_config(config_domain.RunnerConfig(repo_dir=tmp_path / "missing-repo", deploy_home=tmp_path, prompt=tmp_path / "prompt.md", skills=(), context_files=(), source_repos=("owner.invalid/repo",)))
 
 
 def test_validate_config_missing_repo_dir_names_the_clone_to_run(tmp_path):
@@ -1376,12 +1376,12 @@ def test_validate_config_missing_repo_dir_names_the_clone_to_run(tmp_path):
         runner.validate_config(config_domain.RunnerConfig(
             repo_dir=repo_dir, deploy_home=tmp_path,
             prompt=tmp_path / "prompt.md", skills=(),
-            context_files=(), source_repos=("xqliu/orbi",),
+            context_files=(), source_repos=("owner.invalid/repo",),
         ))
     message = str(error.value)
-    assert "source_repos[0]=xqliu/orbi" in message
+    assert "source_repos[0]=owner.invalid/repo" in message
     assert str(repo_dir) in message
-    assert f"git clone git@github.com:xqliu/orbi.git {repo_dir}" in message
+    assert f"git clone git@github.com:owner.invalid/repo.git {repo_dir}" in message
 
 
 def test_validate_config_missing_repo_dir_quotes_a_spaced_path(tmp_path):
@@ -1392,11 +1392,11 @@ def test_validate_config_missing_repo_dir_quotes_a_spaced_path(tmp_path):
         runner.validate_config(config_domain.RunnerConfig(
             repo_dir=repo_dir, deploy_home=tmp_path,
             prompt=tmp_path / "prompt.md", skills=(),
-            context_files=(), source_repos=("xqliu/orbi",),
+            context_files=(), source_repos=("owner.invalid/repo",),
         ))
     command = str(error.value).split("clone it there: ", 1)[1]
     assert shlex.split(command) == [
-        "git", "clone", "git@github.com:xqliu/orbi.git", str(repo_dir),
+        "git", "clone", "git@github.com:owner.invalid/repo.git", str(repo_dir),
     ]
 
 

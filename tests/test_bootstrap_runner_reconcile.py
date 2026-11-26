@@ -28,6 +28,7 @@ import orbi.github as github
 from tests.test_progress_wiring import make_fake_gh
 
 from seam import resume_deps, seam
+from tests.fakes.github import install_fake_gh_repositories
 from tests.test_bootstrap_runner_outcome import _gh_api
 
 
@@ -450,6 +451,7 @@ def test_the_orphan_branch_regex_is_gone():
 def test_reconcile_orphan_prs_failure_is_fail_open(
     tmp_path, monkeypatch, caplog, bind_run_id,
 ):
+    install_fake_gh_repositories(monkeypatch, "o/r")
     monkeypatch.setattr(claim, "reconcile_open_epics", lambda *args, **kwargs: None)
     monkeypatch.setattr(
         milestone, "reconcile_release_milestones",
@@ -546,6 +548,7 @@ def test_claim_time_comment_follows_the_repository_language(
 def test_reconcile_open_epics_failure_is_fail_open(
     tmp_path, monkeypatch, caplog, bind_run_id,
 ):
+    install_fake_gh_repositories(monkeypatch, "o/r")
     monkeypatch.setattr(claim, "reconcile_open_epics", lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("API down")))
     monkeypatch.setattr(
         milestone, "reconcile_release_milestones",
@@ -573,6 +576,7 @@ def test_reconcile_open_epics_runs_on_a_fresh_tick(
 ):
     calls = []
     bind_run_id(None)
+    install_fake_gh_repositories(monkeypatch, "o/r")
     monkeypatch.setattr(seam, "new_run_id", lambda: "a1b2c3d4")
     monkeypatch.setattr(
         claim, "reconcile_open_epics",
@@ -641,7 +645,7 @@ def test_process_issue_closed_issue_ends_without_pr_ceremony(
         result = runner.process_issue(
             {"number": 4, "title": "Fix", "body": "Body"},
             config_domain.RunnerConfig(repo_dir=tmp_path, prompt=tmp_path / "prompt.md", base_branch="main"),
-            "xqliu/orbi-backlog",
+            "owner.invalid/repo-backlog",
         )
     assert result == ("issue-closed", None)
     assert "health_success_record_failed" in caplog.text

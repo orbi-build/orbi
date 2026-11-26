@@ -1294,7 +1294,7 @@ def test_process_issue_pickup_record_failure_is_bypass(
         result = runner.process_issue(
             {"number": 4, "title": "Fix", "body": "Body"},
             config_domain.RunnerConfig(repo_dir=tmp_path, prompt=tmp_path / "prompt.md", base_branch="main"),
-            "xqliu/orbi-backlog",
+            "owner.invalid/repo-backlog",
         )
     assert result.url == "https://github.com/orbi-build/orbi/pull/4"
     assert "health_pickup_record_failed" in caplog.text
@@ -1343,7 +1343,7 @@ def test_process_issue_failure_record_failure_is_bypass(
         result = runner.process_issue(
             {"number": 4, "title": "Fix", "body": "Body"},
             config_domain.RunnerConfig(repo_dir=tmp_path, prompt=tmp_path / "prompt.md", base_branch="main"),
-            "xqliu/orbi-backlog",
+            "owner.invalid/repo-backlog",
         )
     assert result.kind == "failed"
     assert "health_failure_record_failed" in caplog.text

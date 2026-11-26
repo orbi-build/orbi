@@ -1254,7 +1254,7 @@ def _run_ref_hammer(
 
 
 def test_concurrent_ref_writing_on_the_shared_checkout_never_fails(
-    clone, tmp_path, monkeypatch,
+    clone, tmp_path, monkeypatch, allow_external_commands,
 ):
     """Issue #105 regression: the task worktrees are git worktrees of the
     deployment checkout — they share its refstore and object database.
@@ -1292,7 +1292,9 @@ def test_concurrent_ref_writing_on_the_shared_checkout_never_fails(
     )
 
 
-def test_ref_hammer_collects_a_failing_operation(clone, tmp_path, monkeypatch):
+def test_ref_hammer_collects_a_failing_operation(
+    clone, tmp_path, monkeypatch, allow_external_commands,
+):
     """The hammer's error collection: a failing ref-writing operation
     (a bad worktree base SHA) is recorded, never swallowed — the
     fail-fast contract of the runner's git paths (AGENTS.md: log the

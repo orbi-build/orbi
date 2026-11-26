@@ -18,6 +18,7 @@ import orbi.failure_report as failure_report
 import orbi.runner as runner
 import orbi.pi_session as pi_session
 from orbi import failure
+from tests.fakes.github import install_progress_gh
 from tests.test_progress_wiring import make_fake_gh
 
 from seam import seam
@@ -53,12 +54,12 @@ def test_process_issue_failure_without_session_still_carries_scene(
     monkeypatch.setattr(seam, "run_command", fake_run)
     # Issue #239: the failure is terminal — `process_issue` returns `None`
     # instead of re-raising; the scene assertions below are unchanged.
-    assert runner.process_issue({"number": 8, "title": "Fail", "body": ""}, config_domain.RunnerConfig(repo_dir=tmp_path, prompt=tmp_path / "prompt.md", base_branch="main", keep_failed_worktrees=False), "xqliu/orbi-backlog").kind == "failed"
+    assert runner.process_issue({"number": 8, "title": "Fail", "body": ""}, config_domain.RunnerConfig(repo_dir=tmp_path, prompt=tmp_path / "prompt.md", base_branch="main", keep_failed_worktrees=False), "owner.invalid/repo-backlog").kind == "failed"
     failure_body = calls[-1][2]["body"]
     # No session file yet: the scene still carries the full debug entry
     # (worktree, branch) with '-' session fields.
     assert "worktree: `local runner worktree`" in failure_body
-    assert "branch: `orbi/xqliu-orbi-backlog-issue-8`" in failure_body
+    assert "branch: `orbi/owner.invalid-repo-backlog-issue-8`" in failure_body
     assert "session log: `<unavailable>`" in failure_body
 
 
@@ -183,6 +184,9 @@ def test_blocked_failure_suffix_stays_inside_closed_diagnostics(
     monkeypatch.setattr(seam, "apply_label_patch", lambda *a, **k: None)
     monkeypatch.setattr(seam, "comment_issue",
                         lambda number, *, repo, body: posted.append(body))
+    # The blocked exit's progress publisher is not under test; answer its
+    # gh traffic (Issue #2253).
+    install_progress_gh(monkeypatch)
 
     failure_report.report_delivery_failure(
         runner.UnrecoverableDeliveryError("cannot recover"),
@@ -495,7 +499,7 @@ def test_process_issue_failure_comment_includes_session_scene(monkeypatch, tmp_p
     })
     # Issue #239: the failure is terminal — `process_issue` returns `None`
     # instead of re-raising; the scene assertions below are unchanged.
-    assert runner.process_issue({"number": 8, "title": "Fail", "body": ""}, config_domain.RunnerConfig(repo_dir=tmp_path, prompt=tmp_path / "prompt.md", base_branch="main", keep_failed_worktrees=False), "xqliu/orbi-backlog").kind == "failed"
+    assert runner.process_issue({"number": 8, "title": "Fail", "body": ""}, config_domain.RunnerConfig(repo_dir=tmp_path, prompt=tmp_path / "prompt.md", base_branch="main", keep_failed_worktrees=False), "owner.invalid/repo-backlog").kind == "failed"
     failure_body = calls[-1][2]["body"]
     assert "Orbi: blocked" in failure_body
     assert "session log: `local session log`" in failure_body
@@ -516,7 +520,7 @@ def test_process_issue_failure_comment_includes_session_scene(monkeypatch, tmp_p
     assert "1 failed" in failure_body
     # The reader-facing scene uses stable labels for local paths.
     assert "worktree: `local runner worktree`" in failure_body
-    assert "branch: `orbi/xqliu-orbi-backlog-issue-8`" in failure_body
+    assert "branch: `orbi/owner.invalid-repo-backlog-issue-8`" in failure_body
 
 
 def test_process_issue_isolates_scene_lookup_failure(monkeypatch, tmp_path, caplog):
@@ -563,7 +567,7 @@ def test_process_issue_isolates_scene_lookup_failure(monkeypatch, tmp_path, capl
         # Issue #239: the failure is terminal — `process_issue` returns
         # `None` instead of re-raising; the scene-isolation assertions
         # below are unchanged.
-        assert runner.process_issue({"number": 9, "title": "Fail", "body": ""}, config_domain.RunnerConfig(repo_dir=tmp_path, prompt=tmp_path / "prompt.md", base_branch="main", keep_failed_worktrees=False), "xqliu/orbi-backlog").kind == "failed"
+        assert runner.process_issue({"number": 9, "title": "Fail", "body": ""}, config_domain.RunnerConfig(repo_dir=tmp_path, prompt=tmp_path / "prompt.md", base_branch="main", keep_failed_worktrees=False), "owner.invalid/repo-backlog").kind == "failed"
     assert "activity scene failed" in caplog.text
     failure_body = calls[-1][2]["body"]
     assert "git failed" in failure_body

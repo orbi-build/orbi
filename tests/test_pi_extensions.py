@@ -5,6 +5,8 @@ from orbi import runner
 import orbi.pi_session as pi_session
 from orbi import pi_command
 from orbi.delivery_scene import RunContext
+from seam import seam
+from tests.fakes.github import install_empty_issue_comments
 
 
 def test_load_config_pi_extensions_normalizes_enabled_and_local_source(tmp_path):
@@ -79,6 +81,7 @@ def test_pi_extension_args_and_env_isolate_disabled_and_secrets():
 def test_run_pi_review_and_ticket_share_extension_contract(monkeypatch, tmp_path):
     (tmp_path / "prompt.md").write_text("system", encoding="utf-8")
     (tmp_path / "prompt_review.md").write_text("review", encoding="utf-8")
+    install_empty_issue_comments(monkeypatch)
     disabled = tmp_path / "disabled.mjs"
     disabled.write_text("export default () => {}", encoding="utf-8")
     calls = []

@@ -38,7 +38,7 @@ from tests.fakes.bootstrap_delivery import _git_output
 def test_process_issue_success_records_base_and_run_in_comment(monkeypatch, tmp_path):
     calls = []
     gh_calls, posted = make_fake_gh(monkeypatch)
-    branch = "orbi/xqliu-orbi-backlog-issue-4"
+    branch = "orbi/owner.invalid-repo-backlog-issue-4"
     head = "0123456789abcdef0123456789abcdef01234567"
 
     def fake_run(command, **kwargs):
@@ -88,7 +88,7 @@ def test_process_issue_success_records_base_and_run_in_comment(monkeypatch, tmp_
     monkeypatch.setattr(pi_session, "run_pi", lambda *args, **kwargs: "done")
     issue = {"number": 4, "title": "Fix", "body": "Body"}
     config = config_domain.RunnerConfig(repo_dir=tmp_path, prompt=tmp_path / "prompt.md", base_branch="main")
-    assert runner.process_issue(issue, config, "xqliu/orbi-backlog") == runner.IssueResult("pr", "https://github.com/orbi-build/orbi/pull/4")
+    assert runner.process_issue(issue, config, "owner.invalid/repo-backlog") == runner.IssueResult("pr", "https://github.com/orbi-build/orbi/pull/4")
     # Issue #2369: the claim and the PR-opened transition are ONE
     # whole-set replacement each.
     assert [
@@ -97,12 +97,12 @@ def test_process_issue_success_records_base_and_run_in_comment(monkeypatch, tmp_
     ] == [
         [
             "gh", "api", "--method", "PUT",
-            "repos/xqliu/orbi-backlog/issues/4/labels",
+            "repos/owner.invalid/repo-backlog/issues/4/labels",
             "-f", "labels[]=ai-in-progress", "--include",
         ],
         [
             "gh", "api", "--method", "PUT",
-            "repos/xqliu/orbi-backlog/issues/4/labels",
+            "repos/owner.invalid/repo-backlog/issues/4/labels",
             "-f", "labels[]=ai-pr-opened", "--include",
         ],
     ]
@@ -114,7 +114,7 @@ def test_process_issue_success_records_base_and_run_in_comment(monkeypatch, tmp_
         if "**Orbi progress**" in body
     ]
     assert len(progress_posts) == 1
-    assert "- branch: orbi/xqliu-orbi-backlog-issue-4" in progress_posts[0]
+    assert "- branch: orbi/owner.invalid-repo-backlog-issue-4" in progress_posts[0]
     # The PR URL is only known after verify_pr: the initial POST shows
     # `- PR: -`, the final delivery PATCH carries the URL.
     assert "- PR: -" in progress_posts[0]
@@ -130,7 +130,7 @@ def test_process_issue_success_records_base_and_run_in_comment(monkeypatch, tmp_
     assert "- base_branch: main" in start_body
     assert "- base_sha: abc123def456" in start_body
     assert "run_id=a1b2c3d4" in start_body
-    assert "- branch: orbi/xqliu-orbi-backlog-issue-4" in start_body
+    assert "- branch: orbi/owner.invalid-repo-backlog-issue-4" in start_body
     # Issue #1715: the public started comment never names the worktree
     # path on the runner host.
     assert "- worktree" not in start_body
@@ -190,12 +190,12 @@ def test_process_issue_success_logs_run_end_with_commit(monkeypatch, tmp_path, c
         runner.process_issue(
             {"number": 4, "title": "Fix", "body": "Body"},
             config_domain.RunnerConfig(repo_dir=tmp_path, prompt=tmp_path / "prompt.md", base_branch="main"),
-            "xqliu/orbi-backlog",
+            "owner.invalid/repo-backlog",
         )
     ends = [line for line in caplog.text.splitlines() if " run_end " in line]
     assert len(ends) == 1
     assert "run=a1b2c3d4" in ends[0]
-    assert "issue=xqliu/orbi-backlog#4" in ends[0]
+    assert "issue=owner.invalid/repo-backlog#4" in ends[0]
     assert "result=pr_opened" in ends[0]
     assert "pr=https://github.com/orbi-build/orbi/pull/4" in ends[0]
     assert "commit=0123456789abcdef0123456789abcdef01234567" in ends[0]
@@ -231,7 +231,7 @@ def test_process_issue_failure_marks_blocked_and_ends_cleanly(monkeypatch, tmp_p
     monkeypatch.setattr(seam, "run_command", fake_run)
     # The failure is terminal: `process_issue` returns `None` (no PR) and
     # does NOT re-raise — the service must not crash on it (Issue #239).
-    assert runner.process_issue({"number": 8, "title": "Fail", "body": ""}, config_domain.RunnerConfig(repo_dir=tmp_path, prompt=tmp_path / "prompt.md", base_branch="main"), "xqliu/orbi-backlog").kind == "failed"
+    assert runner.process_issue({"number": 8, "title": "Fail", "body": ""}, config_domain.RunnerConfig(repo_dir=tmp_path, prompt=tmp_path / "prompt.md", base_branch="main"), "owner.invalid/repo-backlog").kind == "failed"
     # The claim and the blocked terminal are ONE whole-set replacement
     # each, so the Issue ends ai-blocked alone (Issues #2369, #2426).
     assert calls[0] == ("labels", ["ai-in-progress"])
@@ -291,7 +291,7 @@ def test_process_issue_terminal_failure_clears_the_repositorys_dispatch_label(
             repo_dir=tmp_path, prompt=tmp_path / "prompt.md",
             base_branch="main", dispatch_label="ship",
         ),
-        "xqliu/orbi-backlog",
+        "owner.invalid/repo-backlog",
     )
     assert result.kind == "failed"
     # The claim is one whole-set replacement (Issue #2369); the terminal
@@ -436,7 +436,7 @@ def test_process_issue_delivery_no_commit_marks_blocked_without_crashing(
     assert runner.process_issue(
         {"number": 239, "title": "No commit", "body": ""},
         config_domain.RunnerConfig(repo_dir=tmp_path, prompt=tmp_path / "prompt.md", base_branch="main"),
-        "xqliu/orbi",
+        "owner.invalid/repo",
     ).kind == "failed"
     # The claim and the blocked terminal are ONE whole-set replacement
     # each: the Issue ends ai-blocked alone (Issues #2369, #2426).
@@ -518,7 +518,7 @@ def test_process_issue_empty_commit_marks_blocked_without_crashing(
     worktree = repo / ".worktrees" / "wt"
     subprocess.run(
         ["git", "-C", str(repo), "worktree", "add", "-b",
-         "orbi/xqliu-orbi-issue-239", str(worktree), "HEAD"],
+         "orbi/owner.invalid-repo-issue-239", str(worktree), "HEAD"],
         check=True, capture_output=True, env=env,
     )
     subject = (
@@ -576,7 +576,7 @@ def test_process_issue_empty_commit_marks_blocked_without_crashing(
                 repo_dir=repo, prompt=tmp_path / "prompt.md",
                 base_branch="main",
             ),
-            "xqliu/orbi",
+            "owner.invalid/repo",
         )
     assert result.kind == "failed"
     # Issue #2426: the terminal is ONE whole-set write ending on
@@ -656,7 +656,7 @@ def test_process_issue_model_wait_dead_failure_stays_in_progress(
     assert runner.process_issue(
         {"number": 218, "title": "Model wait dead", "body": ""},
         config_domain.RunnerConfig(repo_dir=tmp_path, prompt=tmp_path / "prompt.md", base_branch="main"),
-        "xqliu/orbi",
+        "owner.invalid/repo",
     ).kind == "failed"
     # The Issue keeps `ai-in-progress`: the claim's whole-set
     # replacement (Issue #2369) is the ONLY label write — no
@@ -735,12 +735,12 @@ def test_process_issue_model_wait_failure_records_health_attempt(
     assert runner.process_issue(
         {"number": 218, "title": "Model wait dead", "body": ""},
         config_domain.RunnerConfig(repo_dir=tmp_path, prompt=tmp_path / "prompt.md", base_branch="main"),
-        "xqliu/orbi",
+        "owner.invalid/repo",
     ).kind == "failed"
     runs = _health_runs(tmp_path)
     assert len(runs) == 1, f"the recoverable failure is recorded: {runs}"
     entry = runs[0]
-    assert entry["repo"] == "xqliu/orbi"
+    assert entry["repo"] == "owner.invalid/repo"
     assert entry["issue"] == 218
     assert entry["run_id"] == "a1b2c3d4"
     assert entry["outcome"] == "failed"
@@ -787,7 +787,7 @@ def test_process_issue_three_recoverable_failures_raise_health_finding(
         assert runner.process_issue(
             {"number": 218, "title": "Model wait dead", "body": ""},
             config_domain.RunnerConfig(repo_dir=tmp_path, prompt=tmp_path / "prompt.md", base_branch="main"),
-            "xqliu/orbi",
+            "owner.invalid/repo",
         ).kind == "failed"
     state = runner_health.load_health_state(
         runner_health.health_state_path(tmp_path),
@@ -795,7 +795,7 @@ def test_process_issue_three_recoverable_failures_raise_health_finding(
     findings = runner_health.repeated_failure_findings(state)
     assert [
         (f["repo"], f["issue"], f["count"]) for f in findings
-    ] == [("xqliu/orbi", 218, 3)]
+    ] == [("owner.invalid/repo", 218, 3)]
 
 
 def test_process_issue_success_records_health_streak_break(
@@ -832,7 +832,7 @@ def test_process_issue_success_records_health_streak_break(
     result = runner.process_issue(
         {"number": 4, "title": "Fix", "body": "Body"},
         config_domain.RunnerConfig(repo_dir=tmp_path, prompt=tmp_path / "prompt.md", base_branch="main"),
-        "xqliu/orbi-backlog",
+        "owner.invalid/repo-backlog",
     )
     assert result.kind == "pr"
     runs = _health_runs(tmp_path)
@@ -841,7 +841,7 @@ def test_process_issue_success_records_health_streak_break(
     # same Issue: a later failure does not inherit the old failures.
     runner_health.record_run_attempt(
         runner_health.health_state_path(tmp_path),
-        repo="xqliu/orbi-backlog", issue=4, run_id="a1b2c3d4",
+        repo="owner.invalid/repo-backlog", issue=4, run_id="a1b2c3d4",
         outcome="failed", fingerprint="whatever",
     )
     state = runner_health.load_health_state(
@@ -895,7 +895,7 @@ def test_process_issue_recoverable_health_record_failure_is_bypassed(
         result = runner.process_issue(
             {"number": 218, "title": "Model wait dead", "body": ""},
             config_domain.RunnerConfig(repo_dir=tmp_path, prompt=tmp_path / "prompt.md", base_branch="main"),
-            "xqliu/orbi",
+            "owner.invalid/repo",
         )
     assert result.kind == "failed"
     assert "health_failure_record_failed" in caplog.text
@@ -940,7 +940,7 @@ def test_process_issue_success_health_record_failure_is_bypassed(
         result = runner.process_issue(
             {"number": 4, "title": "Fix", "body": "Body"},
             config_domain.RunnerConfig(repo_dir=tmp_path, prompt=tmp_path / "prompt.md", base_branch="main"),
-            "xqliu/orbi-backlog",
+            "owner.invalid/repo-backlog",
         )
     assert result.kind == "pr"
     assert "health_success_record_failed" in caplog.text
@@ -1003,7 +1003,7 @@ def test_process_issue_model_wait_dead_comment_failure_stays_in_progress(
     assert runner.process_issue(
         {"number": 218, "title": "Model wait dead", "body": ""},
         config_domain.RunnerConfig(repo_dir=tmp_path, prompt=tmp_path / "prompt.md", base_branch="main"),
-        "xqliu/orbi",
+        "owner.invalid/repo",
     ).kind == "failed"
     # The Issue keeps `ai-in-progress`: the claim's whole-set
     # replacement (Issue #2369) is the ONLY label write — the failed
@@ -1075,7 +1075,7 @@ def test_process_issue_idle_recovery_failure_marks_blocked(
     assert runner.process_issue(
         {"number": 94, "title": "Idle recovery", "body": ""},
         config_domain.RunnerConfig(repo_dir=tmp_path, prompt=tmp_path / "prompt.md", base_branch="main"),
-        "xqliu/orbi",
+        "owner.invalid/repo",
     ).kind == "failed"
     # The claim and the blocked terminal are ONE whole-set replacement
     # each: the Issue ends ai-blocked alone (Issues #2369, #2426).
@@ -1153,7 +1153,7 @@ def test_process_issue_ends_cleanly_when_reporting_fails(monkeypatch, tmp_path, 
         # The failure is terminal: `process_issue` returns `None` (no PR)
         # and does NOT re-raise — the service must not crash on it
         # (Issue #239).
-        assert runner.process_issue({"number": 13, "title": "Fail", "body": ""}, config_domain.RunnerConfig(repo_dir=tmp_path, prompt=tmp_path / "prompt.md", base_branch="main"), "xqliu/orbi-backlog").kind == "failed"
+        assert runner.process_issue({"number": 13, "title": "Fail", "body": ""}, config_domain.RunnerConfig(repo_dir=tmp_path, prompt=tmp_path / "prompt.md", base_branch="main"), "owner.invalid/repo-backlog").kind == "failed"
     assert "failure reporting failed" in caplog.text
     # No progress comment was posted (the failure report died on the
     # failure-comment POST before the bypass steps).

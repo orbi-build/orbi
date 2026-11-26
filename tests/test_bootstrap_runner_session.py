@@ -20,6 +20,7 @@ import sys
 import time
 from pathlib import Path
 from unittest.mock import Mock
+import pytest
 import orbi.claim as claim
 
 import orbi.runner as runner
@@ -30,8 +31,15 @@ from tests.fakes.bootstrap_pi import (
 )
 import orbi.journal as journal
 from seam import seam
+from tests.fakes.github import install_absent_repo_policy
 from orbi.delivery_scene import RunContext
 from orbi.pi_process import PiWatchOptions
+
+
+@pytest.fixture(autouse=True)
+def _absent_repo_policy(monkeypatch):
+    """The policy read is incidental to the session scenes (Issue #2253)."""
+    install_absent_repo_policy(monkeypatch)
 
 
 # --- live GitHub progress while Pi runs (Issue #18, review Major fix) ------
@@ -58,7 +66,7 @@ def test_stream_pi_invokes_progress_callback_while_child_is_running(
             "result": activity["result"],
         })
 
-    result = pi_session.stream_pi(command, ctx=RunContext(run_id="deadbeef", issue=24, branch="b", worktree=tmp_path, source_repo="xqliu/orbi"), watch=PiWatchOptions(poll_interval=0.1), cwd=tmp_path, progress=progress)
+    result = pi_session.stream_pi(command, ctx=RunContext(run_id="deadbeef", issue=24, branch="b", worktree=tmp_path, source_repo="owner.invalid/repo"), watch=PiWatchOptions(poll_interval=0.1), cwd=tmp_path, progress=progress)
     assert result == "final answer"
     # The callback fired many times during the run (polls at 0.1 s while
     # the child sleeps 1.2 s after the last session record)...
@@ -109,7 +117,7 @@ def test_stream_pi_progress_first_frame_may_be_session_pending(tmp_path):
             "result": activity["result"],
         })
 
-    result = pi_session.stream_pi(command, ctx=RunContext(run_id="deadbeef", issue=24, branch="b", worktree=tmp_path, source_repo="xqliu/orbi"), watch=PiWatchOptions(poll_interval=0.05), cwd=tmp_path, progress=progress)
+    result = pi_session.stream_pi(command, ctx=RunContext(run_id="deadbeef", issue=24, branch="b", worktree=tmp_path, source_repo="owner.invalid/repo"), watch=PiWatchOptions(poll_interval=0.05), cwd=tmp_path, progress=progress)
     assert result == "final answer"
     # The forced #741 scene: the first frame predates the session file,
     # so it is the `session_pending` startup sub-phase — never a reason
@@ -147,7 +155,7 @@ def test_stream_pi_live_progress_patches_github_before_child_exits(
 
     publisher = FakePublisher()
     throttle = progress.LiveProgressThrottle(RunContext(run_id="deadbeef", issue=24, branch="b", worktree=tmp_path, source_repo="owner/repo"), publisher, title="Live progress", role="implement", started=time.monotonic(), pr_url=None, review_round=0, priority="normal")
-    result = pi_session.stream_pi(command, ctx=RunContext(run_id="deadbeef", issue=24, branch="b", worktree=tmp_path, source_repo="xqliu/orbi"), watch=PiWatchOptions(poll_interval=0.1), cwd=tmp_path, progress=throttle)
+    result = pi_session.stream_pi(command, ctx=RunContext(run_id="deadbeef", issue=24, branch="b", worktree=tmp_path, source_repo="owner.invalid/repo"), watch=PiWatchOptions(poll_interval=0.1), cwd=tmp_path, progress=throttle)
     assert result == "done"
     # At least one PATCH happened while the child was still running
     # (all of them did: the callback only exists inside the poll loop).
@@ -179,7 +187,7 @@ def test_stream_pi_progress_callback_error_never_interrupts_run(
         raise RuntimeError("gh api failed")
 
     with caplog.at_level("ERROR"):
-        result = pi_session.stream_pi(command, ctx=RunContext(run_id="deadbeef", issue=24, branch="b", worktree=tmp_path, source_repo="xqliu/orbi"), watch=PiWatchOptions(poll_interval=0.1), cwd=tmp_path, progress=boom)
+        result = pi_session.stream_pi(command, ctx=RunContext(run_id="deadbeef", issue=24, branch="b", worktree=tmp_path, source_repo="owner.invalid/repo"), watch=PiWatchOptions(poll_interval=0.1), cwd=tmp_path, progress=boom)
     assert result == "final answer"
     assert "progress_publish_failed" in caplog.text
     assert "run=deadbeef" in caplog.text

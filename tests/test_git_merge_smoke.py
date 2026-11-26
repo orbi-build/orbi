@@ -162,6 +162,9 @@ def test_merge_gate_absorbs_clean_behind_base_then_defers(
             git(clone, "push", "origin", "main")
             git(clone, "checkout", "-")
             return ""
+        if command[0] == "gh" and command[1] == "api":
+            # The merge-method read (Issue #1480): merge commit allowed.
+            return json.dumps({"allow_merge_commit": True})
         result = real_run(command, **kwargs)
         if command[:2] == ["git", "rev-parse"] and command[2] == "HEAD":
             absorbed_head = result

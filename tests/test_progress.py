@@ -485,7 +485,7 @@ def test_progress_body_starts_with_hidden_run_marker():
                      "target": None},
         "tests": "156 passed",
         "review_round": 0,
-        "branch": "orbi/xqliu-orbi-issue-18",
+        "branch": "orbi/owner.invalid-repo-issue-18",
         "pr": None,
         "session": "sess-1",
     })
@@ -507,7 +507,7 @@ def test_progress_body_starts_with_hidden_run_marker():
     assert "- tests: 156 passed" in body
     assert "- review/fix round: 0" not in body
     assert "- review:" not in body
-    assert "- branch: orbi/xqliu-orbi-issue-18" in body
+    assert "- branch: orbi/owner.invalid-repo-issue-18" in body
     assert "- PR: -" in body
     assert "- session: sess-1" in body
 
@@ -548,12 +548,12 @@ def test_progress_body_shows_pr_url_when_present():
         "tests": None,
         "review_round": 1,
         "branch": "b",
-        "pr": "https://github.com/xqliu/orbi/pull/40",
+        "pr": "https://github.com/owner.invalid/repo/pull/40",
         "session": None,
     }
     body = progress.progress_body(state)
     assert (
-        "- PR: https://github.com/xqliu/orbi/pull/40" in body
+        "- PR: https://github.com/owner.invalid/repo/pull/40" in body
     )
     assert "- review/fix round: 1" not in body
     body = progress.progress_body({"language": "en",**state, "review_round": 3})
@@ -691,7 +691,7 @@ def make_publisher(run_command=None, comments=None, posted=None,
         return ""
 
     publisher = progress.ProgressPublisher(
-        18, "xqliu/orbi", "abc12345",
+        18, "owner.invalid/repo", "abc12345",
         run_command=fake_run_command, language_code="en",
     )
     return publisher, calls
@@ -712,16 +712,16 @@ def test_progress_comment_writes_use_body_free_log_commands():
         return ""
 
     publisher = progress.ProgressPublisher(
-        18, "xqliu/orbi", "abc12345", run_command=fake_run_command, language_code="en",
+        18, "owner.invalid/repo", "abc12345", run_command=fake_run_command, language_code="en",
     )
     publisher.ensure("body with\nfull markdown")
     publisher.patch("updated body with\nfull markdown")
     publisher.milestone("tests passed")
 
     assert logged == [
-        ["gh", "api", "repos/xqliu/orbi/issues/18/comments", "--method", "POST"],
-        ["gh", "api", "repos/xqliu/orbi/issues/comments/42", "--method", "PATCH"],
-        ["gh", "api", "repos/xqliu/orbi/issues/18/comments", "--method", "POST"],
+        ["gh", "api", "repos/owner.invalid/repo/issues/18/comments", "--method", "POST"],
+        ["gh", "api", "repos/owner.invalid/repo/issues/comments/42", "--method", "PATCH"],
+        ["gh", "api", "repos/owner.invalid/repo/issues/18/comments", "--method", "POST"],
     ]
     assert all("--field" not in command for command in logged)
     assert commands[2][-1] == "body=updated body with\nfull markdown"
@@ -733,11 +733,11 @@ def test_publisher_ensure_creates_comment_when_marker_missing():
     assert comment_id == 42
     assert publisher.comment_id == 42
     assert calls[0] == [
-        "gh", "api", "repos/xqliu/orbi/issues/18/comments",
+        "gh", "api", "repos/owner.invalid/repo/issues/18/comments",
         "--paginate",
     ]
     assert calls[1] == [
-        "gh", "api", "repos/xqliu/orbi/issues/18/comments",
+        "gh", "api", "repos/owner.invalid/repo/issues/18/comments",
         "--method", "POST", "--field", "body=initial body",
     ]
 
@@ -759,11 +759,11 @@ def test_publisher_ensure_patches_existing_progress_comment():
     assert publisher.comment_id == 7
     assert calls == [
         [
-            "gh", "api", "repos/xqliu/orbi/issues/18/comments",
+            "gh", "api", "repos/owner.invalid/repo/issues/18/comments",
             "--paginate",
         ],
         [
-            "gh", "api", "repos/xqliu/orbi/issues/comments/7",
+            "gh", "api", "repos/owner.invalid/repo/issues/comments/7",
             "--method", "PATCH", "--field", "body=new body",
         ],
     ]
@@ -782,7 +782,7 @@ def test_publisher_ensure_never_hijacks_scene_comments():
     comment_id = publisher.ensure("initial body")
     assert comment_id == 42
     assert calls[-1] == [
-        "gh", "api", "repos/xqliu/orbi/issues/18/comments",
+        "gh", "api", "repos/owner.invalid/repo/issues/18/comments",
         "--method", "POST", "--field", "body=initial body",
     ]
 
@@ -834,7 +834,7 @@ def make_stateful_publisher(comments=None):
         return ""
 
     publisher = progress.ProgressPublisher(
-        18, "xqliu/orbi", "abc12345", run_command=fake_run_command, language_code="en",
+        18, "owner.invalid/repo", "abc12345", run_command=fake_run_command, language_code="en",
     )
     return publisher, comments, posts, patches
 
@@ -965,7 +965,7 @@ def test_publisher_patch_updates_the_tracked_comment():
     publisher.ensure("old")
     publisher.patch("updated body")
     assert calls[-1] == [
-        "gh", "api", "repos/xqliu/orbi/issues/comments/7",
+        "gh", "api", "repos/owner.invalid/repo/issues/comments/7",
         "--method", "PATCH", "--field", "body=updated body",
     ]
 
@@ -988,13 +988,13 @@ def test_publisher_patch_uses_the_github_update_comment_endpoint():
     publisher.ensure("old")
     publisher.patch("updated body")
     assert calls[-1] == [
-        "gh", "api", "repos/xqliu/orbi/issues/comments/7",
+        "gh", "api", "repos/owner.invalid/repo/issues/comments/7",
         "--method", "PATCH", "--field", "body=updated body",
     ]
     # List/create keep the issue-scoped endpoint (that route is correct
     # for GET and POST).
     assert calls[0] == [
-        "gh", "api", "repos/xqliu/orbi/issues/18/comments",
+        "gh", "api", "repos/owner.invalid/repo/issues/18/comments",
         "--paginate",
     ]
 
@@ -1076,7 +1076,7 @@ def test_publisher_milestone_posts_multiline_field_block(monkeypatch):
     publisher.milestone("tests passed: 156 passed in 4.43s")
     assert calls == [
         [
-            "gh", "api", "repos/xqliu/orbi/issues/18/comments",
+            "gh", "api", "repos/owner.invalid/repo/issues/18/comments",
             "--method", "POST",
             "--field",
             "body=<!-- orbi:run=abc12345 -->\n"
@@ -1146,7 +1146,7 @@ def test_publisher_finish_patches_final_summary_into_tracked_comment():
     publisher.ensure("old")
     publisher.finish("final delivery summary")
     assert calls[-1] == [
-        "gh", "api", "repos/xqliu/orbi/issues/comments/7",
+        "gh", "api", "repos/owner.invalid/repo/issues/comments/7",
         "--method", "PATCH", "--field", "body=final delivery summary",
     ]
 
@@ -1160,11 +1160,11 @@ def test_publisher_finish_creates_final_comment_without_tracked_one():
     assert publisher.comment_id == 42
     assert calls == [
         [
-            "gh", "api", "repos/xqliu/orbi/issues/18/comments",
+            "gh", "api", "repos/owner.invalid/repo/issues/18/comments",
             "--paginate",
         ],
         [
-            "gh", "api", "repos/xqliu/orbi/issues/18/comments",
+            "gh", "api", "repos/owner.invalid/repo/issues/18/comments",
             "--method", "POST",
             "--field", "body=final delivery summary",
         ],
@@ -1186,7 +1186,7 @@ def test_publisher_finish_resumes_existing_comment_without_tracked_one():
     publisher.finish("final delivery summary")
     assert publisher.comment_id == 7
     assert calls[-1] == [
-        "gh", "api", "repos/xqliu/orbi/issues/comments/7",
+        "gh", "api", "repos/owner.invalid/repo/issues/comments/7",
         "--method", "PATCH", "--field", "body=final delivery summary",
     ]
     assert not any(
@@ -1227,7 +1227,7 @@ def test_publisher_failure_scene_updates_the_same_fingerprint_comment():
         FP,
     )
     assert calls[-1] == [
-        "gh", "api", "repos/xqliu/orbi/issues/comments/5",
+        "gh", "api", "repos/owner.invalid/repo/issues/comments/5",
         "--method", "PATCH", "--field", f"body={expected}",
     ]
     assert "<!-- orbi:recovered=credential_missing:2 -->" in expected
@@ -1249,7 +1249,7 @@ def test_publisher_failure_scene_posts_a_different_cause():
     new_body = _recovered_body("credential_missing", "401 rejected")
     publisher.failure_scene(new_body)
     assert calls[-1] == [
-        "gh", "api", "repos/xqliu/orbi/issues/18/comments",
+        "gh", "api", "repos/owner.invalid/repo/issues/18/comments",
         "--method", "POST", "--field",
         f"body={progress.format_status_comment(new_body)}",
     ]
@@ -1267,7 +1267,7 @@ def test_publisher_failure_scene_folds_by_fingerprint_not_reason_code():
     new_body = _recovered_body("unclassified", "second", FP)
     publisher.failure_scene(new_body)
     assert calls[-1] == [
-        "gh", "api", "repos/xqliu/orbi/issues/18/comments",
+        "gh", "api", "repos/owner.invalid/repo/issues/18/comments",
         "--method", "POST", "--field",
         f"body={progress.format_status_comment(new_body)}",
     ]
@@ -1287,7 +1287,7 @@ def test_publisher_failure_scene_folds_a_fingerprint_only_body():
     publisher.failure_scene(body)
     rendered = progress.format_status_comment(body)
     assert calls[-1] == [
-        "gh", "api", "repos/xqliu/orbi/issues/comments/5",
+        "gh", "api", "repos/owner.invalid/repo/issues/comments/5",
         "--method", "PATCH", "--field",
         f"body={progress.bump_failure_repeat(rendered, FP)}",
     ]
@@ -1305,7 +1305,7 @@ def test_publisher_failure_scene_does_not_fold_into_a_reasonless_comment():
     new_body = _recovered_body("unclassified")
     publisher.failure_scene(new_body)
     assert calls[-1] == [
-        "gh", "api", "repos/xqliu/orbi/issues/18/comments",
+        "gh", "api", "repos/owner.invalid/repo/issues/18/comments",
         "--method", "POST", "--field",
         f"body={progress.format_status_comment(new_body)}",
     ]
@@ -1318,7 +1318,7 @@ def test_publisher_failure_scene_posts_a_body_without_a_cause_marker():
     body = "<!-- orbi:run=abc12345 -->\nOrbi something: legible"
     publisher.failure_scene(body)
     assert calls[-1] == [
-        "gh", "api", "repos/xqliu/orbi/issues/18/comments",
+        "gh", "api", "repos/owner.invalid/repo/issues/18/comments",
         "--method", "POST", "--field",
         f"body={progress.format_status_comment(body)}",
     ]
@@ -1338,7 +1338,7 @@ def test_publisher_failure_scene_never_touches_another_run():
     new_body = _recovered_body("credential_missing")
     publisher.failure_scene(new_body)
     assert calls[-1] == [
-        "gh", "api", "repos/xqliu/orbi/issues/18/comments",
+        "gh", "api", "repos/owner.invalid/repo/issues/18/comments",
         "--method", "POST", "--field",
         f"body={progress.format_status_comment(new_body)}",
     ]
@@ -1949,10 +1949,10 @@ def test_progress_publication_failure_stays_a_pure_bypass(monkeypatch, tmp_path)
         calls.append(args)
         raise RuntimeError("gh api 404")
     publisher = progress.ProgressPublisher(
-        18, "xqliu/orbi", "abc12345", run_command=boom, language_code="en",
+        18, "owner.invalid/repo", "abc12345", run_command=boom, language_code="en",
     )
     progress.safe_publish(
-        run_id="abc12345", issue=18, source_repo="xqliu/orbi",
+        run_id="abc12345", issue=18, source_repo="owner.invalid/repo",
         role="implement",
         action=lambda: publisher.ensure(progress.progress_body(
             _summary_state(),

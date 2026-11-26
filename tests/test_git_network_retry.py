@@ -37,7 +37,7 @@ def _install_fake_git(tmp_path, monkeypatch) -> None:
 
 
 def test_chinese_host_retries_a_transient_git_network_failure(
-    tmp_path, monkeypatch, caplog,
+    tmp_path, monkeypatch, caplog, allow_external_commands,
 ):
     """Issue #1758 acceptance 2: the same retry as on an English host.
 

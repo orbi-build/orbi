@@ -1417,7 +1417,7 @@ def test_setup_runs_the_real_run_setup_and_prints_the_hint(
     out = capsys.readouterr().out
     assert "setup=ok" in out
     assert (
-        "Run 'orbi suggest --repo xqliu/orbi' to get three suggested Issues."
+        "Run 'orbi suggest --repo owner.invalid/repo' to get three suggested Issues."
         in out
     )
     assert setup_world.stub.calls == []

@@ -96,21 +96,21 @@ def test_exporter_unit_passes_systemd_verify():
 
 def test_parse_message_run_start_extracts_run_id_kind_and_scene():
     parsed = exporter.parse_message(
-        "INFO [cf357f0e] run_start run=cf357f0e issue=xqliu/orbi#162 "
+        "INFO [cf357f0e] run_start run=cf357f0e issue=owner.invalid/repo#162 "
         "role=implement branch=b worktree=/w session=- session_file=- "
         "phase=starting last_activity=- action=- result=-"
     )
     assert parsed is not None
     assert parsed["run_id"] == "cf357f0e"
     assert parsed["kind"] == "run_start"
-    assert parsed["scene"]["issue"] == "xqliu/orbi#162"
+    assert parsed["scene"]["issue"] == "owner.invalid/repo#162"
     assert parsed["scene"]["role"] == "implement"
     assert parsed["scene"]["phase"] == "starting"
 
 
 def test_parse_message_quoted_action_with_spaces_and_escaped_quotes():
     parsed = exporter.parse_message(
-        'INFO [cf357f0e] activity issue=xqliu/orbi#162 role=implement '
+        'INFO [cf357f0e] activity issue=owner.invalid/repo#162 role=implement '
         'phase=bash action="bash cd /w \\"quoted\\" && pytest" result=ok '
         "state=model_wait idle=12s"
     )
@@ -123,7 +123,7 @@ def test_parse_message_skips_unknown_line_kinds():
     # `command=` / `stdout=` journal lines are whole-line scenes, not
     # `LEVEL [run_id] kind scene` lines: the line regex does not match.
     assert exporter.parse_message(
-        "INFO [cf357f0e] command=gh api repos/xqliu/orbi/issues/162"
+        "INFO [cf357f0e] command=gh api repos/owner.invalid/repo/issues/162"
     ) is None
     assert exporter.parse_message(
         "INFO [cf357f0e] stdout=some output"
@@ -185,8 +185,8 @@ def test_parse_duration_rejects_non_journal_formats():
 
 
 def test_issue_repo_splits_owner_repo_from_issue_ref():
-    assert exporter.issue_repo("xqliu/orbi#162") == "xqliu/orbi"
-    assert exporter.issue_repo("xqliu/orbi#18") == "xqliu/orbi"
+    assert exporter.issue_repo("owner.invalid/repo#162") == "owner.invalid/repo"
+    assert exporter.issue_repo("owner.invalid/repo#18") == "owner.invalid/repo"
 
 
 def test_issue_repo_falls_back_to_whole_ref_when_no_hash():
@@ -204,14 +204,14 @@ def test_fetch_journal_parses_json_entries_with_instance_and_ts():
         json.dumps({
             "__REALTIME_TIMESTAMP": "1787958782202724",
             "_SYSTEMD_USER_UNIT": "orbi@1.service",
-            "MESSAGE": "INFO [cf357f0e] heartbeat issue=xqliu/orbi#162 "
+            "MESSAGE": "INFO [cf357f0e] heartbeat issue=owner.invalid/repo#162 "
                        "role=implement phase=read state=- elapsed=1m idle=1m",
         }),
         json.dumps({
             "__REALTIME_TIMESTAMP": "1787958785633784",
             "_SYSTEMD_USER_UNIT": "orbi@2.service",
             "MESSAGE": "INFO [cf357f0e] run_start run=cf357f0e "
-                       "issue=xqliu/orbi#162 role=implement phase=starting",
+                       "issue=owner.invalid/repo#162 role=implement phase=starting",
         }),
     ]) + "\n"
 
@@ -316,18 +316,18 @@ def subprocess_run_factory(completed):
 def test_build_metrics_live_run_gauges_and_counters():
     entries = [
         entry(100, "1",
-              "INFO [aaaa1111] run_start run=aaaa1111 issue=xqliu/orbi#162 "
+              "INFO [aaaa1111] run_start run=aaaa1111 issue=owner.invalid/repo#162 "
               "role=implement branch=b worktree=/w session=- session_file=- "
               "phase=starting last_activity=- action=- result=-"),
         entry(160, "1",
-              "INFO [aaaa1111] activity issue=xqliu/orbi#162 role=implement "
+              "INFO [aaaa1111] activity issue=owner.invalid/repo#162 role=implement "
               "phase=read action=\"read /x\" result=ok state=model_wait "
               "idle=5s"),
         entry(175, "1",
-              "INFO [aaaa1111] model_wait issue=xqliu/orbi#162 "
+              "INFO [aaaa1111] model_wait issue=owner.invalid/repo#162 "
               "role=implement phase=read state=model_wait"),
         entry(200, "1",
-              "INFO [aaaa1111] heartbeat issue=xqliu/orbi#162 "
+              "INFO [aaaa1111] heartbeat issue=owner.invalid/repo#162 "
               "role=implement phase=read state=model_wait elapsed=1m "
               "idle=20s"),
     ]
@@ -336,35 +336,35 @@ def test_build_metrics_live_run_gauges_and_counters():
 
     metric(lines, "orbi_service_active", 'slot="1"', 1.0)
     metric(lines, "orbi_run_active",
-           'slot="1",repo="xqliu/orbi",issue="xqliu/orbi#162",'
+           'slot="1",repo="owner.invalid/repo",issue="owner.invalid/repo#162",'
            'role="implement",phase="read",state="model_wait"', 1.0)
     metric(lines, "orbi_run_idle_seconds",
-           'slot="1",issue="xqliu/orbi#162"', 20.0)
+           'slot="1",issue="owner.invalid/repo#162"', 20.0)
     metric(lines, "orbi_run_seconds",
-           'slot="1",issue="xqliu/orbi#162",role="implement"', 60.0)
+           'slot="1",issue="owner.invalid/repo#162",role="implement"', 60.0)
     metric(lines, "orbi_run_start_total",
-           'slot="1",issue="xqliu/orbi#162",role="implement"', 1.0)
+           'slot="1",issue="owner.invalid/repo#162",role="implement"', 1.0)
     metric(lines, "orbi_model_wait_total",
-           'slot="1",issue="xqliu/orbi#162"', 1.0)
+           'slot="1",issue="owner.invalid/repo#162"', 1.0)
 
 
 def test_build_metrics_finished_run_keeps_end_scene_and_zeroes_active():
     entries = [
         entry(100, "1",
-              "INFO [bbbb2222] run_start run=bbbb2222 issue=xqliu/orbi#50 "
+              "INFO [bbbb2222] run_start run=bbbb2222 issue=owner.invalid/repo#50 "
               "role=implement branch=b worktree=/w session=- session_file=- "
               "phase=starting last_activity=- action=- result=-"),
         entry(200, "1",
-              "INFO [bbbb2222] heartbeat issue=xqliu/orbi#50 "
+              "INFO [bbbb2222] heartbeat issue=owner.invalid/repo#50 "
               "role=implement phase=test state=- elapsed=10m idle=1s"),
         entry(300, "1",
-              "INFO [bbbb2222] run_end run=bbbb2222 issue=xqliu/orbi#50 "
+              "INFO [bbbb2222] run_end run=bbbb2222 issue=owner.invalid/repo#50 "
               "role=implement result=pr_opened elapsed=3h30m "
-              "pr=https://github.com/xqliu/orbi/pull/187 commit=abc123"),
+              "pr=https://github.com/owner.invalid/repo/pull/187 commit=abc123"),
         # A later live run on the same instance: the finished combo must
         # still be present with run_active=0 (Prometheus needs the series).
         entry(400, "1",
-              "INFO [cccc3333] run_start run=cccc3333 issue=xqliu/orbi#181 "
+              "INFO [cccc3333] run_start run=cccc3333 issue=owner.invalid/repo#181 "
               "role=implement branch=b worktree=/w session=- session_file=- "
               "phase=starting last_activity=- action=- result=-"),
     ]
@@ -373,20 +373,20 @@ def test_build_metrics_finished_run_keeps_end_scene_and_zeroes_active():
 
     metric(lines, "orbi_service_active", 'slot="1"', 0.0)
     metric(lines, "orbi_run_active",
-           'slot="1",repo="xqliu/orbi",issue="xqliu/orbi#181",'
+           'slot="1",repo="owner.invalid/repo",issue="owner.invalid/repo#181",'
            'role="implement",phase="starting",state="-"', 1.0)
     metric(lines, "orbi_run_active",
-           'slot="1",repo="xqliu/orbi",issue="xqliu/orbi#50",'
+           'slot="1",repo="owner.invalid/repo",issue="owner.invalid/repo#50",'
            'role="implement",phase="test",state="-"', 0.0)
     metric(lines, "orbi_run_seconds",
-           'slot="1",issue="xqliu/orbi#50",role="implement"', 12600.0)
+           'slot="1",issue="owner.invalid/repo#50",role="implement"', 12600.0)
     metric(lines, "orbi_run_end_total",
-           'slot="1",issue="xqliu/orbi#50",role="implement",'
+           'slot="1",issue="owner.invalid/repo#50",role="implement",'
            'result="pr_opened"', 1.0)
     # The finished run's idle gauge is not re-emitted (no live state).
     assert not any(
         ln.startswith('orbi_run_idle_seconds{slot="1",'
-                      'issue="xqliu/orbi#50"}')
+                      'issue="owner.invalid/repo#50"}')
         for ln in lines
     )
 
@@ -394,47 +394,47 @@ def test_build_metrics_finished_run_keeps_end_scene_and_zeroes_active():
 def test_build_metrics_failure_and_recovery_counters_by_reason():
     entries = [
         entry(100, "2",
-              "INFO [dddd4444] run_start run=dddd4444 issue=xqliu/orbi#181 "
+              "INFO [dddd4444] run_start run=dddd4444 issue=owner.invalid/repo#181 "
               "role=review branch=b worktree=/w session=- session_file=- "
               "phase=starting last_activity=- action=- result=-"),
         entry(200, "2",
-              "WARNING [dddd4444] pi_idle issue=xqliu/orbi#181 "
+              "WARNING [dddd4444] pi_idle issue=owner.invalid/repo#181 "
               "role=review phase=bash stale_seconds=5m"),
         entry(300, "2",
-              "INFO [dddd4444] pi_idle_term run=dddd4444 issue=xqliu/orbi#181 "
+              "INFO [dddd4444] pi_idle_term run=dddd4444 issue=owner.invalid/repo#181 "
               "role=review pid=4242 cmdline=\"timeout 240 pytest\" "
               "result=sent"),
         entry(400, "2",
-              "INFO [dddd4444] pi_idle_kill run=dddd4444 issue=xqliu/orbi#181 "
+              "INFO [dddd4444] pi_idle_kill run=dddd4444 issue=owner.invalid/repo#181 "
               "role=review pid=4242 cmdline=\"timeout 240 pytest\" "
               "result=already_dead"),
         entry(500, "2",
-              "ERROR [dddd4444] run_failed run=dddd4444 issue=xqliu/orbi#181 "
+              "ERROR [dddd4444] run_failed run=dddd4444 issue=owner.invalid/repo#181 "
               "role=review branch=b worktree=/w session=- session_file=- "
               "phase=bash last_activity=- action=- result=- "
               "reason=idle_recovery_stale_15m"),
         entry(600, "2",
               "INFO [dddd4444] progress_publish_failed run=dddd4444 "
-              "issue=xqliu/orbi#181 role=review"),
+              "issue=owner.invalid/repo#181 role=review"),
     ]
     text = exporter.build_metrics(entries, now=700.0, service_active={"2": 1})
     lines = lines_of(text)
 
     metric(lines, "orbi_pi_idle_total",
-           'slot="2",issue="xqliu/orbi#181"', 1.0)
+           'slot="2",issue="owner.invalid/repo#181"', 1.0)
     metric(lines, "orbi_pi_idle_term_total",
-           'slot="2",issue="xqliu/orbi#181"', 1.0)
+           'slot="2",issue="owner.invalid/repo#181"', 1.0)
     metric(lines, "orbi_pi_idle_kill_total",
-           'slot="2",issue="xqliu/orbi#181"', 1.0)
+           'slot="2",issue="owner.invalid/repo#181"', 1.0)
     metric(lines, "orbi_run_failed_total",
-           'slot="2",issue="xqliu/orbi#181",'
+           'slot="2",issue="owner.invalid/repo#181",'
            'reason="idle_recovery_stale_15m"', 1.0)
     metric(lines, "orbi_progress_publish_failed_total",
-           'slot="2",issue="xqliu/orbi#181"', 1.0)
+           'slot="2",issue="owner.invalid/repo#181"', 1.0)
     # The failed run is no longer active.
     assert not any(
         ln.endswith('state="model_wait"} 1')
-        and 'issue="xqliu/orbi#181"' in ln
+        and 'issue="owner.invalid/repo#181"' in ln
         for ln in lines
         if ln.startswith("orbi_run_active")
     )
@@ -444,12 +444,12 @@ def test_build_metrics_labels_stay_within_allowlist():
     """No run_id, no command/prompt text may ever reach a label."""
     entries = [
         entry(100, "1",
-              "INFO [eeee5555] run_start run=eeee5555 issue=xqliu/orbi#162 "
-              "role=implement branch=orbi/xqliu-orbi-issue-162 "
+              "INFO [eeee5555] run_start run=eeee5555 issue=owner.invalid/repo#162 "
+              "role=implement branch=orbi/owner.invalid-repo-issue-162 "
               "worktree=/home/x/w session=- session_file=- phase=starting "
               "last_activity=- action=- result=-"),
         entry(200, "1",
-              "INFO [eeee5555] activity issue=xqliu/orbi#162 role=implement "
+              "INFO [eeee5555] activity issue=owner.invalid/repo#162 role=implement "
               "phase=bash action=\"bash cat > /tmp/x.py <<'EOF' secret "
               "prompt text EOF\" result=ok state=- idle=2s"),
     ]
@@ -475,7 +475,7 @@ def test_build_metrics_labels_stay_within_allowlist():
 
 def test_build_metrics_unparseable_messages_are_skipped():
     entries = [
-        entry(100, "1", "command=gh api repos/xqliu/orbi/issues/162"),
+        entry(100, "1", "command=gh api repos/owner.invalid/repo/issues/162"),
         entry(200, "1", "stdout=some output"),
     ]
     text = exporter.build_metrics(entries, now=300.0, service_active={"1": 1})
@@ -489,7 +489,7 @@ def test_build_metrics_unparseable_messages_are_skipped():
 def test_build_metrics_activity_before_run_start_is_ignored():
     entries = [
         entry(100, "1",
-              "INFO [aaaa1111] activity issue=xqliu/orbi#162 "
+              "INFO [aaaa1111] activity issue=owner.invalid/repo#162 "
               "role=implement phase=test action=\"read /x\" result=ok "
               "state=- idle=2s"),
     ]
@@ -503,17 +503,17 @@ def test_build_metrics_activity_before_run_start_is_ignored():
 def test_build_metrics_heartbeat_without_idle_or_elapsed_updates_combo_only():
     entries = [
         entry(100, "1",
-              "INFO [aaaa1111] run_start run=aaaa1111 issue=xqliu/orbi#162 "
+              "INFO [aaaa1111] run_start run=aaaa1111 issue=owner.invalid/repo#162 "
               "role=implement branch=b worktree=/w session=- session_file=- "
               "phase=starting last_activity=- action=- result=-"),
         entry(200, "1",
-              "INFO [aaaa1111] heartbeat issue=xqliu/orbi#162 "
+              "INFO [aaaa1111] heartbeat issue=owner.invalid/repo#162 "
               "role=implement phase=read state=model_wait"),
     ]
     text = exporter.build_metrics(entries, now=300.0, service_active={"1": 1})
     lines = lines_of(text)
     metric(lines, "orbi_run_active",
-           'slot="1",repo="xqliu/orbi",issue="xqliu/orbi#162",'
+           'slot="1",repo="owner.invalid/repo",issue="owner.invalid/repo#162",'
            'role="implement",phase="read",state="model_wait"', 1.0)
     assert not any(ln.startswith("orbi_run_idle_seconds")
                    for ln in lines)
@@ -523,17 +523,17 @@ def test_build_metrics_heartbeat_without_idle_or_elapsed_updates_combo_only():
 def test_build_metrics_run_end_without_elapsed_still_counts():
     entries = [
         entry(100, "1",
-              "INFO [aaaa1111] run_start run=aaaa1111 issue=xqliu/orbi#162 "
+              "INFO [aaaa1111] run_start run=aaaa1111 issue=owner.invalid/repo#162 "
               "role=implement branch=b worktree=/w session=- session_file=- "
               "phase=starting last_activity=- action=- result=-"),
         entry(200, "1",
-              "INFO [aaaa1111] run_end run=aaaa1111 issue=xqliu/orbi#162 "
+              "INFO [aaaa1111] run_end run=aaaa1111 issue=owner.invalid/repo#162 "
               "role=implement result=failed pr=- commit=-"),
     ]
     text = exporter.build_metrics(entries, now=300.0, service_active={"1": 1})
     lines = lines_of(text)
     metric(lines, "orbi_run_end_total",
-           'slot="1",issue="xqliu/orbi#162",role="implement",'
+           'slot="1",issue="owner.invalid/repo#162",role="implement",'
            'result="failed"', 1.0)
     assert not any(ln.startswith("orbi_run_seconds") for ln in lines)
 
@@ -572,7 +572,7 @@ def test_build_metrics_empty_journal_emits_only_service_gauges():
 def test_build_metrics_unknown_scene_fields_are_ignored():
     entries = [
         entry(100, "1",
-              "INFO [ffff6666] run_start run=ffff6666 issue=xqliu/orbi#9 "
+              "INFO [ffff6666] run_start run=ffff6666 issue=owner.invalid/repo#9 "
               "role=implement branch=b worktree=/w session=- session_file=- "
               "phase=starting last_activity=- action=- result=- "
               "unexpected_field=whatever"),
@@ -580,21 +580,21 @@ def test_build_metrics_unknown_scene_fields_are_ignored():
     text = exporter.build_metrics(entries, now=200.0, service_active={"1": 1})
     lines = lines_of(text)
     metric(lines, "orbi_run_active",
-           'slot="1",repo="xqliu/orbi",issue="xqliu/orbi#9",'
+           'slot="1",repo="owner.invalid/repo",issue="owner.invalid/repo#9",'
            'role="implement",phase="starting",state="-"', 1.0)
 
 
 def test_build_metrics_missing_instance_falls_back_to_unknown():
     entries = [
         entry(100, None,
-              "INFO [aaaa1111] run_start run=aaaa1111 issue=xqliu/orbi#162 "
+              "INFO [aaaa1111] run_start run=aaaa1111 issue=owner.invalid/repo#162 "
               "role=implement branch=b worktree=/w session=- session_file=- "
               "phase=starting last_activity=- action=- result=-"),
     ]
     text = exporter.build_metrics(entries, now=200.0, service_active={})
     lines = lines_of(text)
     metric(lines, "orbi_run_start_total",
-           'slot="unknown",issue="xqliu/orbi#162",role="implement"', 1.0)
+           'slot="unknown",issue="owner.invalid/repo#162",role="implement"', 1.0)
 
 
 # --- Exporter: TTL cache + service state ----------------------------------
@@ -607,7 +607,7 @@ def test_exporter_caches_journal_until_ttl_expires():
         calls.append(units)
         return [entry(100, "1",
                       "INFO [aaaa1111] run_start run=aaaa1111 "
-                      "issue=xqliu/orbi#162 role=implement branch=b "
+                      "issue=owner.invalid/repo#162 role=implement branch=b "
                       "worktree=/w session=- session_file=- phase=starting "
                       "last_activity=- action=- result=-")]
 

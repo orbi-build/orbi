@@ -765,6 +765,12 @@ def test_chinese_readme_external_single_repo_link_lands_on_its_section():
     )
 
 
+# The repository's pre-rebrand name, composed so that no test file
+# carries a repository path that resolves on GitHub (Issue #2253). The
+# docs still must not teach the old name.
+STALE_REPO_REFERENCE = "/".join(("xqliu", "orbi"))
+
+
 def test_chinese_getting_started_clones_the_orbi_build_org_repo():
     """Issue #183: same clone-URL contract as the English page — the
     repository moved to the orbi-build org, and the Chinese smoke
@@ -774,6 +780,7 @@ def test_chinese_getting_started_clones_the_orbi_build_org_repo():
     assert "git clone https://github.com/orbi-build/orbi.git" in text, (
         "Chinese getting-started must clone the orbi-build/orbi repository"
     )
-    assert "xqliu/orbi" not in text, (
-        "Chinese getting-started keeps the stale xqliu/orbi reference"
+    assert STALE_REPO_REFERENCE not in text, (
+        f"Chinese getting-started keeps the stale {STALE_REPO_REFERENCE} "
+        "reference"
     )

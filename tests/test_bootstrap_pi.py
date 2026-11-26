@@ -83,7 +83,7 @@ def test_stream_pi_logs_run_start_once_with_full_scene(tmp_path, caplog):
         stdout="final answer",
     )
     with caplog.at_level("INFO"):
-        result = pi_session.stream_pi(command, ctx=RunContext(run_id="deadbeef", issue=24, branch="orbi/xqliu-orbi-issue-24", worktree=tmp_path, source_repo="xqliu/orbi"), watch=PiWatchOptions(poll_interval=0.1), cwd=tmp_path)
+        result = pi_session.stream_pi(command, ctx=RunContext(run_id="deadbeef", issue=24, branch="orbi/owner.invalid-repo-issue-24", worktree=tmp_path, source_repo="owner.invalid/repo"), watch=PiWatchOptions(poll_interval=0.1), cwd=tmp_path)
     assert result == "final answer"
     # Without an explicit log_command the raw command is never logged.
     assert "command=<redacted>" in caplog.text
@@ -92,9 +92,9 @@ def test_stream_pi_logs_run_start_once_with_full_scene(tmp_path, caplog):
     assert len(starts) == 1
     start = starts[0]
     assert "run=deadbeef" in start
-    assert "issue=xqliu/orbi#24" in start
+    assert "issue=owner.invalid/repo#24" in start
     assert "role=implement" in start
-    assert "branch=orbi/xqliu-orbi-issue-24" in start
+    assert "branch=orbi/owner.invalid-repo-issue-24" in start
     assert f"worktree={tmp_path}" in start
     # The session fields are part of the scene; before Pi writes its first
     # record they are '-' (the full entry reappears on run_failed).
@@ -123,7 +123,7 @@ def test_stream_pi_run_start_never_follows_pre_existing_session_file(
     )
     command = make_fake_pi(tmp_path, session_records=[], stdout="ok")
     with caplog.at_level("INFO"):
-        pi_session.stream_pi(command, ctx=RunContext(run_id="deadbeef", issue=24, branch="b", worktree=tmp_path, source_repo="xqliu/orbi"), watch=PiWatchOptions(poll_interval=0.1), cwd=tmp_path)
+        pi_session.stream_pi(command, ctx=RunContext(run_id="deadbeef", issue=24, branch="b", worktree=tmp_path, source_repo="owner.invalid/repo"), watch=PiWatchOptions(poll_interval=0.1), cwd=tmp_path)
     starts = [line for line in caplog.text.splitlines()
               if " run_start " in line]
     assert len(starts) == 1
@@ -139,7 +139,7 @@ def test_stream_pi_logs_activity_and_heartbeat_lines(tmp_path, caplog):
         stdout="final answer", sleep=0.3,
     )
     with caplog.at_level("INFO"):
-        pi_session.stream_pi(command, ctx=RunContext(run_id="deadbeef", issue=24, branch="b", worktree=tmp_path, source_repo="xqliu/orbi"), watch=PiWatchOptions(poll_interval=0.1), cwd=tmp_path)
+        pi_session.stream_pi(command, ctx=RunContext(run_id="deadbeef", issue=24, branch="b", worktree=tmp_path, source_repo="owner.invalid/repo"), watch=PiWatchOptions(poll_interval=0.1), cwd=tmp_path)
     lines = caplog.text.splitlines()
     activities = [line for line in lines if " activity " in line]
     heartbeats = [line for line in lines if " heartbeat " in line]
@@ -153,7 +153,7 @@ def test_stream_pi_logs_activity_and_heartbeat_lines(tmp_path, caplog):
     # the `[run_id]` prefix is the run-id carrier (bound-run tests and
     # the e2e suite cover the prefix itself).
     assert "run=deadbeef" not in line
-    assert "issue=xqliu/orbi#24" in line
+    assert "issue=owner.invalid/repo#24" in line
     assert "role=implement" in line
     assert "phase=bash" in line
     assert 'action="bash pytest tests/"' in line
@@ -205,7 +205,7 @@ def test_stream_pi_high_frequency_lines_carry_run_id_exactly_once(
         tmp_path, session_records=records, stdout="final answer",
     )
     with caplog.at_level("INFO"):
-        pi_session.stream_pi(command, ctx=RunContext(run_id="a1b2c3d4", issue=24, branch="b", worktree=tmp_path, source_repo="xqliu/orbi"), watch=PiWatchOptions(poll_interval=0.1), cwd=tmp_path)
+        pi_session.stream_pi(command, ctx=RunContext(run_id="a1b2c3d4", issue=24, branch="b", worktree=tmp_path, source_repo="owner.invalid/repo"), watch=PiWatchOptions(poll_interval=0.1), cwd=tmp_path)
     kinds = (
         "activity", "heartbeat", "model_wait", "resumed",
         "pi_idle", "pi_resumed",
@@ -260,7 +260,7 @@ def test_stream_pi_idle_lines_carry_run_id_exactly_once(
             release_a2.touch()
 
     with caplog.at_level("INFO"):
-        pi_session.stream_pi(command, ctx=RunContext(run_id="a1b2c3d4", issue=24, branch="b", worktree=tmp_path, source_repo="xqliu/orbi"), watch=PiWatchOptions(poll_interval=0.1, idle_warn_seconds=10.0, activity_clock=fake_now), cwd=tmp_path, progress=release_after_a1)
+        pi_session.stream_pi(command, ctx=RunContext(run_id="a1b2c3d4", issue=24, branch="b", worktree=tmp_path, source_repo="owner.invalid/repo"), watch=PiWatchOptions(poll_interval=0.1, idle_warn_seconds=10.0, activity_clock=fake_now), cwd=tmp_path, progress=release_after_a1)
     idles = [m for m in caplog.messages if " pi_idle " in m]
     resumed = [m for m in caplog.messages if " pi_resumed " in m]
     assert len(idles) == 1
@@ -286,7 +286,7 @@ def test_stream_pi_scene_lines_keep_run_field_for_parse_scene(
     with caplog.at_level("INFO"), pytest.raises(
         subprocess.CalledProcessError,
     ):
-        pi_session.stream_pi(command, ctx=RunContext(run_id="a1b2c3d4", issue=24, branch="b", worktree=tmp_path, source_repo="xqliu/orbi"), watch=PiWatchOptions(poll_interval=0.1), cwd=tmp_path)
+        pi_session.stream_pi(command, ctx=RunContext(run_id="a1b2c3d4", issue=24, branch="b", worktree=tmp_path, source_repo="owner.invalid/repo"), watch=PiWatchOptions(poll_interval=0.1), cwd=tmp_path)
     starts = [m for m in caplog.messages if " run_start " in m]
     failures = [m for m in caplog.messages if " run_failed " in m]
     assert len(starts) == 1 and len(failures) == 1
@@ -294,7 +294,7 @@ def test_stream_pi_scene_lines_keep_run_field_for_parse_scene(
         assert "run=a1b2c3d4" in message, message
         fields = pi_activity.parse_scene(message)
         assert fields["run"] == "a1b2c3d4"
-        assert fields["issue"] == "xqliu/orbi#24"
+        assert fields["issue"] == "owner.invalid/repo#24"
 
 
 def test_stream_pi_activity_keeps_action_after_tool_result(tmp_path, caplog):
@@ -311,7 +311,7 @@ def test_stream_pi_activity_keeps_action_after_tool_result(tmp_path, caplog):
         sleep=0.3,
     )
     with caplog.at_level("INFO"):
-        pi_session.stream_pi(command, ctx=RunContext(run_id="deadbeef", issue=24, branch="b", worktree=tmp_path, source_repo="xqliu/orbi"), watch=PiWatchOptions(poll_interval=0.1), cwd=tmp_path)
+        pi_session.stream_pi(command, ctx=RunContext(run_id="deadbeef", issue=24, branch="b", worktree=tmp_path, source_repo="owner.invalid/repo"), watch=PiWatchOptions(poll_interval=0.1), cwd=tmp_path)
     lines = caplog.text.splitlines()
     activities = [line for line in lines if " activity " in line]
     # Issue #176: one activity line for the startup sub-phase, one for
@@ -332,7 +332,7 @@ def test_stream_pi_heartbeat_interval_is_stable(tmp_path, caplog):
         tmp_path, session_records=[], sleep=1.0,
     )
     with caplog.at_level("INFO"):
-        pi_session.stream_pi(command, ctx=RunContext(run_id="deadbeef", issue=24, branch="b", worktree=tmp_path, source_repo="xqliu/orbi"), watch=PiWatchOptions(poll_interval=0.1), cwd=tmp_path)
+        pi_session.stream_pi(command, ctx=RunContext(run_id="deadbeef", issue=24, branch="b", worktree=tmp_path, source_repo="owner.invalid/repo"), watch=PiWatchOptions(poll_interval=0.1), cwd=tmp_path)
     lines = caplog.text.splitlines()
     heartbeats = [line for line in lines if " heartbeat " in line]
     activities = [line for line in lines if " activity " in line]
@@ -353,7 +353,7 @@ def test_stream_pi_success_logs_no_run_end(tmp_path, caplog):
         stdout="final answer",
     )
     with caplog.at_level("INFO"):
-        pi_session.stream_pi(command, ctx=RunContext(run_id="deadbeef", issue=24, branch="b", worktree=tmp_path, source_repo="xqliu/orbi"), watch=PiWatchOptions(poll_interval=0.1), cwd=tmp_path)
+        pi_session.stream_pi(command, ctx=RunContext(run_id="deadbeef", issue=24, branch="b", worktree=tmp_path, source_repo="owner.invalid/repo"), watch=PiWatchOptions(poll_interval=0.1), cwd=tmp_path)
     assert " run_end " not in caplog.text
 
 
@@ -363,7 +363,7 @@ def test_stream_pi_logs_command_redacted_and_stderr(tmp_path, caplog):
         stdout="ok", stderr="warning line",
     )
     with caplog.at_level("INFO"):
-        pi_session.stream_pi(command, ctx=RunContext(run_id="deadbeef", issue=24, branch="b", worktree=tmp_path, source_repo="xqliu/orbi"), watch=PiWatchOptions(poll_interval=0.1), cwd=tmp_path, log_command=["pi", "--print", "<redacted>"])
+        pi_session.stream_pi(command, ctx=RunContext(run_id="deadbeef", issue=24, branch="b", worktree=tmp_path, source_repo="owner.invalid/repo"), watch=PiWatchOptions(poll_interval=0.1), cwd=tmp_path, log_command=["pi", "--print", "<redacted>"])
     assert "command=pi --print <redacted>" in caplog.text
     assert "stderr=warning line" in caplog.text
 
@@ -378,7 +378,7 @@ def test_stream_pi_logs_run_failed_with_full_scene_and_reraises(
     with caplog.at_level("ERROR"), pytest.raises(
         subprocess.CalledProcessError,
     ) as excinfo:
-        pi_session.stream_pi(command, ctx=RunContext(run_id="deadbeef", issue=24, branch="b", worktree=tmp_path, source_repo="xqliu/orbi"), watch=PiWatchOptions(poll_interval=0.1), cwd=tmp_path)
+        pi_session.stream_pi(command, ctx=RunContext(run_id="deadbeef", issue=24, branch="b", worktree=tmp_path, source_repo="owner.invalid/repo"), watch=PiWatchOptions(poll_interval=0.1), cwd=tmp_path)
     assert excinfo.value.returncode == 3
     assert "pi exploded" in (excinfo.value.stderr or "")
     # The exception must not carry the raw command (prompt / Issue body).
@@ -388,7 +388,7 @@ def test_stream_pi_logs_run_failed_with_full_scene_and_reraises(
     assert len(failures) == 1
     failure = failures[0]
     assert "run=deadbeef" in failure
-    assert "issue=xqliu/orbi#24" in failure
+    assert "issue=owner.invalid/repo#24" in failure
     assert "role=implement" in failure
     assert "phase=bash" in failure
     assert "reason=pi_exit_3" in failure
@@ -408,7 +408,7 @@ def test_stream_pi_heartbeats_when_session_is_idle(tmp_path, caplog):
         sleep=1.0,
     )
     with caplog.at_level("INFO"):
-        pi_session.stream_pi(command, ctx=RunContext(run_id="deadbeef", issue=24, branch="b", worktree=tmp_path, source_repo="xqliu/orbi"), watch=PiWatchOptions(poll_interval=0.1), cwd=tmp_path)
+        pi_session.stream_pi(command, ctx=RunContext(run_id="deadbeef", issue=24, branch="b", worktree=tmp_path, source_repo="owner.invalid/repo"), watch=PiWatchOptions(poll_interval=0.1), cwd=tmp_path)
     heartbeats = [line for line in caplog.text.splitlines()
                   if " heartbeat " in line]
     assert len(heartbeats) >= 1
@@ -422,7 +422,7 @@ def test_stream_pi_heartbeats_when_no_session_file_appears(tmp_path, caplog):
     # yet) — the generic `starting` is gone from the live lines.
     command = make_fake_pi(tmp_path, session_records=[], sleep=1.0)
     with caplog.at_level("INFO"):
-        pi_session.stream_pi(command, ctx=RunContext(run_id="deadbeef", issue=24, branch="b", worktree=tmp_path, source_repo="xqliu/orbi"), watch=PiWatchOptions(poll_interval=0.1), cwd=tmp_path)
+        pi_session.stream_pi(command, ctx=RunContext(run_id="deadbeef", issue=24, branch="b", worktree=tmp_path, source_repo="owner.invalid/repo"), watch=PiWatchOptions(poll_interval=0.1), cwd=tmp_path)
     heartbeats = [line for line in caplog.text.splitlines()
                   if " heartbeat " in line]
     assert len(heartbeats) >= 1
@@ -438,12 +438,12 @@ def test_stream_pi_logs_process_spawned_after_popen(tmp_path, caplog):
         tmp_path, session_records=startup_records(), stdout="ok",
     )
     with caplog.at_level("INFO"):
-        pi_session.stream_pi(command, ctx=RunContext(run_id="deadbeef", issue=24, branch="b", worktree=tmp_path, source_repo="xqliu/orbi"), watch=PiWatchOptions(poll_interval=0.1), cwd=tmp_path)
+        pi_session.stream_pi(command, ctx=RunContext(run_id="deadbeef", issue=24, branch="b", worktree=tmp_path, source_repo="owner.invalid/repo"), watch=PiWatchOptions(poll_interval=0.1), cwd=tmp_path)
     lines = [line for line in caplog.text.splitlines()
              if " process_spawned " in line]
     assert len(lines) == 1
     line = lines[0]
-    assert "issue=xqliu/orbi#24" in line
+    assert "issue=owner.invalid/repo#24" in line
     assert "role=implement" in line
     # Before the session file exists the selection is unknown.
     assert "provider=-" in line
@@ -463,7 +463,7 @@ def test_stream_pi_logs_startup_milestones_in_order(tmp_path, caplog):
         tmp_path, session_records=startup_records(), stdout="ok",
     )
     with caplog.at_level("INFO"):
-        pi_session.stream_pi(command, ctx=RunContext(run_id="deadbeef", issue=24, branch="b", worktree=tmp_path, source_repo="xqliu/orbi"), watch=PiWatchOptions(poll_interval=0.1), cwd=tmp_path)
+        pi_session.stream_pi(command, ctx=RunContext(run_id="deadbeef", issue=24, branch="b", worktree=tmp_path, source_repo="owner.invalid/repo"), watch=PiWatchOptions(poll_interval=0.1), cwd=tmp_path)
     lines = caplog.text.splitlines()
     created = [line for line in lines if " session_created " in line]
     requested = [line for line in lines if " first_request_started " in line]
@@ -481,7 +481,7 @@ def test_stream_pi_logs_startup_milestones_in_order(tmp_path, caplog):
     assert "provider=local-qwen" in responded[0]
     assert "model=qwen3.8:27b" in responded[0]
     for line in (created[0], requested[0], responded[0]):
-        assert "issue=xqliu/orbi#24" in line
+        assert "issue=owner.invalid/repo#24" in line
         assert "role=implement" in line
         assert "elapsed=" in line
 
@@ -513,7 +513,7 @@ def test_stream_pi_activity_lines_show_startup_sub_phase(tmp_path, caplog):
         sleep=0.3,
     )
     with caplog.at_level("INFO"):
-        pi_session.stream_pi(command, ctx=RunContext(run_id="deadbeef", issue=24, branch="b", worktree=tmp_path, source_repo="xqliu/orbi"), watch=PiWatchOptions(poll_interval=0.1), cwd=tmp_path)
+        pi_session.stream_pi(command, ctx=RunContext(run_id="deadbeef", issue=24, branch="b", worktree=tmp_path, source_repo="owner.invalid/repo"), watch=PiWatchOptions(poll_interval=0.1), cwd=tmp_path)
     lines = caplog.text.splitlines()
     live = [line for line in lines
             if " activity " in line or " heartbeat " in line]
@@ -532,7 +532,7 @@ def test_stream_pi_startup_failed_without_session_file(tmp_path, caplog):
     )
     with caplog.at_level("INFO"):
         with pytest.raises(subprocess.CalledProcessError):
-            pi_session.stream_pi(command, ctx=RunContext(run_id="deadbeef", issue=24, branch="b", worktree=tmp_path, source_repo="xqliu/orbi"), watch=PiWatchOptions(poll_interval=0.1), cwd=tmp_path)
+            pi_session.stream_pi(command, ctx=RunContext(run_id="deadbeef", issue=24, branch="b", worktree=tmp_path, source_repo="owner.invalid/repo"), watch=PiWatchOptions(poll_interval=0.1), cwd=tmp_path)
     lines = [line for line in caplog.text.splitlines()
              if " startup_failed " in line]
     assert len(lines) == 1
@@ -540,7 +540,7 @@ def test_stream_pi_startup_failed_without_session_file(tmp_path, caplog):
     assert "reason=session_not_created" in line
     assert "session_created=false" in line
     assert "first_request=false" in line
-    assert "issue=xqliu/orbi#24" in line
+    assert "issue=owner.invalid/repo#24" in line
     assert "role=implement" in line
     assert "elapsed=" in line
     # The existing fail-fast scene line is unchanged.
@@ -562,7 +562,7 @@ def test_stream_pi_startup_failed_without_first_request(tmp_path, caplog):
     )
     with caplog.at_level("INFO"):
         with pytest.raises(subprocess.CalledProcessError) as excinfo:
-            pi_session.stream_pi(command, ctx=RunContext(run_id="deadbeef", issue=24, branch="b", worktree=tmp_path, source_repo="xqliu/orbi"), watch=PiWatchOptions(poll_interval=0.1), cwd=tmp_path)
+            pi_session.stream_pi(command, ctx=RunContext(run_id="deadbeef", issue=24, branch="b", worktree=tmp_path, source_repo="owner.invalid/repo"), watch=PiWatchOptions(poll_interval=0.1), cwd=tmp_path)
     assert not isinstance(excinfo.value, runner.RecoverablePiProcessError)
     lines = [line for line in caplog.text.splitlines()
              if " startup_failed " in line]
@@ -612,7 +612,7 @@ def test_stream_pi_early_exit_uses_the_flushed_journal(
     monkeypatch.setattr(pi_process, "SessionWatcher", StaleWatcher)
     with caplog.at_level("INFO"):
         with pytest.raises(runner.RecoverablePiProcessError):
-            pi_session.stream_pi(command, ctx=RunContext(run_id="deadbeef", issue=24, branch="b", worktree=tmp_path, source_repo="xqliu/orbi"), watch=PiWatchOptions(poll_interval=0.1), cwd=tmp_path)
+            pi_session.stream_pi(command, ctx=RunContext(run_id="deadbeef", issue=24, branch="b", worktree=tmp_path, source_repo="owner.invalid/repo"), watch=PiWatchOptions(poll_interval=0.1), cwd=tmp_path)
     # The journal on disk proves the request went out (its response
     # arrived), so this is NOT a startup failure.
     assert " startup_failed " not in caplog.text
@@ -665,7 +665,7 @@ def test_stream_pi_logs_the_codex_usage_limit_as_provider_quota(
                 command,
                 ctx=RunContext(
                     run_id="deadbeef", issue=24, branch="b",
-                    worktree=tmp_path, source_repo="xqliu/orbi",
+                    worktree=tmp_path, source_repo="owner.invalid/repo",
                 ),
                 watch=PiWatchOptions(poll_interval=0.1), cwd=tmp_path,
             )
@@ -715,7 +715,7 @@ def test_stream_pi_reports_a_provider_402_balance_stop_as_its_own_reason(
                 command,
                 ctx=RunContext(
                     run_id="deadbeef", issue=2278, branch="b",
-                    worktree=tmp_path, source_repo="xqliu/orbi",
+                    worktree=tmp_path, source_repo="owner.invalid/repo",
                 ),
                 watch=PiWatchOptions(poll_interval=0.1), cwd=tmp_path,
             )
@@ -754,7 +754,7 @@ def test_stream_pi_startup_failed_early_exit_after_first_request(
     )
     with caplog.at_level("INFO"):
         with pytest.raises(subprocess.CalledProcessError):
-            pi_session.stream_pi(command, ctx=RunContext(run_id="deadbeef", issue=24, branch="b", worktree=tmp_path, source_repo="xqliu/orbi"), watch=PiWatchOptions(poll_interval=0.1), cwd=tmp_path)
+            pi_session.stream_pi(command, ctx=RunContext(run_id="deadbeef", issue=24, branch="b", worktree=tmp_path, source_repo="owner.invalid/repo"), watch=PiWatchOptions(poll_interval=0.1), cwd=tmp_path)
     lines = [line for line in caplog.text.splitlines()
              if " startup_failed " in line]
     assert len(lines) == 1
@@ -876,7 +876,7 @@ def test_stream_pi_rate_limited_exit_retries_then_succeeds(
         stderr="Error: 429 RESOURCE_EXHAUSTED. Please retry in 36.5s",
     )
     with caplog.at_level("INFO"):
-        result = pi_session.stream_pi(command, ctx=RunContext(run_id="deadbeef", issue=321, branch="b", worktree=tmp_path, source_repo="xqliu/orbi"), watch=PiWatchOptions(poll_interval=0.05), cwd=tmp_path)
+        result = pi_session.stream_pi(command, ctx=RunContext(run_id="deadbeef", issue=321, branch="b", worktree=tmp_path, source_repo="owner.invalid/repo"), watch=PiWatchOptions(poll_interval=0.05), cwd=tmp_path)
     assert result == "final answer"
     # The backoff honored the response's hint.
     assert sleeps == [36.5]
@@ -910,7 +910,7 @@ def test_stream_pi_rate_limited_exhausted_takes_existing_failure_path(
     )
     with caplog.at_level("INFO"):
         with pytest.raises(pi_process.RateLimitExhaustedError) as exc_info:
-            pi_session.stream_pi(command, ctx=RunContext(run_id="deadbeef", issue=321, branch="b", worktree=tmp_path, source_repo="xqliu/orbi"), watch=PiWatchOptions(poll_interval=0.05), cwd=tmp_path)
+            pi_session.stream_pi(command, ctx=RunContext(run_id="deadbeef", issue=321, branch="b", worktree=tmp_path, source_repo="owner.invalid/repo"), watch=PiWatchOptions(poll_interval=0.05), cwd=tmp_path)
     # The stderr carries no retry hint: the default escalation, then the
     # cap. 5 retries = 6 sessions total.
     assert sleeps == [30.0, 60.0, 120.0, 240.0, 300.0]
@@ -962,7 +962,7 @@ def test_stream_pi_rate_limit_retries_zero_fails_on_the_first_429(
                 command,
                 ctx=RunContext(
                     run_id="deadbeef", issue=0, branch="",
-                    worktree=tmp_path, source_repo="xqliu/orbi",
+                    worktree=tmp_path, source_repo="owner.invalid/repo",
                 ),
                 rate_limit_retries=0,
                 watch=PiWatchOptions(poll_interval=0.05), cwd=tmp_path,
@@ -991,7 +991,7 @@ def test_stream_pi_rate_limited_exhausted_mid_session_terminates(
     )
     with caplog.at_level("INFO"):
         with pytest.raises(pi_process.RateLimitExhaustedError) as exc_info:
-            pi_session.stream_pi(command, ctx=RunContext(run_id="deadbeef", issue=321, branch="b", worktree=tmp_path, source_repo="xqliu/orbi"), watch=PiWatchOptions(poll_interval=0.05), cwd=tmp_path)
+            pi_session.stream_pi(command, ctx=RunContext(run_id="deadbeef", issue=321, branch="b", worktree=tmp_path, source_repo="owner.invalid/repo"), watch=PiWatchOptions(poll_interval=0.05), cwd=tmp_path)
     assert sleeps == [2.0] * 5
     assert not isinstance(exc_info.value, runner.RecoverablePiFailure)
     assert "provider rate limit retries exhausted" in str(exc_info.value)
@@ -1035,7 +1035,7 @@ def test_stream_pi_429_attempts_persist_across_invocations(
     monkeypatch.setattr(pi_process.time, "sleep", guard(2))
     with caplog.at_level("INFO"):
         with pytest.raises(RuntimeError, match="termination guard"):
-            pi_session.stream_pi(command, ctx=RunContext(run_id="deadbeef", issue=698, branch="b", worktree=tmp_path, source_repo="xqliu/orbi"), watch=PiWatchOptions(poll_interval=0.05), cwd=tmp_path)
+            pi_session.stream_pi(command, ctx=RunContext(run_id="deadbeef", issue=698, branch="b", worktree=tmp_path, source_repo="owner.invalid/repo"), watch=PiWatchOptions(poll_interval=0.05), cwd=tmp_path)
     assert json.loads(
         pi_process.pi_429_attempts_path(tmp_path).read_text()
     ) == {"run_id": "deadbeef", "attempts": 3}
@@ -1046,7 +1046,7 @@ def test_stream_pi_429_attempts_persist_across_invocations(
     caplog.clear()
     with caplog.at_level("INFO"):
         with pytest.raises(RuntimeError, match="termination guard"):
-            pi_session.stream_pi(command, ctx=RunContext(run_id="deadbeef", issue=698, branch="b", worktree=tmp_path, source_repo="xqliu/orbi"), watch=PiWatchOptions(poll_interval=0.05), cwd=tmp_path)
+            pi_session.stream_pi(command, ctx=RunContext(run_id="deadbeef", issue=698, branch="b", worktree=tmp_path, source_repo="owner.invalid/repo"), watch=PiWatchOptions(poll_interval=0.05), cwd=tmp_path)
     retries = [line for line in caplog.text.splitlines()
                if " pi_retry_429 " in line]
     assert [field for line in retries for field in line.split()
@@ -1070,7 +1070,7 @@ def test_stream_pi_429_exhaustion_across_restarts_is_terminal(
     )
     with caplog.at_level("INFO"):
         with pytest.raises(pi_process.RateLimitExhaustedError) as exc_info:
-            pi_session.stream_pi(command, ctx=RunContext(run_id="deadbeef", issue=698, branch="b", worktree=tmp_path, source_repo="xqliu/orbi"), watch=PiWatchOptions(poll_interval=0.05), cwd=tmp_path)
+            pi_session.stream_pi(command, ctx=RunContext(run_id="deadbeef", issue=698, branch="b", worktree=tmp_path, source_repo="owner.invalid/repo"), watch=PiWatchOptions(poll_interval=0.05), cwd=tmp_path)
     # One backoff retry (the 5th cumulative), then the 6th 429 exit is
     # terminal — one session, not a fresh 5-retry cycle.
     assert sleeps == [2.0]
@@ -1100,7 +1100,7 @@ def test_stream_pi_429_terminal_resets_counter_for_human_retry(
     )
     with caplog.at_level("INFO"):
         with pytest.raises(pi_process.RateLimitExhaustedError):
-            pi_session.stream_pi(command, ctx=RunContext(run_id="deadbeef", issue=698, branch="b", worktree=tmp_path, source_repo="xqliu/orbi"), watch=PiWatchOptions(poll_interval=0.05), cwd=tmp_path)
+            pi_session.stream_pi(command, ctx=RunContext(run_id="deadbeef", issue=698, branch="b", worktree=tmp_path, source_repo="owner.invalid/repo"), watch=PiWatchOptions(poll_interval=0.05), cwd=tmp_path)
     # Terminal on the first 429 (the budget was already spent), and the
     # counter file is gone.
     assert sleeps == []
@@ -1109,7 +1109,7 @@ def test_stream_pi_429_terminal_resets_counter_for_human_retry(
     # budget again: five backoff retries before the next terminal.
     sleeps.clear()
     with pytest.raises(pi_process.RateLimitExhaustedError):
-        pi_session.stream_pi(command, ctx=RunContext(run_id="deadbeef", issue=698, branch="b", worktree=tmp_path, source_repo="xqliu/orbi"), watch=PiWatchOptions(poll_interval=0.05), cwd=tmp_path)
+        pi_session.stream_pi(command, ctx=RunContext(run_id="deadbeef", issue=698, branch="b", worktree=tmp_path, source_repo="owner.invalid/repo"), watch=PiWatchOptions(poll_interval=0.05), cwd=tmp_path)
     assert sleeps == [2.0] * 5
 
 
@@ -1131,7 +1131,7 @@ def test_stream_pi_429_terminal_survives_a_failed_counter_clear(
     )
     with caplog.at_level("INFO"):
         with pytest.raises(pi_process.RateLimitExhaustedError):
-            pi_session.stream_pi(command, ctx=RunContext(run_id="deadbeef", issue=698, branch="b", worktree=tmp_path, source_repo="xqliu/orbi"), watch=PiWatchOptions(poll_interval=0.05), cwd=tmp_path)
+            pi_session.stream_pi(command, ctx=RunContext(run_id="deadbeef", issue=698, branch="b", worktree=tmp_path, source_repo="owner.invalid/repo"), watch=PiWatchOptions(poll_interval=0.05), cwd=tmp_path)
     assert "pi_429_attempts_clear_failed" in caplog.text
 
 
@@ -1197,7 +1197,7 @@ def test_stream_pi_non_rate_limited_exit_never_retries(tmp_path, caplog):
     )
     with caplog.at_level("INFO"):
         with pytest.raises(subprocess.CalledProcessError):
-            pi_session.stream_pi(command, ctx=RunContext(run_id="deadbeef", issue=321, branch="b", worktree=tmp_path, source_repo="xqliu/orbi"), watch=PiWatchOptions(poll_interval=0.05), cwd=tmp_path)
+            pi_session.stream_pi(command, ctx=RunContext(run_id="deadbeef", issue=321, branch="b", worktree=tmp_path, source_repo="owner.invalid/repo"), watch=PiWatchOptions(poll_interval=0.05), cwd=tmp_path)
     assert "pi_retry_429" not in caplog.text
     assert len([line for line in caplog.text.splitlines()
                 if " run_start " in line]) == 1
@@ -1212,7 +1212,7 @@ def test_stream_pi_startup_failed_auth_failure(tmp_path, caplog):
     )
     with caplog.at_level("INFO"):
         with pytest.raises(subprocess.CalledProcessError):
-            pi_session.stream_pi(command, ctx=RunContext(run_id="deadbeef", issue=24, branch="b", worktree=tmp_path, source_repo="xqliu/orbi"), watch=PiWatchOptions(poll_interval=0.1), cwd=tmp_path)
+            pi_session.stream_pi(command, ctx=RunContext(run_id="deadbeef", issue=24, branch="b", worktree=tmp_path, source_repo="owner.invalid/repo"), watch=PiWatchOptions(poll_interval=0.1), cwd=tmp_path)
     lines = [line for line in caplog.text.splitlines()
              if " startup_failed " in line]
     assert len(lines) == 1
@@ -1240,7 +1240,7 @@ def test_stream_pi_midrun_provider_401_stays_recoverable(tmp_path, caplog):
                 command,
                 ctx=RunContext(
                     run_id="deadbeef", issue=24, branch="b",
-                    worktree=tmp_path, source_repo="xqliu/orbi",
+                    worktree=tmp_path, source_repo="owner.invalid/repo",
                 ),
                 watch=PiWatchOptions(poll_interval=0.1), cwd=tmp_path,
             )
@@ -1260,7 +1260,7 @@ def test_stream_pi_startup_failed_network_timeout(tmp_path, caplog):
     )
     with caplog.at_level("INFO"):
         with pytest.raises(subprocess.CalledProcessError):
-            pi_session.stream_pi(command, ctx=RunContext(run_id="deadbeef", issue=24, branch="b", worktree=tmp_path, source_repo="xqliu/orbi"), watch=PiWatchOptions(poll_interval=0.1), cwd=tmp_path)
+            pi_session.stream_pi(command, ctx=RunContext(run_id="deadbeef", issue=24, branch="b", worktree=tmp_path, source_repo="owner.invalid/repo"), watch=PiWatchOptions(poll_interval=0.1), cwd=tmp_path)
     lines = [line for line in caplog.text.splitlines()
              if " startup_failed " in line]
     assert len(lines) == 1
@@ -1276,7 +1276,7 @@ def test_stream_pi_no_startup_failed_after_first_response(tmp_path, caplog):
     )
     with caplog.at_level("INFO"):
         with pytest.raises(subprocess.CalledProcessError):
-            pi_session.stream_pi(command, ctx=RunContext(run_id="deadbeef", issue=24, branch="b", worktree=tmp_path, source_repo="xqliu/orbi"), watch=PiWatchOptions(poll_interval=0.1), cwd=tmp_path)
+            pi_session.stream_pi(command, ctx=RunContext(run_id="deadbeef", issue=24, branch="b", worktree=tmp_path, source_repo="owner.invalid/repo"), watch=PiWatchOptions(poll_interval=0.1), cwd=tmp_path)
     assert not any(" startup_failed " in line
                    for line in caplog.text.splitlines())
     # The existing run_failed scene line still carries the reason.
@@ -1310,7 +1310,7 @@ def test_stream_pi_model_wait_then_resumed_no_warning_spam(
         tmp_path, session_records=records, stdout="final answer",
     )
     with caplog.at_level("INFO"):
-        pi_session.stream_pi(command, ctx=RunContext(run_id="deadbeef", issue=24, branch="b", worktree=tmp_path, source_repo="xqliu/orbi"), watch=PiWatchOptions(poll_interval=0.1), cwd=tmp_path)
+        pi_session.stream_pi(command, ctx=RunContext(run_id="deadbeef", issue=24, branch="b", worktree=tmp_path, source_repo="owner.invalid/repo"), watch=PiWatchOptions(poll_interval=0.1), cwd=tmp_path)
     lines = caplog.text.splitlines()
     # One transition into model_wait, one transition back on resume.
     waits = [line for line in lines if " model_wait " in line]
@@ -1321,7 +1321,7 @@ def test_stream_pi_model_wait_then_resumed_no_warning_spam(
     # The transition lines carry no redundant `run=` field (Issue #57);
     # the `[run_id]` prefix is the run-id carrier.
     assert "run=deadbeef" not in wait
-    assert "issue=xqliu/orbi#24" in wait
+    assert "issue=owner.invalid/repo#24" in wait
     assert "role=implement" in wait
     assert "phase=bash" in wait
     assert "state=model_wait" in wait
@@ -1363,7 +1363,7 @@ def test_stream_pi_no_model_wait_after_assistant_text(tmp_path, caplog):
         sleep=0.5,
     )
     with caplog.at_level("INFO"):
-        pi_session.stream_pi(command, ctx=RunContext(run_id="deadbeef", issue=24, branch="b", worktree=tmp_path, source_repo="xqliu/orbi"), watch=PiWatchOptions(poll_interval=0.1), cwd=tmp_path)
+        pi_session.stream_pi(command, ctx=RunContext(run_id="deadbeef", issue=24, branch="b", worktree=tmp_path, source_repo="owner.invalid/repo"), watch=PiWatchOptions(poll_interval=0.1), cwd=tmp_path)
     assert " model_wait " not in caplog.text
     assert " resumed " not in caplog.text
 
@@ -1383,7 +1383,7 @@ def test_stream_pi_logs_idle_warning_once_when_session_stalls(
     heartbeat."""
     command = make_fake_pi(tmp_path, session_records=[], sleep=1.2)
     with caplog.at_level("INFO"):
-        pi_session.stream_pi(command, ctx=RunContext(run_id="deadbeef", issue=24, branch="b", worktree=tmp_path, source_repo="xqliu/orbi"), watch=PiWatchOptions(poll_interval=0.1, idle_warn_seconds=0.5), cwd=tmp_path)
+        pi_session.stream_pi(command, ctx=RunContext(run_id="deadbeef", issue=24, branch="b", worktree=tmp_path, source_repo="owner.invalid/repo"), watch=PiWatchOptions(poll_interval=0.1, idle_warn_seconds=0.5), cwd=tmp_path)
     lines = caplog.text.splitlines()
     idles = [line for line in lines if " pi_idle " in line]
     assert len(idles) == 1, f"exactly one idle warning: {lines}"
@@ -1391,7 +1391,7 @@ def test_stream_pi_logs_idle_warning_once_when_session_stalls(
     # No redundant `run=` field (Issue #57); the `[run_id]` prefix is
     # the run-id carrier.
     assert "run=deadbeef" not in idle
-    assert "issue=xqliu/orbi#24" in idle
+    assert "issue=owner.invalid/repo#24" in idle
     assert "role=implement" in idle
     # Issue #176: no session file was ever created, so the sub-phase is
     # session_pending (the stall is visible with its stuck point).
@@ -1422,7 +1422,7 @@ def test_stream_pi_logs_pi_resumed_after_idle_warning(tmp_path, caplog):
         tmp_path, session_records=records, stdout="ok",
     )
     with caplog.at_level("INFO"):
-        pi_session.stream_pi(command, ctx=RunContext(run_id="deadbeef", issue=24, branch="b", worktree=tmp_path, source_repo="xqliu/orbi"), watch=PiWatchOptions(poll_interval=0.1, idle_warn_seconds=0.4), cwd=tmp_path)
+        pi_session.stream_pi(command, ctx=RunContext(run_id="deadbeef", issue=24, branch="b", worktree=tmp_path, source_repo="owner.invalid/repo"), watch=PiWatchOptions(poll_interval=0.1, idle_warn_seconds=0.4), cwd=tmp_path)
     lines = caplog.text.splitlines()
     idles = [line for line in lines if " pi_idle " in line]
     resumed = [line for line in lines if " pi_resumed " in line]
@@ -1432,7 +1432,7 @@ def test_stream_pi_logs_pi_resumed_after_idle_warning(tmp_path, caplog):
     # field (Issue #57).
     assert lines.index(resumed[0]) > lines.index(idles[0])
     assert "run=deadbeef" not in resumed[0]
-    assert "issue=xqliu/orbi#24" in resumed[0]
+    assert "issue=owner.invalid/repo#24" in resumed[0]
     assert "role=implement" in resumed[0]
     assert "phase=starting" in resumed[0]
 
@@ -1459,7 +1459,7 @@ def test_stream_pi_no_idle_warning_during_model_wait(tmp_path, caplog):
         tmp_path, session_records=records, sleep=1.2,
     )
     with caplog.at_level("INFO"):
-        pi_session.stream_pi(command, ctx=RunContext(run_id="deadbeef", issue=24, branch="b", worktree=tmp_path, source_repo="xqliu/orbi"), watch=PiWatchOptions(poll_interval=0.1, idle_warn_seconds=0.5), cwd=tmp_path)
+        pi_session.stream_pi(command, ctx=RunContext(run_id="deadbeef", issue=24, branch="b", worktree=tmp_path, source_repo="owner.invalid/repo"), watch=PiWatchOptions(poll_interval=0.1, idle_warn_seconds=0.5), cwd=tmp_path)
     assert " pi_idle " not in caplog.text
     # The silence is visible as the model_wait state instead.
     waits = [line for line in caplog.text.splitlines()
@@ -1495,7 +1495,7 @@ def test_stream_pi_resumed_run_follows_new_session_file(tmp_path, caplog):
         stdout="fixed",
     )
     with caplog.at_level("INFO"):
-        result = pi_session.stream_pi(command, ctx=RunContext(run_id="run45", issue=45, branch="orbi/xqliu-orbi-issue-45-run45", worktree=tmp_path, source_repo="xqliu/orbi"), watch=PiWatchOptions(poll_interval=0.1), cwd=tmp_path)
+        result = pi_session.stream_pi(command, ctx=RunContext(run_id="run45", issue=45, branch="orbi/owner.invalid-repo-issue-45-run45", worktree=tmp_path, source_repo="owner.invalid/repo"), watch=PiWatchOptions(poll_interval=0.1), cwd=tmp_path)
     assert result == "fixed"
     # The journal follows the NEW session created by this invocation: its
     # tool call is reported (the old session has no messages, so binding to
@@ -1542,7 +1542,7 @@ def test_stream_pi_drains_pipe_data_written_after_exit(
 
     monkeypatch.setattr(runner.subprocess, "Popen", fake_popen)
     with caplog.at_level("INFO"):
-        result = pi_session.stream_pi(["fake"], ctx=RunContext(run_id="deadbeef", issue=24, branch="b", worktree=tmp_path, source_repo="xqliu/orbi"), watch=PiWatchOptions(poll_interval=0.1), cwd=tmp_path)
+        result = pi_session.stream_pi(["fake"], ctx=RunContext(run_id="deadbeef", issue=24, branch="b", worktree=tmp_path, source_repo="owner.invalid/repo"), watch=PiWatchOptions(poll_interval=0.1), cwd=tmp_path)
     assert result == "late stdout data"
     assert "stderr=late stderr data" in caplog.text
 
@@ -1573,7 +1573,7 @@ def test_stream_pi_spawns_pi_with_stdin_devnull(
     result = pi_session.stream_pi(
         command,
         ctx=RunContext(run_id="deadbeef", issue=1562, branch="b",
-                       worktree=tmp_path, source_repo="xqliu/orbi"),
+                       worktree=tmp_path, source_repo="owner.invalid/repo"),
         watch=PiWatchOptions(poll_interval=0.1), cwd=tmp_path,
     )
     assert result == "final answer"
@@ -1610,7 +1610,7 @@ def test_stream_pi_hung_model_request_killed_when_upstream_gone(
     with caplog.at_level("WARNING"), pytest.raises(
         RuntimeError, match="hung",
     ) as excinfo:
-        pi_session.stream_pi(command, ctx=RunContext(run_id="deadbeef", issue=75, branch="b", worktree=tmp_path, source_repo="xqliu/orbi"), watch=PiWatchOptions(poll_interval=0.1, model_wait_dead_seconds=0.5), cwd=tmp_path)
+        pi_session.stream_pi(command, ctx=RunContext(run_id="deadbeef", issue=75, branch="b", worktree=tmp_path, source_repo="owner.invalid/repo"), watch=PiWatchOptions(poll_interval=0.1, model_wait_dead_seconds=0.5), cwd=tmp_path)
     # The failure message names the hung model request and the stale
     # time.
     assert "model_wait" in str(excinfo.value)
@@ -1618,7 +1618,7 @@ def test_stream_pi_hung_model_request_killed_when_upstream_gone(
     failures = [line for line in lines if " run_failed " in line]
     assert len(failures) == 1
     assert "reason=model_wait_dead_stale_" in failures[0]
-    assert "issue=xqliu/orbi#75" in failures[0]
+    assert "issue=owner.invalid/repo#75" in failures[0]
     assert f"worktree={tmp_path}" in failures[0]
     # The structured model_wait_dead line carries the evidence: no
     # live connection here.
@@ -1655,7 +1655,7 @@ def test_stream_pi_frozen_model_wait_just_before_default_survives(
         sleep=0.3,
     )
     with caplog.at_level("INFO"):
-        result = pi_session.stream_pi(command, ctx=RunContext(run_id="deadbeef", issue=228, branch="b", worktree=tmp_path, source_repo="xqliu/orbi"), watch=PiWatchOptions(poll_interval=0.1), cwd=tmp_path)
+        result = pi_session.stream_pi(command, ctx=RunContext(run_id="deadbeef", issue=228, branch="b", worktree=tmp_path, source_repo="owner.invalid/repo"), watch=PiWatchOptions(poll_interval=0.1), cwd=tmp_path)
     assert result == "final answer"
     assert "model_wait_dead" not in caplog.text
     assert "model_wait_slow" not in caplog.text
@@ -1672,7 +1672,7 @@ def test_stream_pi_frozen_model_wait_at_default_kills_with_configured_threshold(
     with caplog.at_level("WARNING"), pytest.raises(
         RuntimeError, match="hung",
     ):
-        pi_session.stream_pi(command, ctx=RunContext(run_id="deadbeef", issue=228, branch="b", worktree=tmp_path, source_repo="xqliu/orbi"), watch=PiWatchOptions(poll_interval=0.1), cwd=tmp_path)
+        pi_session.stream_pi(command, ctx=RunContext(run_id="deadbeef", issue=228, branch="b", worktree=tmp_path, source_repo="owner.invalid/repo"), watch=PiWatchOptions(poll_interval=0.1), cwd=tmp_path)
     lines = caplog.text.splitlines()
     dead = [line for line in lines if " model_wait_dead " in line]
     assert len(dead) == 1
@@ -1694,7 +1694,7 @@ def test_stream_pi_explicit_short_override_kills_before_default(
     with caplog.at_level("WARNING"), pytest.raises(
         RuntimeError, match="hung",
     ):
-        pi_session.stream_pi(command, ctx=RunContext(run_id="deadbeef", issue=228, branch="b", worktree=tmp_path, source_repo="xqliu/orbi"), watch=PiWatchOptions(poll_interval=0.1, model_wait_dead_seconds=1.0), cwd=tmp_path)
+        pi_session.stream_pi(command, ctx=RunContext(run_id="deadbeef", issue=228, branch="b", worktree=tmp_path, source_repo="owner.invalid/repo"), watch=PiWatchOptions(poll_interval=0.1, model_wait_dead_seconds=1.0), cwd=tmp_path)
     lines = caplog.text.splitlines()
     dead = [line for line in lines if " model_wait_dead " in line]
     assert len(dead) == 1
@@ -1714,7 +1714,7 @@ def test_stream_pi_frozen_model_wait_at_ten_minutes_survives_default(
         sleep=0.3,
     )
     with caplog.at_level("INFO"):
-        result = pi_session.stream_pi(command, ctx=RunContext(run_id="deadbeef", issue=228, branch="b", worktree=tmp_path, source_repo="xqliu/orbi"), watch=PiWatchOptions(poll_interval=0.1), cwd=tmp_path)
+        result = pi_session.stream_pi(command, ctx=RunContext(run_id="deadbeef", issue=228, branch="b", worktree=tmp_path, source_repo="owner.invalid/repo"), watch=PiWatchOptions(poll_interval=0.1), cwd=tmp_path)
     assert result == "final answer"
     assert "model_wait_dead" not in caplog.text
 
@@ -1748,7 +1748,7 @@ def test_stream_pi_slow_model_still_generating_is_not_killed(
         sleep=0.8,
     )
     with caplog.at_level("INFO"):
-        result = pi_session.stream_pi(command, ctx=RunContext(run_id="deadbeef", issue=75, branch="b", worktree=tmp_path, source_repo="xqliu/orbi"), watch=PiWatchOptions(poll_interval=0.1, model_wait_dead_seconds=0.4), cwd=tmp_path)
+        result = pi_session.stream_pi(command, ctx=RunContext(run_id="deadbeef", issue=75, branch="b", worktree=tmp_path, source_repo="owner.invalid/repo"), watch=PiWatchOptions(poll_interval=0.1, model_wait_dead_seconds=0.4), cwd=tmp_path)
     assert result == "final answer"
     assert "model_wait_dead" not in caplog.text
 
@@ -1769,7 +1769,7 @@ def test_stream_pi_no_upstream_kill_before_model_wait(tmp_path, caplog):
     ]
     command = make_fake_pi(tmp_path, session_records=records, sleep=1.2)
     with caplog.at_level("INFO"):
-        pi_session.stream_pi(command, ctx=RunContext(run_id="deadbeef", issue=75, branch="b", worktree=tmp_path, source_repo="xqliu/orbi"), watch=PiWatchOptions(poll_interval=0.1, model_wait_dead_seconds=0.5), cwd=tmp_path)
+        pi_session.stream_pi(command, ctx=RunContext(run_id="deadbeef", issue=75, branch="b", worktree=tmp_path, source_repo="owner.invalid/repo"), watch=PiWatchOptions(poll_interval=0.1, model_wait_dead_seconds=0.5), cwd=tmp_path)
     assert "model_wait_dead" not in caplog.text
 
 
@@ -1797,7 +1797,7 @@ def test_stream_pi_hung_model_request_killed_despite_live_upstream(
         with caplog.at_level("WARNING"), pytest.raises(
             RuntimeError, match="hung",
         ) as excinfo:
-            pi_session.stream_pi(command, ctx=RunContext(run_id="deadbeef", issue=218, branch="b", worktree=tmp_path, source_repo="xqliu/orbi"), watch=PiWatchOptions(poll_interval=0.1, model_wait_dead_seconds=0.5), cwd=tmp_path)
+            pi_session.stream_pi(command, ctx=RunContext(run_id="deadbeef", issue=218, branch="b", worktree=tmp_path, source_repo="owner.invalid/repo"), watch=PiWatchOptions(poll_interval=0.1, model_wait_dead_seconds=0.5), cwd=tmp_path)
     finally:
         stop()
     assert "model_wait" in str(excinfo.value)
@@ -1805,7 +1805,7 @@ def test_stream_pi_hung_model_request_killed_despite_live_upstream(
     failures = [line for line in lines if " run_failed " in line]
     assert len(failures) == 1
     assert "reason=model_wait_dead_stale_" in failures[0]
-    assert "issue=xqliu/orbi#218" in failures[0]
+    assert "issue=owner.invalid/repo#218" in failures[0]
     # The structured model_wait_dead line carries the evidence: the
     # connection was still alive (upstream_alive=true) — process
     # alive ≠ responding.
@@ -1836,12 +1836,12 @@ def test_stream_pi_model_wait_dead_line_fields(tmp_path, caplog):
     ]
     command = make_fake_pi(tmp_path, session_records=records, sleep=10.0)
     with caplog.at_level("WARNING"), pytest.raises(RuntimeError):
-        pi_session.stream_pi(command, ctx=RunContext(run_id="ab12cd34", issue=218, branch="b", worktree=tmp_path, source_repo="xqliu/orbi"), watch=PiWatchOptions(poll_interval=0.1, model_wait_dead_seconds=0.5), cwd=tmp_path)
+        pi_session.stream_pi(command, ctx=RunContext(run_id="ab12cd34", issue=218, branch="b", worktree=tmp_path, source_repo="owner.invalid/repo"), watch=PiWatchOptions(poll_interval=0.1, model_wait_dead_seconds=0.5), cwd=tmp_path)
     lines = caplog.text.splitlines()
     dead = [line for line in lines if " model_wait_dead " in line]
     assert len(dead) == 1
     fields = pi_activity.parse_scene(dead[0])
-    assert fields["issue"] == "xqliu/orbi#218"
+    assert fields["issue"] == "owner.invalid/repo#218"
     assert fields["role"] == "implement"
     assert fields["action"] == "kill_pi"
     assert fields["session"] == "sess-218"
@@ -1868,14 +1868,14 @@ def test_stream_pi_dropped_connection_model_wait_dead_upstream_false(
         with caplog.at_level("WARNING"), pytest.raises(
             RuntimeError, match="hung",
         ):
-            pi_session.stream_pi(command, ctx=RunContext(run_id="deadbeef", issue=169, branch="b", worktree=tmp_path, source_repo="xqliu/orbi"), watch=PiWatchOptions(poll_interval=0.1, model_wait_dead_seconds=0.5), cwd=tmp_path)
+            pi_session.stream_pi(command, ctx=RunContext(run_id="deadbeef", issue=169, branch="b", worktree=tmp_path, source_repo="owner.invalid/repo"), watch=PiWatchOptions(poll_interval=0.1, model_wait_dead_seconds=0.5), cwd=tmp_path)
     finally:
         stop()
     lines = caplog.text.splitlines()
     failures = [line for line in lines if " run_failed " in line]
     assert len(failures) == 1
     assert "reason=model_wait_dead_stale_" in failures[0]
-    assert "issue=xqliu/orbi#169" in failures[0]
+    assert "issue=owner.invalid/repo#169" in failures[0]
     dead = [line for line in lines if " model_wait_dead " in line]
     assert len(dead) == 1
     assert "upstream_alive=false" in dead[0]
@@ -1901,13 +1901,13 @@ def test_stream_pi_swallowed_model_request_killed_fast(tmp_path, caplog,
     with caplog.at_level("WARNING"), pytest.raises(
         RuntimeError, match="swallowed",
     ) as excinfo:
-        pi_session.stream_pi(command, ctx=RunContext(run_id="deadbeef", issue=233, branch="b", worktree=tmp_path, source_repo="xqliu/orbi"), watch=PiWatchOptions(poll_interval=0.1, model_wait_dead_seconds=10.0, model_wait_probe_url="http://127.0.0.1:18082/slots", model_wait_probe_seconds=0.5), cwd=tmp_path)
+        pi_session.stream_pi(command, ctx=RunContext(run_id="deadbeef", issue=233, branch="b", worktree=tmp_path, source_repo="owner.invalid/repo"), watch=PiWatchOptions(poll_interval=0.1, model_wait_dead_seconds=10.0, model_wait_probe_url="http://127.0.0.1:18082/slots", model_wait_probe_seconds=0.5), cwd=tmp_path)
     assert "model_wait" in str(excinfo.value)
     lines = caplog.text.splitlines()
     failures = [line for line in lines if " run_failed " in line]
     assert len(failures) == 1
     assert "reason=model_wait_swallowed_idle_" in failures[0]
-    assert "issue=xqliu/orbi#233" in failures[0]
+    assert "issue=owner.invalid/repo#233" in failures[0]
     # The structured model_wait_swallowed line carries the evidence.
     swallowed = [line for line in lines if " model_wait_swallowed " in line]
     assert len(swallowed) == 1
@@ -1937,12 +1937,12 @@ def test_stream_pi_swallow_line_fields(tmp_path, caplog, monkeypatch):
     ]
     command = make_fake_pi(tmp_path, session_records=records, sleep=10.0)
     with caplog.at_level("WARNING"), pytest.raises(RuntimeError):
-        pi_session.stream_pi(command, ctx=RunContext(run_id="ab12cd34", issue=233, branch="b", worktree=tmp_path, source_repo="xqliu/orbi"), watch=PiWatchOptions(poll_interval=0.1, model_wait_dead_seconds=10.0, model_wait_probe_url="http://127.0.0.1:18082/slots", model_wait_probe_seconds=1.0), cwd=tmp_path)
+        pi_session.stream_pi(command, ctx=RunContext(run_id="ab12cd34", issue=233, branch="b", worktree=tmp_path, source_repo="owner.invalid/repo"), watch=PiWatchOptions(poll_interval=0.1, model_wait_dead_seconds=10.0, model_wait_probe_url="http://127.0.0.1:18082/slots", model_wait_probe_seconds=1.0), cwd=tmp_path)
     lines = caplog.text.splitlines()
     swallowed = [line for line in lines if " model_wait_swallowed " in line]
     assert len(swallowed) == 1
     fields = pi_activity.parse_scene(swallowed[0])
-    assert fields["issue"] == "xqliu/orbi#233"
+    assert fields["issue"] == "owner.invalid/repo#233"
     assert fields["role"] == "implement"
     assert fields["action"] == "kill_pi"
     assert fields["session"] == "sess-233"
@@ -1965,7 +1965,7 @@ def test_stream_pi_swallow_not_fired_while_a_slot_is_processing(
     with caplog.at_level("WARNING"), pytest.raises(
         RuntimeError, match="hung",
     ):
-        pi_session.stream_pi(command, ctx=RunContext(run_id="deadbeef", issue=233, branch="b", worktree=tmp_path, source_repo="xqliu/orbi"), watch=PiWatchOptions(poll_interval=0.1, model_wait_dead_seconds=0.5, model_wait_probe_url="http://127.0.0.1:18082/slots", model_wait_probe_seconds=0.2), cwd=tmp_path)
+        pi_session.stream_pi(command, ctx=RunContext(run_id="deadbeef", issue=233, branch="b", worktree=tmp_path, source_repo="owner.invalid/repo"), watch=PiWatchOptions(poll_interval=0.1, model_wait_dead_seconds=0.5, model_wait_probe_url="http://127.0.0.1:18082/slots", model_wait_probe_seconds=0.2), cwd=tmp_path)
     lines = caplog.text.splitlines()
     # The dead-request bound fired, not the swallow probe.
     dead = [line for line in lines if " model_wait_dead " in line]
@@ -2006,7 +2006,7 @@ def test_stream_pi_swallow_window_restarts_when_events_arrive(
         (0.3, tool_result(5)),
     ]
     command = make_fake_pi(tmp_path, session_records=records, sleep=0.4)
-    pi_session.stream_pi(command, ctx=RunContext(run_id="deadbeef", issue=233, branch="b", worktree=tmp_path, source_repo="xqliu/orbi"), watch=PiWatchOptions(poll_interval=0.1, model_wait_dead_seconds=10.0, model_wait_probe_url="http://127.0.0.1:18082/slots", model_wait_probe_seconds=0.6), cwd=tmp_path)
+    pi_session.stream_pi(command, ctx=RunContext(run_id="deadbeef", issue=233, branch="b", worktree=tmp_path, source_repo="owner.invalid/repo"), watch=PiWatchOptions(poll_interval=0.1, model_wait_dead_seconds=10.0, model_wait_probe_url="http://127.0.0.1:18082/slots", model_wait_probe_seconds=0.6), cwd=tmp_path)
     assert " model_wait_swallowed " not in caplog.text
     assert " run_failed " not in caplog.text
 
@@ -2024,7 +2024,7 @@ def test_stream_pi_swallow_probe_failure_is_inconclusive(
     with caplog.at_level("WARNING"), pytest.raises(
         RuntimeError, match="hung",
     ):
-        pi_session.stream_pi(command, ctx=RunContext(run_id="deadbeef", issue=233, branch="b", worktree=tmp_path, source_repo="xqliu/orbi"), watch=PiWatchOptions(poll_interval=0.1, model_wait_dead_seconds=0.5, model_wait_probe_url="http://127.0.0.1:18082/slots", model_wait_probe_seconds=0.2), cwd=tmp_path)
+        pi_session.stream_pi(command, ctx=RunContext(run_id="deadbeef", issue=233, branch="b", worktree=tmp_path, source_repo="owner.invalid/repo"), watch=PiWatchOptions(poll_interval=0.1, model_wait_dead_seconds=0.5, model_wait_probe_url="http://127.0.0.1:18082/slots", model_wait_probe_seconds=0.2), cwd=tmp_path)
     lines = caplog.text.splitlines()
     dead = [line for line in lines if " model_wait_dead " in line]
     assert len(dead) == 1
@@ -2044,7 +2044,7 @@ def test_stream_pi_unconfigured_probe_keeps_dead_bound(
     with caplog.at_level("WARNING"), pytest.raises(
         RuntimeError, match="hung",
     ):
-        pi_session.stream_pi(command, ctx=RunContext(run_id="deadbeef", issue=233, branch="b", worktree=tmp_path, source_repo="xqliu/orbi"), watch=PiWatchOptions(poll_interval=0.1, model_wait_dead_seconds=0.5), cwd=tmp_path)
+        pi_session.stream_pi(command, ctx=RunContext(run_id="deadbeef", issue=233, branch="b", worktree=tmp_path, source_repo="owner.invalid/repo"), watch=PiWatchOptions(poll_interval=0.1, model_wait_dead_seconds=0.5), cwd=tmp_path)
     # The probe was never called (no URL configured).
     probe.assert_not_called()
     lines = caplog.text.splitlines()
@@ -2082,7 +2082,7 @@ def test_stream_pi_timeout_tool_inside_deadline_not_killed(
             release.write_text("go", encoding="utf-8")
 
     with caplog.at_level("INFO"):
-        result = pi_session.stream_pi(command, ctx=RunContext(run_id="deadbeef", issue=105, branch="b", worktree=tmp_path, source_repo="xqliu/orbi"), watch=PiWatchOptions(poll_interval=0.2, idle_warn_seconds=1.0), cwd=tmp_path, progress=progress)
+        result = pi_session.stream_pi(command, ctx=RunContext(run_id="deadbeef", issue=105, branch="b", worktree=tmp_path, source_repo="owner.invalid/repo"), watch=PiWatchOptions(poll_interval=0.2, idle_warn_seconds=1.0), cwd=tmp_path, progress=progress)
     assert result == ""
     assert released, "the wait decision reached the progress callback"
     lines = caplog.text.splitlines()
@@ -2090,7 +2090,7 @@ def test_stream_pi_timeout_tool_inside_deadline_not_killed(
     assert len(waits) == 1, f"exactly one wait decision: {lines}"
     wait = waits[0]
     assert "run=deadbeef" in wait
-    assert "issue=xqliu/orbi#105" in wait
+    assert "issue=owner.invalid/repo#105" in wait
     assert "pid=" in wait
     assert "cmdline=" in wait
     assert "deadline=" in wait
@@ -2147,7 +2147,7 @@ def test_stream_pi_timeout_tool_deadline_grace_window_not_killed(
         seen.append(activity.get("recovery"))
 
     with caplog.at_level("INFO"):
-        result = pi_session.stream_pi(command, ctx=RunContext(run_id="deadbeef", issue=105, branch="b", worktree=tmp_path, source_repo="xqliu/orbi"), watch=PiWatchOptions(poll_interval=0.1, idle_warn_seconds=0.3), cwd=tmp_path, progress=progress)
+        result = pi_session.stream_pi(command, ctx=RunContext(run_id="deadbeef", issue=105, branch="b", worktree=tmp_path, source_repo="owner.invalid/repo"), watch=PiWatchOptions(poll_interval=0.1, idle_warn_seconds=0.3), cwd=tmp_path, progress=progress)
     # The tool was TERMed by the runner (the wrapper failed to end it:
     # still alive one full idle window after the deadline), the fake
     # Pi resumed when the tool died, and the run SUCCEEDED.
@@ -2201,7 +2201,7 @@ def test_stream_pi_timeout_tool_past_deadline_still_terminated(
     with caplog.at_level("INFO"), pytest.raises(
         RuntimeError, match="idle recovery",
     ):
-        pi_session.stream_pi(command, ctx=RunContext(run_id="deadbeef", issue=105, branch="b", worktree=tmp_path, source_repo="xqliu/orbi"), watch=PiWatchOptions(poll_interval=0.1, idle_warn_seconds=0.3), cwd=tmp_path)
+        pi_session.stream_pi(command, ctx=RunContext(run_id="deadbeef", issue=105, branch="b", worktree=tmp_path, source_repo="owner.invalid/repo"), watch=PiWatchOptions(poll_interval=0.1, idle_warn_seconds=0.3), cwd=tmp_path)
     lines = caplog.text.splitlines()
     # The first escalation window already saw a past deadline (the
     # wrapper failed to end the command): no wait decision at all.
@@ -2232,7 +2232,7 @@ def test_stream_pi_idle_recovery_state_wait_visible_in_progress_callback(
     def progress(activity):
         seen.append(activity.get("recovery"))
 
-    pi_session.stream_pi(command, ctx=RunContext(run_id="deadbeef", issue=105, branch="b", worktree=tmp_path, source_repo="xqliu/orbi"), watch=PiWatchOptions(poll_interval=0.1, idle_warn_seconds=0.3), cwd=tmp_path, progress=progress)
+    pi_session.stream_pi(command, ctx=RunContext(run_id="deadbeef", issue=105, branch="b", worktree=tmp_path, source_repo="owner.invalid/repo"), watch=PiWatchOptions(poll_interval=0.1, idle_warn_seconds=0.3), cwd=tmp_path, progress=progress)
     assert "wait" in seen
     assert "term" not in seen
     assert seen[-1] is None
@@ -2259,7 +2259,7 @@ def test_stream_pi_wait_state_cleared_when_waited_tool_exits(
     with caplog.at_level("INFO"), pytest.raises(
         RuntimeError, match="idle recovery",
     ):
-        pi_session.stream_pi(command, ctx=RunContext(run_id="deadbeef", issue=105, branch="b", worktree=tmp_path, source_repo="xqliu/orbi"), watch=PiWatchOptions(poll_interval=0.1, idle_warn_seconds=0.3), cwd=tmp_path, progress=progress)
+        pi_session.stream_pi(command, ctx=RunContext(run_id="deadbeef", issue=105, branch="b", worktree=tmp_path, source_repo="owner.invalid/repo"), watch=PiWatchOptions(poll_interval=0.1, idle_warn_seconds=0.3), cwd=tmp_path, progress=progress)
     lines = caplog.text.splitlines()
     waits = [line for line in lines if " pi_idle_wait " in line]
     assert len(waits) == 1, lines
@@ -2394,7 +2394,7 @@ def test_idle_recovery_tracker_escalation_pacing(monkeypatch, caplog):
             if " pi_idle_term " in line]
     assert len(term) == 1 and "result=sent" in term[0]
     assert "run=deadbeef" in term[0]
-    assert "issue=xqliu/orbi#94" in term[0]
+    assert "issue=owner.invalid/repo#94" in term[0]
     assert "pid=4242" in term[0]
     assert 'cmdline="sleep 300"' in term[0]
     kill = [line for line in caplog.text.splitlines()
@@ -2697,7 +2697,7 @@ def test_idle_recovery_golden_journal_sequence(monkeypatch, caplog):
     lines = caplog.text.splitlines()
     term = next(line for line in lines if "pi_idle_term" in line)
     assert "run=deadbeef" in term
-    assert "issue=xqliu/orbi#94" in term
+    assert "issue=owner.invalid/repo#94" in term
     assert "role=implement" in term
     assert "pid=4242" in term
     assert 'cmdline="sleep 300"' in term
@@ -2721,7 +2721,7 @@ def test_stream_pi_idle_recovery_terms_hung_descendant_and_resumes(
     failure signal reached the model)."""
     command = make_hung_pi(tmp_path)
     with caplog.at_level("INFO"):
-        result = pi_session.stream_pi(command, ctx=RunContext(run_id="deadbeef", issue=94, branch="b", worktree=tmp_path, source_repo="xqliu/orbi"), watch=PiWatchOptions(poll_interval=0.1, idle_warn_seconds=0.3), cwd=tmp_path)
+        result = pi_session.stream_pi(command, ctx=RunContext(run_id="deadbeef", issue=94, branch="b", worktree=tmp_path, source_repo="owner.invalid/repo"), watch=PiWatchOptions(poll_interval=0.1, idle_warn_seconds=0.3), cwd=tmp_path)
     assert result == ""
     lines = caplog.text.splitlines()
     idles = [line for line in lines if " pi_idle " in line]
@@ -2730,7 +2730,7 @@ def test_stream_pi_idle_recovery_terms_hung_descendant_and_resumes(
     assert len(terms) == 1, f"exactly one TERM step: {lines}"
     term = terms[0]
     assert "run=deadbeef" in term
-    assert "issue=xqliu/orbi#94" in term
+    assert "issue=owner.invalid/repo#94" in term
     assert "role=implement" in term
     assert "pid=" in term
     assert "cmdline=" in term
@@ -2761,7 +2761,7 @@ def test_stream_pi_idle_recovery_kills_descendant_that_ignores_term(
         tmp_path, ignore_sigterm=True, react_on_child_death=True,
     )
     with caplog.at_level("INFO"):
-        pi_session.stream_pi(command, ctx=RunContext(run_id="deadbeef", issue=94, branch="b", worktree=tmp_path, source_repo="xqliu/orbi"), watch=PiWatchOptions(poll_interval=0.1, idle_warn_seconds=0.3), cwd=tmp_path)
+        pi_session.stream_pi(command, ctx=RunContext(run_id="deadbeef", issue=94, branch="b", worktree=tmp_path, source_repo="owner.invalid/repo"), watch=PiWatchOptions(poll_interval=0.1, idle_warn_seconds=0.3), cwd=tmp_path)
     lines = caplog.text.splitlines()
     terms = [line for line in lines if " pi_idle_term " in line]
     kills = [line for line in lines if " pi_idle_kill " in line]
@@ -2795,7 +2795,7 @@ def test_stream_pi_idle_recovery_kills_pi_session_after_three_idle_cycles(
     with caplog.at_level("INFO"), pytest.raises(
         RuntimeError, match="idle recovery",
     ):
-        pi_session.stream_pi(command, ctx=RunContext(run_id="deadbeef", issue=94, branch="b", worktree=tmp_path, source_repo="xqliu/orbi"), watch=PiWatchOptions(poll_interval=0.1, idle_warn_seconds=0.3), cwd=tmp_path)
+        pi_session.stream_pi(command, ctx=RunContext(run_id="deadbeef", issue=94, branch="b", worktree=tmp_path, source_repo="owner.invalid/repo"), watch=PiWatchOptions(poll_interval=0.1, idle_warn_seconds=0.3), cwd=tmp_path)
     lines = caplog.text.splitlines()
     terms = [line for line in lines if " pi_idle_term " in line]
     kills = [line for line in lines if " pi_idle_kill " in line]
@@ -2809,7 +2809,7 @@ def test_stream_pi_idle_recovery_kills_pi_session_after_three_idle_cycles(
     failure = failures[0]
     assert "reason=idle_recovery_stale_" in failure
     assert "run=deadbeef" in failure
-    assert "issue=xqliu/orbi#94" in failure
+    assert "issue=owner.invalid/repo#94" in failure
     assert f"worktree={tmp_path}" in failure
 
 
@@ -2833,7 +2833,7 @@ def test_stream_pi_idle_recovery_without_descendants_still_terminates(
     with caplog.at_level("INFO"), pytest.raises(
         RuntimeError, match="idle recovery",
     ):
-        pi_session.stream_pi(command, ctx=RunContext(run_id="deadbeef", issue=94, branch="b", worktree=tmp_path, source_repo="xqliu/orbi"), watch=PiWatchOptions(poll_interval=0.1, idle_warn_seconds=0.3), cwd=tmp_path)
+        pi_session.stream_pi(command, ctx=RunContext(run_id="deadbeef", issue=94, branch="b", worktree=tmp_path, source_repo="owner.invalid/repo"), watch=PiWatchOptions(poll_interval=0.1, idle_warn_seconds=0.3), cwd=tmp_path)
     lines = caplog.text.splitlines()
     terms = [line for line in lines if " pi_idle_term " in line]
     assert len(terms) == 1
@@ -2859,7 +2859,7 @@ def test_stream_pi_idle_recovery_never_signals_non_descendants(
     try:
         command = make_hung_pi(tmp_path)
         with caplog.at_level("INFO"):
-            pi_session.stream_pi(command, ctx=RunContext(run_id="deadbeef", issue=94, branch="b", worktree=tmp_path, source_repo="xqliu/orbi"), watch=PiWatchOptions(poll_interval=0.1, idle_warn_seconds=0.3), cwd=tmp_path)
+            pi_session.stream_pi(command, ctx=RunContext(run_id="deadbeef", issue=94, branch="b", worktree=tmp_path, source_repo="owner.invalid/repo"), watch=PiWatchOptions(poll_interval=0.1, idle_warn_seconds=0.3), cwd=tmp_path)
         # The bystander is untouched: still running, and its pid never
         # appears on a recovery line.
         assert bystander.poll() is None
@@ -2883,7 +2883,7 @@ def test_stream_pi_idle_recovery_never_fires_during_model_wait(
     with caplog.at_level("ERROR"), pytest.raises(
         RuntimeError, match="hung",
     ):
-        pi_session.stream_pi(command, ctx=RunContext(run_id="deadbeef", issue=94, branch="b", worktree=tmp_path, source_repo="xqliu/orbi"), watch=PiWatchOptions(poll_interval=0.1, model_wait_dead_seconds=0.5), cwd=tmp_path)
+        pi_session.stream_pi(command, ctx=RunContext(run_id="deadbeef", issue=94, branch="b", worktree=tmp_path, source_repo="owner.invalid/repo"), watch=PiWatchOptions(poll_interval=0.1, model_wait_dead_seconds=0.5), cwd=tmp_path)
     assert " pi_idle_term " not in caplog.text
     assert " pi_idle_kill " not in caplog.text
     failures = [line for line in caplog.text.splitlines()
@@ -2906,7 +2906,7 @@ def test_stream_pi_idle_recovery_state_visible_in_progress_callback(
     def progress(activity):
         seen.append(activity.get("recovery"))
 
-    pi_session.stream_pi(command, ctx=RunContext(run_id="deadbeef", issue=94, branch="b", worktree=tmp_path, source_repo="xqliu/orbi"), watch=PiWatchOptions(poll_interval=0.1, idle_warn_seconds=0.3), cwd=tmp_path, progress=progress)
+    pi_session.stream_pi(command, ctx=RunContext(run_id="deadbeef", issue=94, branch="b", worktree=tmp_path, source_repo="owner.invalid/repo"), watch=PiWatchOptions(poll_interval=0.1, idle_warn_seconds=0.3), cwd=tmp_path, progress=progress)
     assert "term" in seen
     # Before the stall and after the resume the state is None again.
     assert seen[0] is None
@@ -2919,7 +2919,7 @@ def test_stream_pi_times_out_and_kills_process(tmp_path, caplog):
     with caplog.at_level("ERROR"), pytest.raises(
         subprocess.TimeoutExpired,
     ) as excinfo:
-        pi_session.stream_pi(command, ctx=RunContext(run_id="deadbeef", issue=24, branch="b", worktree=tmp_path, source_repo="xqliu/orbi"), watch=PiWatchOptions(poll_interval=0.1), cwd=tmp_path, timeout=0.5)
+        pi_session.stream_pi(command, ctx=RunContext(run_id="deadbeef", issue=24, branch="b", worktree=tmp_path, source_repo="owner.invalid/repo"), watch=PiWatchOptions(poll_interval=0.1), cwd=tmp_path, timeout=0.5)
     assert excinfo.value.timeout == 0.5
     # The exception must not carry the raw command (prompt / Issue body).
     assert "sleep" not in str(excinfo.value)
@@ -2927,7 +2927,7 @@ def test_stream_pi_times_out_and_kills_process(tmp_path, caplog):
                 if " run_failed " in line]
     assert len(failures) == 1
     assert "reason=timeout_0.5s" in failures[0]
-    assert "issue=xqliu/orbi#24" in failures[0]
+    assert "issue=owner.invalid/repo#24" in failures[0]
 
 
 def test_drain_stream_returns_true_at_eof_and_captures_content():
@@ -2995,7 +2995,7 @@ def test_stream_pi_journals_drain_abandonment_when_grandchild_holds_pipe(
     )
     try:
         with caplog.at_level("WARNING"):
-            result = pi_session.stream_pi([sys.executable, "-c", wrapper], ctx=RunContext(run_id="deadbeef", issue=24, branch="orbi/xqliu-orbi-issue-24", worktree=tmp_path, source_repo="xqliu/orbi"), watch=PiWatchOptions(poll_interval=0.1), cwd=tmp_path)
+            result = pi_session.stream_pi([sys.executable, "-c", wrapper], ctx=RunContext(run_id="deadbeef", issue=24, branch="orbi/owner.invalid-repo-issue-24", worktree=tmp_path, source_repo="owner.invalid/repo"), watch=PiWatchOptions(poll_interval=0.1), cwd=tmp_path)
     finally:
         subprocess.run(["pkill", "-f", "orbi709-holder-two"], check=False)
     assert result == "final answer"

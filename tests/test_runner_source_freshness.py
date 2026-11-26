@@ -37,6 +37,7 @@ import orbi.runner as runner
 # (and the conftest default stub) patch.
 import orbi.runner_source as runner_source
 from seam import seam
+from tests.fakes.github import install_absent_repo_policy
 
 # The conftest autouse fixture stubs the gate for the in-process
 # dispatch tests; the gate's OWN tests restore the real implementation
@@ -558,6 +559,12 @@ def _write_prompts(tmp_path: Path) -> None:
     prompts.mkdir(exist_ok=True)
     for name in ("prompt.md", "prompt_review.md"):
         (prompts / name).write_text("prompt", encoding="utf-8")
+
+
+@pytest.fixture(autouse=True)
+def _absent_repo_policy(monkeypatch):
+    """The policy read is incidental to the source gate (Issue #2253)."""
+    install_absent_repo_policy(monkeypatch)
 
 
 def test_main_source_gate_blocks_claim_before_slot(monkeypatch, tmp_path):

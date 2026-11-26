@@ -26,7 +26,7 @@ import orbi.claim as claim
 
 import orbi.runner as runner
 import orbi.milestone as milestone
-from tests.fakes.github import FakeGh
+from tests.fakes.github import FakeGh, install_fake_gh_repositories
 from seam import seam
 from tests.test_bootstrap_runner_main import _write_prompts
 
@@ -833,6 +833,7 @@ def test_main_idle_advance_uses_the_repos_fused_base_branch(
 
 def test_main_idle_release_arm_failure_is_bypassed(monkeypatch, tmp_path, caplog):
     monkeypatch.setitem(milestone.__dict__, "validate_active_milestone", lambda *args, **k: None)
+    install_fake_gh_repositories(monkeypatch, "owner/repo")
     _write_prompts(tmp_path)
     config = tmp_path / "orbi.toml"
     config.write_text(
@@ -858,6 +859,7 @@ def test_main_idle_advance_failure_is_bypassed(monkeypatch, tmp_path, caplog):
     or ambiguous `active_milestone` (or any `gh` failure) must not change
     the idle outcome; the tick still returns 0 and only journals."""
     monkeypatch.setitem(milestone.__dict__, "validate_active_milestone", lambda *args, **k: None)
+    install_fake_gh_repositories(monkeypatch, "owner/repo")
     _write_prompts(tmp_path)
     config = tmp_path / "orbi.toml"
     config.write_text(
