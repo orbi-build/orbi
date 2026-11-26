@@ -248,3 +248,95 @@ def test_external_guard_delegates_an_empty_command_and_an_opt_in(tmp_path):
         assert guard.run(["gh", "issue", "list"], cwd=tmp_path) == "ok"
     assert guard.calls == []
     assert started == [[], ["gh", "issue", "list"]]
+
+
+
+def test_external_guard_skips_option_arguments_and_a_missing_cwd(tmp_path):
+    """The temp-base walk ignores option arguments, and a call without a
+    cwd is not a temporary repository (Issue #2253)."""
+    guard = ExternalCallGuard(lambda *a, **k: "", temp_root=tmp_path)
+    with pytest.raises(
+        UnstubbedExternalCommand,
+        match="unstubbed network git command: git fetch -q origin",
+    ):
+        guard.run(["git", "fetch", "-q", "origin"])
+
+
+def test_mirror_installed_cli_covers_both_branches(tmp_path):
+    """The private HOME mirrors the installed CLI when there is one, and
+    does nothing when there is none (Issue #2253)."""
+    from external_guard import mirror_installed_cli
+
+    mirror_installed_cli(tmp_path, None)
+    assert not (tmp_path / ".local").exists()
+    executable = tmp_path / "bin" / "orbi"
+    executable.parent.mkdir()
+    executable.write_text("", encoding="utf-8")
+    mirror_installed_cli(tmp_path, str(executable))
+    assert (tmp_path / ".local" / "bin" / "orbi").resolve() == (
+        executable.resolve()
+    )
+
+
+def test_offline_sentinel_failure_reports_a_bypass_only(tmp_path):
+    """An absent or empty sentinel log is clean; a recorded bypass fails
+    the session with its command (Issue #2253)."""
+    from external_guard import (
+        assert_no_offline_sentinel_calls, offline_sentinel_failure,
+    )
+
+    log = tmp_path / "calls.log"
+    assert offline_sentinel_failure(log) is None
+    log.write_text("", encoding="utf-8")
+    assert offline_sentinel_failure(log) is None
+    log.write_text("issue list --repo owner.invalid/repo\n", encoding="utf-8")
+    failure = offline_sentinel_failure(log)
+    assert failure is not None and "issue list" in failure
+    with pytest.raises(pytest.fail.Exception, match="offline"):
+        assert_no_offline_sentinel_calls(log)
+
+
+def test_progress_gh_fake_answers_each_publisher_command(monkeypatch):
+    """The publisher fake answers the list/POST/PATCH traffic and fails
+    loudly on anything else (Issue #2253)."""
+    import json
+
+    from tests.fakes.github import install_progress_gh
+
+    install_progress_gh(monkeypatch, comments=[{"id": 1}])
+    assert json.loads(seam.run_command(
+        ["gh", "api", "repos/o/r/issues/1/comments"],
+    )) == [{"id": 1}]
+    assert seam.run_command([
+        "gh", "api", "repos/o/r/issues/comments/1",
+        "--method", "PATCH", "--field", "body=x",
+    ]) == ""
+    posted = json.loads(seam.run_command([
+        "gh", "api", "repos/o/r/issues/1/comments",
+        "--method", "POST", "--field", "body=hello",
+    ]))
+    assert posted["body"] == "hello"
+    raw = json.loads(seam.run_command([
+        "gh", "api", "repos/o/r/issues/1/comments",
+        "--method", "POST", "--field", "labels=x",
+    ]))
+    assert raw["body"] == "labels=x"
+    assert json.loads(seam.run_command([
+        "gh", "issue", "view", "1", "--repo", "o/r", "--json", "comments",
+    ])) == {"comments": [{"id": 1}]}
+    with pytest.raises(AssertionError, match="unexpected external command"):
+        seam.run_command(["gh", "pr", "view", "1"])
+
+
+def test_empty_issue_comments_fake_delegates_other_commands(monkeypatch):
+    """The timeline fake answers the comments read and delegates every
+    other command to the seam below it (Issue #2253)."""
+    import json
+
+    from tests.fakes.github import install_empty_issue_comments
+
+    install_empty_issue_comments(monkeypatch)
+    assert json.loads(seam.run_command([
+        "gh", "issue", "view", "1", "--repo", "o/r", "--json", "comments",
+    ])) == {"comments": []}
+    assert "git version" in seam.run_command(["git", "--version"])

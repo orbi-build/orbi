@@ -21,7 +21,9 @@ import pytest
 
 import orbi.journal as journal
 import orbi.runner as runner
-from external_guard import ExternalCallGuard
+from external_guard import (
+    ExternalCallGuard, assert_no_offline_sentinel_calls, mirror_installed_cli,
+)
 from seam import seam
 
 
@@ -99,23 +101,14 @@ def offline_external_sentinel(tmp_path_factory):
     # of the sentinel name finds no stored login. The systemd template tests
     # verify the unit against the installed CLI at ~/.local/bin/orbi, so the
     # private HOME mirrors that one executable (Issue #2253).
-    installed = shutil.which("orbi")
-    if installed is not None:
-        link = home / ".local" / "bin" / "orbi"
-        link.parent.mkdir(parents=True)
-        link.symlink_to(installed)
+    mirror_installed_cli(home, shutil.which("orbi"))
     patch.setenv(
         "PATH", f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}",
     )
     patch.setenv("HOME", str(home))
     yield SimpleNamespace(bin_dir=bin_dir, home=home, log=log, gh=gh)
     patch.undo()
-    if log.exists() and log.read_text(encoding="utf-8").strip():
-        pytest.fail(
-            "the test suite bypassed the subprocess seam and started the "
-            f"offline `gh` sentinel:\n{log.read_text(encoding='utf-8')}",
-            pytrace=False,
-        )
+    assert_no_offline_sentinel_calls(log)
 
 
 @pytest.fixture(autouse=True)

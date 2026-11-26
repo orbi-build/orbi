@@ -179,3 +179,39 @@ class ExternalCallGuard:
             f"{listed}",
             pytrace=False,
         )
+
+
+
+def mirror_installed_cli(home: Path, executable: str | None) -> None:
+    """Make `~/.local/bin/orbi` resolvable under the private HOME.
+
+    The systemd template verification resolves the unit's absolute
+    ExecStart against the installed CLI; the private HOME must still
+    answer that one path (Issue #2253). No installed CLI is a no-op.
+    """
+    if executable is None:
+        return
+    link = Path(home) / ".local" / "bin" / "orbi"
+    link.parent.mkdir(parents=True, exist_ok=True)
+    link.symlink_to(executable)
+
+
+def offline_sentinel_failure(log: Path) -> str | None:
+    """The session-failure message when a bypass reached the sentinel."""
+    path = Path(log)
+    if not path.exists():
+        return None
+    text = path.read_text(encoding="utf-8").strip()
+    if not text:
+        return None
+    return (
+        "the test suite bypassed the subprocess seam and started the "
+        f"offline `gh` sentinel:\n{text}"
+    )
+
+
+def assert_no_offline_sentinel_calls(log: Path) -> None:
+    """Fail the session when a bypass reached the sentinel (Issue #2253)."""
+    failure = offline_sentinel_failure(log)
+    if failure is not None:
+        pytest.fail(failure, pytrace=False)
