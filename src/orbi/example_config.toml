@@ -230,11 +230,12 @@ max_concurrency = 1
 # Task-worktree reclamation: at every tick start the Runner
 # removes the registered task worktrees whose Issue is CLOSED and has
 # been closed for at least this many hours (oldest first, at most 25 per
-# tick). Open Issues and in-flight runs are never touched, and a failed
-# removal is only a warning. Default: 72 — a closed Issue's scene stays
-# inspectable for three days before reclamation. Must be a finite
+# tick). The labels of the closed Issue never matter; only the worktree
+# of the live run of this deployment is kept, and a failed removal is
+# only a warning. Default: 168 — a closed Issue's scene stays
+# inspectable for seven days before reclamation. Must be a finite
 # positive number of hours; anything else fails the start fast.
-# worktree_retain_hours = 72
+# worktree_retain_hours = 168
 # Terminal-failure retention (Issue #2175): a delivery that ends
 # `ai-blocked` keeps its worktree instead of removing it, so the failed
 # attempt's uncommitted candidate changes, its `.pi-session/` session,

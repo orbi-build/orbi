@@ -1139,12 +1139,15 @@ worktree 过去只增不减：每次交付都会留下
 机制删除它。现在每个 tick 开头——与启动前检查并列、在任何 slot 或
 领取之前——Runner 跑一次有界、幂等的回收（`reclaim_released_worktrees`）：
 只考虑 `repo_dir/.worktrees` 下、目录名匹配 orbi 命名且 slug 属于已
-配置 source repo 的**已注册** worktree，当以下条件全部成立时用
-`git worktree remove --force` 移除：Issue 已关闭（每个涉及的 repo
-一次批量 `gh issue list --state closed`）、其 `closedAt` 距今至少
-`worktree_retain_hours`（部署 home 的 `orbi.toml`，默认 72）小时，且
-不携带任何在途标签（`ai-in-progress`、`ai-pr-opened`、
-`ai-fix-needed`——人工关闭在途 Issue 时标签还在，现场因此保留）。
+配置 source repo 的**已注册** worktree，当 Issue 已关闭（每个涉及
+的 repo 一次批量 `gh issue list --state closed`）、且其 `closedAt`
+距今至少 `worktree_retain_hours`（部署 home 的 `orbi.toml`，默认
+168 小时即 7 天，Issue #2447）小时，就用 `git worktree remove
+--force` 移除。已关闭 Issue 的标签不再参与判断：关闭的 Issue 永远
+不会被恢复，所以人工关闭时留下的在途标签（`ai-ready`、
+`ai-in-progress`、`ai-pr-opened`、`ai-fix-needed`）否则会让现场
+永远留在磁盘上。移除的是整个目录，因此 worktree 里装好的一切
+（`node_modules`、虚拟环境）随之一并释放。
 本进程绑定 run 的 worktree（按 run id 或 stop-scene 路径）永远不是
 候选，而已关闭的 Issue 永远不会被恢复扫描选中，所以被回收的现场是
 不可达的垃圾，绝不是恢复状态。移除按关闭时间从旧到新排序、每 tick

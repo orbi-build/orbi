@@ -33,6 +33,7 @@ from orbi.delivery_labels import (
     IN_PROGRESS_LABEL,
     MERGED_LABEL,
     PR_OPENED_LABEL,
+    READY_LABEL,
 )
 from seam import seam
 from tests.fakes.github import install_absent_repo_policy
@@ -206,38 +207,85 @@ def test_keeps_worktree_bound_as_active_scene(tmp_path, monkeypatch):
     assert str(worktree) in _registered(repo)
 
 
-@pytest.mark.parametrize("label", [IN_PROGRESS_LABEL, PR_OPENED_LABEL,
-                                   FIX_NEEDED_LABEL])
-def test_keeps_issue_closed_mid_run_with_inflight_label(
-    tmp_path, monkeypatch, label,
-):
-    """A human closed the Issue while a run was still in flight: the
-    Issue stays closed but wears an in-flight label, and the run's scene
-    must survive until the delivery path resolves it."""
+@pytest.mark.parametrize(
+    "labels",
+    [
+        [IN_PROGRESS_LABEL],
+        [PR_OPENED_LABEL],
+        [FIX_NEEDED_LABEL],
+        [],  # a closed Issue whose labels a human already removed
+        # The production examples of Issue #2447: closed, no terminal
+        # label, stale in-flight/queue labels left behind forever.
+        [READY_LABEL, PR_OPENED_LABEL],
+        [READY_LABEL, FIX_NEEDED_LABEL],
+        # And a terminal label beside a stale in-flight one.
+        [MERGED_LABEL, IN_PROGRESS_LABEL],
+        [BLOCKED_LABEL, FIX_NEEDED_LABEL],
+    ],
+    ids=[
+        "in-progress", "pr-opened", "fix-needed", "no-labels",
+        "ready+pr-opened", "ready+fix-needed",
+        "merged+in-progress", "blocked+fix-needed",
+    ],
+)
+def test_labels_never_decide_reclamation(tmp_path, monkeypatch, labels):
+    """Issue #2447: ONE rule decides — the Issue has been closed past the
+    retention window. Labels no longer protect a scene: a closed Issue is
+    never resumed, so its stale labels (an in-flight one included) would
+    keep the worktree on disk forever."""
     repo = _git_repo(tmp_path / "repo")
     worktree = _register(repo, "orbi-owner-repo-issue-13-abcd1234")
     _stub_closed(
-        monkeypatch, _closed(13, hours_ago=100, labels=[label]),
-    )
-    runner.reclaim_released_worktrees(_config(repo), now=NOW)
-    assert str(worktree) in _registered(repo)
-
-
-@pytest.mark.parametrize("terminal", [MERGED_LABEL, BLOCKED_LABEL])
-@pytest.mark.parametrize("inflight", [IN_PROGRESS_LABEL, PR_OPENED_LABEL,
-                                      FIX_NEEDED_LABEL])
-def test_terminal_label_overrides_inflight_protection(
-    tmp_path, monkeypatch, terminal, inflight,
-):
-    """A terminal Issue is reclaimable even when stale in-flight labels
-    remain from the completed delivery."""
-    repo = _git_repo(tmp_path / "repo")
-    worktree = _register(repo, "orbi-owner-repo-issue-15-abcd1234")
-    _stub_closed(
-        monkeypatch, _closed(15, hours_ago=100, labels=[terminal, inflight]),
+        monkeypatch, _closed(13, hours_ago=100, labels=labels),
     )
     runner.reclaim_released_worktrees(_config(repo), now=NOW)
     assert str(worktree) not in _registered(repo)
+
+
+def test_reclaims_everything_installed_inside_the_worktree(
+    tmp_path, monkeypatch,
+):
+    """Issue #2447: installed content goes with the worktree — the removal
+    is the whole directory (git worktree remove --force), so a heavy
+    untracked tree such as node_modules is freed with it."""
+    repo = _git_repo(tmp_path / "repo")
+    worktree = _register(repo, "orbi-owner-repo-issue-17-abcd1234")
+    installed = worktree / "node_modules" / "pkg" / "index.js"
+    installed.parent.mkdir(parents=True)
+    installed.write_text("x" * 64, encoding="utf-8")
+    _stub_closed(
+        monkeypatch,
+        _closed(17, hours_ago=100, labels=[READY_LABEL, PR_OPENED_LABEL]),
+    )
+    runner.reclaim_released_worktrees(_config(repo), now=NOW)
+    assert not worktree.exists()
+    assert not installed.exists()
+
+
+def test_default_retention_window_is_seven_days(tmp_path, monkeypatch):
+    """Acceptance 4: with no explicit worktree_retain_hours, a scene
+    closed 6 days ago is kept and one closed 8 days ago is removed."""
+    repo = _git_repo(tmp_path / "repo")
+    inside = _register(repo, "orbi-owner-repo-issue-30-aaaa1111")
+    outside = _register(repo, "orbi-owner-repo-issue-31-bbbb2222")
+    _stub_closed(
+        monkeypatch,
+        _closed(30, hours_ago=6 * 24, labels=[PR_OPENED_LABEL]),
+        _closed(31, hours_ago=8 * 24, labels=[PR_OPENED_LABEL]),
+    )
+    # The real user path: a deploy-home orbi.toml with no
+    # worktree_retain_hours line, loaded by the engine at start.
+    config_path = repo / "orbi.toml"
+    config_path.write_text(
+        'source_repos = ["owner/repo"]\nrepo_dir = "."\n',
+        encoding="utf-8",
+    )
+    config = config_domain.load_config(config_path)
+    assert config.worktree_retain_hours == 168.0
+    runner.reclaim_released_worktrees(config, now=NOW)
+    registered = _registered(repo)
+    assert str(inside) in registered
+    assert str(outside) not in registered
 
 
 @pytest.mark.parametrize("terminal", [MERGED_LABEL, BLOCKED_LABEL])
@@ -408,12 +456,12 @@ def test_noop_without_worktrees_directory(tmp_path, monkeypatch):
 
 # --- Issue #760: the retention window is configurable ------------------------
 
-def test_load_config_defaults_worktree_retain_hours_to_72(tmp_path):
-    """Omitted -> 72 hours: the Issue's conservative option — a closed
-    Issue's scene stays inspectable for three days before reclamation."""
+def test_load_config_defaults_worktree_retain_hours_to_168(tmp_path):
+    """Omitted -> 168 hours (Issue #2447): one rule, seven days after the
+    Issue closes, whatever its labels."""
     config_path = tmp_path / "orbi.toml"
     config_path.write_text('source_repos = ["owner/repo"]\n', encoding="utf-8")
-    assert config_domain.load_config(config_path).worktree_retain_hours == 72.0
+    assert config_domain.load_config(config_path).worktree_retain_hours == 168.0
 
 
 def test_load_config_reads_explicit_worktree_retain_hours(tmp_path):
