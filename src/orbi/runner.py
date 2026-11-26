@@ -308,12 +308,11 @@ STOP_CHILD_GRACE_SECONDS = pi_recovery.STOP_CHILD_GRACE_SECONDS
 # backlog drains over ticks and one tick never spends unbounded time on
 # `rm -rf`.
 WORKTREE_RECLAIM_MAX_PER_TICK = 25
-# The default retention window (hours): a closed Issue's scene stays
-# inspectable for three days before the reclamation removes it — the
-# Issue's conservative option (宁可不删，不可误删).
-# A closed Issue still wearing one of these was closed by a human while
-# a run was (or may still be) working in its scene — never reclaim such
-# a worktree. Terminal state takes precedence over stale in-flight labels.
+# The retention window's default lives with the setting
+# (`worktree_retention.WORKTREE_RETAIN_HOURS`, Issue #2447): seven days
+# after its Issue closes. Labels never decide reclamation — a closed
+# Issue is never resumed, so a stale one would only keep the scene on
+# disk forever (宁可不删，不可误删 applies to the read, not to labels).
 # The task worktree name `worktree_path` derives: orbi-{slug}-issue-{N}-{run_id}.
 _WORKTREE_NAME_PATTERN = re.compile(
     r"^orbi-(?P<slug>.+)-issue-(?P<number>\d+)-(?P<run_id>[0-9a-f]{8})$",
@@ -808,11 +807,10 @@ def reclaim_released_worktrees(config: config_domain.RunnerConfig, *,
       external takeover checks out a head branch whose directory name
       is not run-id-derived);
     - the Issue must be closed (ONE batched `gh issue list` per involved
-      repo), past `worktree_retain_hours` since its `closedAt`, and either
-      have a terminal label or be free of in-flight labels — a human
-      closing an in-flight Issue leaves the label, and the scene survives
-      until the delivery path resolves it. Terminal labels (`ai-merged` or
-      `ai-blocked`) take precedence over stale in-flight labels.
+      repo) and past `worktree_retain_hours` since its `closedAt`. Labels
+      never decide: a closed Issue is never resumed, so a stale in-flight
+      label left by a human closing the Issue would keep the scene on
+      disk forever (Issue #2447 — one rule, seven days after close).
 
     A closed Issue is never resumed (`pick_resumable_delivery` scans
     open Issues only) and nothing reads the task worktree after the
@@ -883,10 +881,6 @@ def reclaim_released_worktrees(config: config_domain.RunnerConfig, *,
         if closed_at.tzinfo is None:
             continue
         if now - closed_at < retain:
-            continue
-        labels = label_name_set(issue)
-        if (not labels & {delivery_labels.MERGED_LABEL, delivery_labels.BLOCKED_LABEL}
-                and labels & {delivery_labels.IN_PROGRESS_LABEL, delivery_labels.PR_OPENED_LABEL, delivery_labels.FIX_NEEDED_LABEL}):
             continue
         reclaimable.append((closed_at, path))
     reclaimable.sort(key=lambda item: item[0])

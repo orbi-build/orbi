@@ -1324,13 +1324,16 @@ before any slot or claim — the Runner runs one bounded, idempotent
 reclamation pass (`reclaim_released_worktrees`): it considers ONLY
 registered worktrees under `repo_dir/.worktrees` whose name matches the
 orbi pattern for a CONFIGURED source repo, and removes one with
-`git worktree remove --force` when ALL of the following hold: the Issue
-is closed (one batched `gh issue list --state closed` per involved repo),
-its `closedAt` is at least `worktree_retain_hours` (deploy home's
-`orbi.toml`, default 72) in the past, and it carries none of the
-in-flight labels (`ai-in-progress`, `ai-pr-opened`, `ai-fix-needed` — a
-human closing an in-flight Issue leaves the label, and the scene
-survives). A worktree of this process's bound run (by run id or by the
+`git worktree remove --force` when the Issue is closed (one batched
+`gh issue list --state closed` per involved repo) and its `closedAt` is
+at least `worktree_retain_hours` (deploy home's `orbi.toml`, default
+168 hours = seven days, Issue #2447) in the past. The labels of the
+closed Issue never matter: a closed Issue is never resumed, so a stale
+label (`ai-ready`, `ai-in-progress`, `ai-pr-opened`, `ai-fix-needed`)
+left behind by a human closing the Issue would otherwise keep the scene
+on disk forever. The removal takes the whole directory, so everything
+installed inside the worktree (`node_modules`, a virtualenv) is freed
+with it. A worktree of this process's bound run (by run id or by the
 stop-scene path) is never a candidate, and a closed Issue is never
 resumed, so a reclaimed scene is unreachable garbage, never recovery
 state. Removals are ordered oldest-closed first and capped at 25 per
