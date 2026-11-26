@@ -19,6 +19,7 @@ import orbi.gitops as gitops
 import orbi.journal as journal
 import orbi.release_run as release_run
 import orbi.runner as runner
+from external_guard import ExternalCallGuard
 from seam import seam
 
 # The modules whose `run_command` binding the fan-out must reach.
@@ -44,12 +45,17 @@ def suite_baseline(name: str) -> list:
 
     `run_command` is wrapped by the suite's external-command guard for every
     test, so the restore target inside a test is that wrapper — never the
-    import-time function. The guard itself is undone by its own fixture
-    after the last test's teardown (asserted below).
+    import-time function, and never a fake an earlier test failed to undo.
+    The guard itself is undone by its own fixture after the last test's
+    teardown (asserted below).
     """
     current = bindings(name)
     assert current == [current[0]] * 3
-    assert current[0] is not REAL_RUN_COMMAND
+    wrapper = current[0]
+    assert isinstance(getattr(wrapper, "__self__", None), ExternalCallGuard), (
+        "the seam does not carry the external-command guard's wrapper"
+    )
+    assert wrapper.__func__ is ExternalCallGuard.run
     return current
 
 
