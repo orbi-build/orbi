@@ -23,6 +23,7 @@ comments) stay in the runner scene suites
 """
 from orbi import delivery_labels
 from orbi import config as config_domain
+from orbi import failure
 from orbi import language
 
 import ast
@@ -5939,23 +5940,31 @@ def test_run_review_round_human_decision_without_fix_uses_generic_action(
 
 
 @pytest.mark.parametrize("code", ["en", "zh"])
-def test_run_review_round_base_mismatch_gets_the_generic_action(
+def test_run_review_round_base_mismatch_names_both_bases_and_the_ways_out(
         monkeypatch, tmp_path, code,
 ):
-    """Issue #1701 acceptance 3: a base mismatch has no case-specific
-    remedy (the base check reads the scene comment, not the PR) — it gets
-    the generic action in the language while the reason still names both
-    base values."""
+    """Issue #2458 (replacing the #1701 generic remedy): a base mismatch has
+    its own reason code and its own remedy — the reason names both branches
+    and the PR, the action gives the two ways out (put the base back to
+    continue this PR, or close the PR so the Issue is redone from the new
+    base), all in the run's language."""
     text = BLOCKED_REVIEW_TEXT[code]
     body = _blocked_review_body(
         monkeypatch, tmp_path, code, scene_base="develop",
     )
     action = _blocked_line(body, text["action"])
     reason = _blocked_line(body, text["reason"])
-    assert text["generic_action"] in action
-    assert text["close"] in action
-    assert "base_branch=develop" in reason
-    assert "base_branch=main" in reason
+    assert PR_URL in reason
+    assert "develop" in reason and "main" in reason
+    assert PR_URL in action
+    assert "develop" in action and "main" in action
+    assert text["step"] in action
+    assert "`ai-ready`" in action
+    # The generic remedy is gone: this stop knows exactly what to do.
+    assert text["generic_action"] not in action
+    # The machine-readable record names the specific reason, never the
+    # generic human decision.
+    assert failure.parse(body).reason_code == "base_branch_changed"
     # Issue #2351: the headline shows the disposition the record's action
     # asks for — a base change is a human decision, never a ticket edit.
     assert language.text(

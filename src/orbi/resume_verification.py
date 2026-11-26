@@ -30,6 +30,7 @@ from __future__ import annotations
 import json
 import logging
 
+from orbi import base_branch_change
 from orbi import config as config_domain
 from orbi import failure_report
 from orbi import language
@@ -119,21 +120,15 @@ def verify_resumed_pr(resume: run_state.ResumeScene, issue: dict,
         config.repo_dir, source_repo, number, run_id,
     )
     try:
-        if resume.parsed.base_branch != config.base_branch:
-            # A base-branch change is a human
-            # decision: the runner must not auto-retry a PR frozen on
-            # another base, so the handler below marks the Issue
-            # ai-blocked with the explicit reason and both base values
-            # named.
-            raise UnrecoverableDeliveryError(
-                f"resume scene base_branch={resume.parsed.base_branch} "
-                f"differs from configured base_branch="
-                f"{config.base_branch}; the PR is frozen on a "
-                "different base and must not be resumed against the "
-                "configured one — a base change is a human decision, "
-                "so auto-retrying would keep failing on the same "
-                "mismatch"
-            )
+        # A base-branch change is a human
+        # decision: the runner must not auto-retry a PR frozen on
+        # another base, so the handler below marks the Issue ai-blocked
+        # with the explicit reason and both base values named. The check
+        # and its own `base_branch_changed` reason live in ONE place,
+        # shared with the review round (Issue #2458).
+        base_branch_change.require_scene_base(
+            resume.parsed.base_branch, config.base_branch,
+        )
         if not worktree.is_dir():
             # The worktree is a local cache of the remote
             # delivery state (the branch and the PR live on GitHub), so
@@ -253,22 +248,33 @@ def verify_resumed_pr(resume: run_state.ResumeScene, issue: dict,
             # marker and the progress publishing is skipped, whatever
             # the recovered scene says.
             lang = language.of(config)
-            failure_report.report_delivery_failure(
-                exc, issue=issue, source_repo=source_repo,
-                run_id=current_run_id(), pr_url=resume.parsed.pr_url,
-                worktree=worktree, branch=branch, role=ROLE_REVIEW,
-                language_code=lang, status_url=config.status_url, milestone=config.active_milestone,
-                ready_label=delivery_labels.queue_label(config.dispatch_label), action=(
+            if isinstance(exc, base_branch_change.SceneBaseBranchChanged):
+                # Issue #2458: the stop that knows its own reason reads it
+                # in the run's language — both branches, the PR and the two
+                # ways out — instead of the internal English mismatch line.
+                action, reason = base_branch_change.wording(
+                    exc, lang, pr_url=resume.parsed.pr_url,
+                )
+            else:
+                action = (
                     language.text(lang, "delivery.resume_missing_fixes_action",
                                   pr_url=resume.parsed.pr_url, number=number)
                     if isinstance(exc, MissingFixesError)
                     else language.text(lang, "delivery.resume_review_pr_action")
                     if isinstance(exc, UnrecoverableDeliveryError) else ""
-                ),
-                reason=language.text(
+                )
+                reason = language.text(
                     lang, "delivery.resume_verify_reason",
                     pr_url=resume.parsed.pr_url, detail=failure_detail(exc),
-                ),
+                )
+            failure_report.report_delivery_failure(
+                exc, issue=issue, source_repo=source_repo,
+                run_id=current_run_id(), pr_url=resume.parsed.pr_url,
+                worktree=worktree, branch=branch, role=ROLE_REVIEW,
+                language_code=lang, status_url=config.status_url, milestone=config.active_milestone,
+                ready_label=delivery_labels.queue_label(config.dispatch_label),
+                action=action,
+                reason=reason,
                 diagnosis=failure_detail(exc),
                 # The branch-gone scene destroyed the
                 # delivery state — nothing is left to preserve, and the

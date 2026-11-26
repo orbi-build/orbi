@@ -72,6 +72,7 @@ def test_reason_and_action_codes_are_closed_sets_with_expected_members():
         "provider_balance",
         "provider_quota",
         "base_branch_missing",
+        "base_branch_changed",
         "base_ci_red",
         "checks_permission_missing",
         "release_failed",
@@ -528,10 +529,11 @@ def test_every_retry_unsafe_stop_words_its_own_action(reason_code):
     assert failure.parse(body) == record
 
 
-def test_the_thirteen_retry_unsafe_codes_are_covered():
+def test_the_fourteen_retry_unsafe_codes_are_covered():
     """The twelve codes of Issue #2351 plus `attachment_unavailable`
-    (Issue #2364): the table above must not silently shrink to a subset."""
-    assert len(RETRY_UNSAFE) == 13
+    (Issue #2364) and `base_branch_changed` (Issue #2458): the table above
+    must not silently shrink to a subset."""
+    assert len(RETRY_UNSAFE) == 14
 
 
 def test_two_reasons_with_the_same_action_get_the_same_wording():

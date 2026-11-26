@@ -69,6 +69,10 @@ REASON_CODES = frozenset({
     # The configured base branch does not exist in the repository
     # (Issue #1749): a repository/config precondition a human repairs.
     "base_branch_missing",
+    # The repository's base branch changed while the PR was in review
+    # (Issue #2458): the PR is frozen on the base it was opened against, so
+    # a human decides whether to put the base back or redo the Issue.
+    "base_branch_changed",
     # The delivery check that failed on the PR head is ALSO failing on the
     # base (Issue #1825): not `retry_safe` (a requeue hits the same red base),
     # but `base_ci_fix.recover` resumes the SAME delivery once it is green.
@@ -315,6 +319,7 @@ DISPOSITIONS: dict[str, tuple[str, bool]] = {
     "provider_balance": (provider_balance.ACTION_CODE, False),
     "provider_quota": ("wait_quota", True),
     "base_branch_missing": ("fix_ticket", False),
+    "base_branch_changed": ("decide", False),
     "base_ci_red": ("fix_ticket", False),
     "checks_permission_missing": ("check_credentials", False),
     "release_failed": ("fix_ticket", False),
