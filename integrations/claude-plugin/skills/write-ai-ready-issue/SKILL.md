@@ -19,6 +19,12 @@ the route before writing).
 
 ## Fidelity comes first
 
+- Every heading is in the person's language. A section heading is written in
+  the person's language, the same language as the body around it: one body
+  never mixes a heading in one language with a heading in another. The English
+  section names (`Not included (suggestions)`, `Assumptions` and the rest)
+  name a section; they are never the heading text to copy into a body written
+  in another language.
 - The User outcome restates the request in observable terms: what happens, for
   whom, when. It never grows the request.
 - Acceptance holds only the requested behaviour, plus at most one failure path
