@@ -10,13 +10,18 @@ default. The preflight tests and the wiring/e2e suites stub or
 exercise the real checks explicitly (a ``monkeypatch`` always wins
 over this default).
 """
+import os
+import shlex
+import shutil
 import subprocess
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 import orbi.journal as journal
 import orbi.runner as runner
+from external_guard import ExternalCallGuard
 from seam import seam
 
 
@@ -62,6 +67,86 @@ def git(repo: Path, *args: str) -> str:
             f"stdout={result.stdout.strip()} stderr={result.stderr.strip()}"
         )
     return result.stdout.strip()
+
+
+@pytest.fixture(scope="session", autouse=True)
+def offline_external_sentinel(tmp_path_factory):
+    """An offline `gh` on PATH under a private HOME (Issue #2253).
+
+    The seam guard refuses an unstubbed call before any process starts, but a
+    bypass that calls `subprocess.run(["gh", ...])` directly would skip it.
+    This sentinel owns the `gh` name for the whole session: a bypass runs a
+    script that records its argv and exits 127, and the session fails when the
+    log is non-empty. The private HOME means even an absolute-path bypass of
+    that name finds no stored login.
+
+    Tests that install their own fake executables prepend their directory to
+    `os.environ["PATH"]`, so their fake still wins over this one.
+    """
+    patch = pytest.MonkeyPatch()
+    bin_dir = tmp_path_factory.mktemp("offline-bin")
+    home = tmp_path_factory.mktemp("offline-home")
+    log = bin_dir.parent / "external-calls.log"
+    gh = bin_dir / "gh"
+    gh.write_text(
+        "#!/bin/sh\n"
+        f"printf '%s\\n' \"$*\" >> {shlex.quote(str(log))}\n"
+        "exit 127\n",
+        encoding="utf-8",
+    )
+    gh.chmod(0o755)
+    # The private HOME carries no gh config, so even an absolute-path bypass
+    # of the sentinel name finds no stored login. The systemd template tests
+    # verify the unit against the installed CLI at ~/.local/bin/orbi, so the
+    # private HOME mirrors that one executable (Issue #2253).
+    installed = shutil.which("orbi")
+    if installed is not None:
+        link = home / ".local" / "bin" / "orbi"
+        link.parent.mkdir(parents=True)
+        link.symlink_to(installed)
+    patch.setenv(
+        "PATH", f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}",
+    )
+    patch.setenv("HOME", str(home))
+    yield SimpleNamespace(bin_dir=bin_dir, home=home, log=log, gh=gh)
+    patch.undo()
+    if log.exists() and log.read_text(encoding="utf-8").strip():
+        pytest.fail(
+            "the test suite bypassed the subprocess seam and started the "
+            f"offline `gh` sentinel:\n{log.read_text(encoding='utf-8')}",
+            pytrace=False,
+        )
+
+
+@pytest.fixture(autouse=True)
+def _refuse_unstubbed_external_commands(monkeypatch, tmp_path_factory):
+    """Refuse an unstubbed `gh`/network Git call at the seam (Issue #2253).
+
+    Every GitHub read and write funnels through `orbi.journal.run_command`;
+    so does every network Git operation. This autouse fixture wraps that one
+    seam for each test, so a test whose stub no longer matches the call path
+    (or a test that never stubbed a read) fails with the command named and no
+    process started. The teardown check catches a call the code under test
+    swallowed, which would otherwise let the test pass.
+    """
+    guard = ExternalCallGuard(
+        seam.run_command, temp_root=tmp_path_factory.getbasetemp(),
+    )
+    monkeypatch.setattr(seam, "run_command", guard.run)
+    yield guard
+    guard.assert_no_unexpected_calls()
+
+
+@pytest.fixture
+def allow_external_commands(_refuse_unstubbed_external_commands):
+    """Opt one test into real process execution (Issue #2253).
+
+    Only a test that exercises the subprocess boundary itself — a fake
+    executable on PATH, a local bare repository — uses this. A test that
+    merely forgot to stub the read/write under test must fail instead.
+    """
+    with _refuse_unstubbed_external_commands.allowed():
+        yield
 
 
 @pytest.fixture(autouse=True)

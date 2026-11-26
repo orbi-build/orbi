@@ -26,8 +26,8 @@ from orbi import git_transport
 
 
 def test_ssh_url_for_builds_the_github_ssh_url():
-    assert git_transport.ssh_url_for("xqliu/orbi") == (
-        "git@github.com:xqliu/orbi.git"
+    assert git_transport.ssh_url_for("owner.invalid/repo") == (
+        "git@github.com:owner.invalid/repo.git"
     )
 
 
@@ -45,15 +45,15 @@ def test_ssh_url_for_rejects_an_empty_segment():
 
 def test_ssh_url_for_rejects_an_extra_slash():
     with pytest.raises(git_transport.TransportError, match="malformed"):
-        git_transport.ssh_url_for("xqliu/orbi/pilot")
+        git_transport.ssh_url_for("owner.invalid/repo/pilot")
 
 
 # --- https_url_for (Issue #580) -----------------------------------------------
 
 
 def test_https_url_for_builds_the_github_https_url():
-    assert git_transport.https_url_for("xqliu/orbi") == (
-        "https://github.com/xqliu/orbi.git"
+    assert git_transport.https_url_for("owner.invalid/repo") == (
+        "https://github.com/owner.invalid/repo.git"
     )
 
 
@@ -61,7 +61,7 @@ def test_https_url_for_rejects_a_malformed_repo():
     with pytest.raises(git_transport.TransportError, match="malformed"):
         git_transport.https_url_for("orbi")
     with pytest.raises(git_transport.TransportError, match="malformed"):
-        git_transport.https_url_for("xqliu/orbi/pilot")
+        git_transport.https_url_for("owner.invalid/repo/pilot")
 
 
 # --- remote_protocol ---------------------------------------------------------
@@ -69,25 +69,25 @@ def test_https_url_for_rejects_a_malformed_repo():
 
 def test_remote_protocol_classifies_ssh_scp_style():
     assert git_transport.remote_protocol(
-        "git@github.com:xqliu/orbi.git"
+        "git@github.com:owner.invalid/repo.git"
     ) == "ssh"
 
 
 def test_remote_protocol_classifies_ssh_scheme():
     assert git_transport.remote_protocol(
-        "ssh://git@github.com/xqliu/orbi.git"
+        "ssh://git@github.com/owner.invalid/repo.git"
     ) == "ssh"
 
 
 def test_remote_protocol_classifies_https():
     assert git_transport.remote_protocol(
-        "https://github.com/xqliu/orbi.git"
+        "https://github.com/owner.invalid/repo.git"
     ) == "https"
 
 
 def test_remote_protocol_classifies_http():
     assert git_transport.remote_protocol(
-        "http://github.com/xqliu/orbi.git"
+        "http://github.com/owner.invalid/repo.git"
     ) == "http"
 
 
@@ -113,7 +113,7 @@ def ok_run_factory(state: dict):
                     1, command, stderr="",
                 )
             return state.get("origin_url",
-                             "git@github.com:xqliu/orbi.git")
+                             "git@github.com:owner.invalid/repo.git")
         if command[:2] == ["git", "ls-remote"]:
             if state.get("ssh_down"):
                 raise subprocess.CalledProcessError(
@@ -134,13 +134,13 @@ def test_check_transport_passes_for_a_matching_ssh_remote(tmp_path):
     state = {}
     fake_run, calls, _ = ok_run_factory(state)
     result = git_transport.check_transport(
-        tmp_path, ["xqliu/orbi"], run_command=fake_run,
+        tmp_path, ["owner.invalid/repo"], run_command=fake_run,
     )
     assert result == {
         "remote": "origin",
         "protocol": "ssh",
-        "url": "git@github.com:xqliu/orbi.git",
-        "expected": "git@github.com:xqliu/orbi.git",
+        "url": "git@github.com:owner.invalid/repo.git",
+        "expected": "git@github.com:owner.invalid/repo.git",
         "migrated": False,
         "ssh_reachable": True,
         "transport_reachable": True,
@@ -148,23 +148,23 @@ def test_check_transport_passes_for_a_matching_ssh_remote(tmp_path):
     # Read-only: no set-url, one probe of the exact SSH URL.
     assert [c for c in calls if c[:3] == ["git", "remote", "set-url"]] == []
     assert [
-        "git", "ls-remote", "git@github.com:xqliu/orbi.git",
+        "git", "ls-remote", "git@github.com:owner.invalid/repo.git",
     ] in calls
 
 
 def test_check_transport_accepts_an_ssh_url_without_the_dot_git_suffix(
     tmp_path,
 ):
-    state = {"origin_url": "git@github.com:xqliu/orbi"}
+    state = {"origin_url": "git@github.com:owner.invalid/repo"}
     fake_run, calls, _ = ok_run_factory(state)
     result = git_transport.check_transport(
-        tmp_path, ["xqliu/orbi"], run_command=fake_run,
+        tmp_path, ["owner.invalid/repo"], run_command=fake_run,
     )
     assert result["protocol"] == "ssh"
     assert result["ssh_reachable"] is True
     # The probe uses the normalized .git form.
     assert [
-        "git", "ls-remote", "git@github.com:xqliu/orbi.git",
+        "git", "ls-remote", "git@github.com:owner.invalid/repo.git",
     ] in calls
 
 
@@ -179,13 +179,13 @@ def test_check_transport_fails_fast_on_a_missing_origin(tmp_path):
         git_transport.TransportError, match="no origin remote",
     ) as error:
         git_transport.check_transport(
-            tmp_path, ["xqliu/orbi"], run_command=fake_run,
+            tmp_path, ["owner.invalid/repo"], run_command=fake_run,
         )
     message = str(error.value)
-    assert "xqliu/orbi" in message
+    assert "owner.invalid/repo" in message
     assert (
         f"git -C {tmp_path} remote add origin "
-        "git@github.com:xqliu/orbi.git" in message
+        "git@github.com:owner.invalid/repo.git" in message
     )
     assert "git clone" not in message
     # No probe, no migration after the missing remote.
@@ -201,11 +201,11 @@ def test_check_transport_suggests_a_clone_for_an_empty_repo_dir(tmp_path):
         git_transport.TransportError, match="no origin remote",
     ) as error:
         git_transport.check_transport(
-            tmp_path, ["xqliu/orbi"], run_command=fake_run,
+            tmp_path, ["owner.invalid/repo"], run_command=fake_run,
         )
     message = str(error.value)
     assert (
-        f"git clone git@github.com:xqliu/orbi.git {tmp_path}" in message
+        f"git clone git@github.com:owner.invalid/repo.git {tmp_path}" in message
     )
     assert "remote add origin" not in message
 
@@ -214,18 +214,18 @@ def test_check_transport_diagnoses_an_https_remote_without_migrating(
     tmp_path,
 ):
     state = {
-        "origin_url": "https://github.com/xqliu/orbi.git",
+        "origin_url": "https://github.com/owner.invalid/repo.git",
     }
     fake_run, calls, _ = ok_run_factory(state)
     with pytest.raises(git_transport.TransportError, match="HTTPS") as exc:
         git_transport.check_transport(
-            tmp_path, ["xqliu/orbi"], run_command=fake_run,
+            tmp_path, ["owner.invalid/repo"], run_command=fake_run,
         )
     message = str(exc.value)
     # The failure carries the exact migration command and the setup
     # entry that performs it — never a silent rewrite, never a remote
     # read from a comment or Issue.
-    assert "git remote set-url origin git@github.com:xqliu/orbi.git" in message
+    assert "git remote set-url origin git@github.com:owner.invalid/repo.git" in message
     assert "orbi setup" in message
     assert [c for c in calls if c[:3] == ["git", "remote", "set-url"]] == []
     # No HTTPS fallback: no ls-remote of the HTTPS URL either.
@@ -233,18 +233,18 @@ def test_check_transport_diagnoses_an_https_remote_without_migrating(
 
 
 def test_check_transport_migrates_an_https_remote_when_authorized(tmp_path):
-    state = {"origin_url": "https://github.com/xqliu/orbi.git"}
+    state = {"origin_url": "https://github.com/owner.invalid/repo.git"}
     fake_run, calls, _ = ok_run_factory(state)
     result = git_transport.check_transport(
-        tmp_path, ["xqliu/orbi"],
+        tmp_path, ["owner.invalid/repo"],
         run_command=fake_run, migrate=True,
     )
     assert result["protocol"] == "ssh"
     assert result["migrated"] is True
-    assert result["url"] == "git@github.com:xqliu/orbi.git"
+    assert result["url"] == "git@github.com:owner.invalid/repo.git"
     assert result["ssh_reachable"] is True
     assert state["migrations"] == [
-        "git@github.com:xqliu/orbi.git",
+        "git@github.com:owner.invalid/repo.git",
     ]
 
 
@@ -255,22 +255,22 @@ def test_check_transport_fails_fast_on_an_ssh_repo_mismatch(tmp_path):
         git_transport.TransportError, match="mismatch",
     ) as exc:
         git_transport.check_transport(
-            tmp_path, ["xqliu/orbi"], run_command=fake_run,
+            tmp_path, ["owner.invalid/repo"], run_command=fake_run,
         )
     message = str(exc.value)
     assert "git@github.com:other/repo.git" in message
-    assert "git@github.com:xqliu/orbi.git" in message
+    assert "git@github.com:owner.invalid/repo.git" in message
     # A mismatching remote is not probed and not migrated.
     assert [c for c in calls if c[:2] == ["git", "ls-remote"]] == []
     assert [c for c in calls if c[:3] == ["git", "remote", "set-url"]] == []
 
 
 def test_check_transport_fails_fast_on_an_unsupported_protocol(tmp_path):
-    state = {"origin_url": "http://github.com/xqliu/orbi.git"}
+    state = {"origin_url": "http://github.com/owner.invalid/repo.git"}
     fake_run, calls, _ = ok_run_factory(state)
     with pytest.raises(git_transport.TransportError, match="http"):
         git_transport.check_transport(
-            tmp_path, ["xqliu/orbi"], run_command=fake_run,
+            tmp_path, ["owner.invalid/repo"], run_command=fake_run,
         )
 
 
@@ -281,11 +281,11 @@ def test_check_transport_fails_fast_when_ssh_is_unreachable(tmp_path):
         git_transport.TransportError, match="ssh_unreachable",
     ) as exc:
         git_transport.check_transport(
-            tmp_path, ["xqliu/orbi"], run_command=fake_run,
+            tmp_path, ["owner.invalid/repo"], run_command=fake_run,
         )
     message = str(exc.value)
     # The structured scene: the exact probe command and the git stderr.
-    assert "git ls-remote git@github.com:xqliu/orbi.git" in message
+    assert "git ls-remote git@github.com:owner.invalid/repo.git" in message
     assert "Permission denied (publickey)" in message
     # No HTTPS fallback: the probe is never retried over HTTPS.
     probes = [c for c in calls if c[:2] == ["git", "ls-remote"]]
@@ -297,7 +297,7 @@ def test_check_transport_skips_the_probe_when_disabled(tmp_path):
     state = {}
     fake_run, calls, _ = ok_run_factory(state)
     result = git_transport.check_transport(
-        tmp_path, ["xqliu/orbi"],
+        tmp_path, ["owner.invalid/repo"],
         run_command=fake_run, probe=False,
     )
     assert result["ssh_reachable"] is None
@@ -320,11 +320,11 @@ def test_check_transport_uses_the_first_configured_source_repo(tmp_path):
     state = {}
     fake_run, calls, _ = ok_run_factory(state)
     git_transport.check_transport(
-        tmp_path, ["xqliu/orbi", "xqliu/orbi-backlog"],
+        tmp_path, ["owner.invalid/repo", "owner.invalid/repo-backlog"],
         run_command=fake_run,
     )
     assert [
-        "git", "ls-remote", "git@github.com:xqliu/orbi.git",
+        "git", "ls-remote", "git@github.com:owner.invalid/repo.git",
     ] in calls
 
 
@@ -332,16 +332,16 @@ def test_check_transport_accepts_an_ssh_scheme_url(tmp_path):
     """Both SSH forms are the same transport: the `ssh://` scheme URL
     matches the expected repo and is probed in the normalized SCP form."""
     state = {
-        "origin_url": "ssh://git@github.com/xqliu/orbi.git",
+        "origin_url": "ssh://git@github.com/owner.invalid/repo.git",
     }
     fake_run, calls, _ = ok_run_factory(state)
     result = git_transport.check_transport(
-        tmp_path, ["xqliu/orbi"], run_command=fake_run,
+        tmp_path, ["owner.invalid/repo"], run_command=fake_run,
     )
     assert result["protocol"] == "ssh"
     assert result["ssh_reachable"] is True
     assert [
-        "git", "ls-remote", "git@github.com:xqliu/orbi.git",
+        "git", "ls-remote", "git@github.com:owner.invalid/repo.git",
     ] in calls
 
 
@@ -358,12 +358,12 @@ def test_check_transport_fails_fast_on_a_generic_config_error(tmp_path):
         git_transport.TransportError, match="no origin remote",
     ) as error:
         git_transport.check_transport(
-            tmp_path, ["xqliu/orbi"], run_command=fake_run,
+            tmp_path, ["owner.invalid/repo"], run_command=fake_run,
         )
     message = str(error.value)
     assert (
         f"git -C {tmp_path} remote add origin "
-        "git@github.com:xqliu/orbi.git" in message
+        "git@github.com:owner.invalid/repo.git" in message
     )
     assert "git clone" not in message
 
@@ -373,17 +373,17 @@ def test_repair_commands_quote_a_repo_dir_with_a_space(tmp_path):
     `shlex.split` yields a spaced path as one argument."""
     repo_dir = tmp_path / "Orbi Work" / "repo"
     clone = shlex.split(
-        git_transport.clone_command("xqliu/orbi", repo_dir)
+        git_transport.clone_command("owner.invalid/repo", repo_dir)
     )
     assert clone == [
-        "git", "clone", "git@github.com:xqliu/orbi.git", str(repo_dir),
+        "git", "clone", "git@github.com:owner.invalid/repo.git", str(repo_dir),
     ]
     add_origin = shlex.split(
-        git_transport.origin_add_command("xqliu/orbi", repo_dir)
+        git_transport.origin_add_command("owner.invalid/repo", repo_dir)
     )
     assert add_origin == [
         "git", "-C", str(repo_dir), "remote", "add", "origin",
-        "git@github.com:xqliu/orbi.git",
+        "git@github.com:owner.invalid/repo.git",
     ]
     fetch_checkout = shlex.split(
         git_transport.fetch_checkout_command(repo_dir, "main")
@@ -400,17 +400,17 @@ def test_check_transport_reports_a_probe_failure_without_stderr(tmp_path):
     never incomplete."""
     def fake_run(command, **kwargs):
         if command[:2] == ["git", "config"]:
-            return "git@github.com:xqliu/orbi.git"
+            return "git@github.com:owner.invalid/repo.git"
         raise subprocess.CalledProcessError(128, command)
 
     with pytest.raises(
         git_transport.TransportError, match="ssh_unreachable",
     ) as exc:
         git_transport.check_transport(
-            tmp_path, ["xqliu/orbi"], run_command=fake_run,
+            tmp_path, ["owner.invalid/repo"], run_command=fake_run,
         )
     message = str(exc.value)
-    assert "git ls-remote git@github.com:xqliu/orbi.git" in message
+    assert "git ls-remote git@github.com:owner.invalid/repo.git" in message
     assert "stderr=" not in message
 
 
@@ -419,14 +419,14 @@ def test_check_transport_fails_fast_on_a_generic_probe_error(tmp_path):
     fast as ssh_unreachable — no HTTPS fallback."""
     def fake_run(command, **kwargs):
         if command[:2] == ["git", "config"]:
-            return "git@github.com:xqliu/orbi.git"
+            return "git@github.com:owner.invalid/repo.git"
         raise OSError("spawn failed")
 
     with pytest.raises(
         git_transport.TransportError, match="ssh_unreachable",
     ) as exc:
         git_transport.check_transport(
-            tmp_path, ["xqliu/orbi"], run_command=fake_run,
+            tmp_path, ["owner.invalid/repo"], run_command=fake_run,
         )
     assert "spawn failed" in str(exc.value)
 
@@ -442,17 +442,17 @@ def test_remote_repo_path_extracts_the_repo_from_every_github_form():
     http) yield the `owner/name` path; the optional `.git` suffix is
     stripped."""
     assert git_transport._remote_repo_path(
-        "git@github.com:xqliu/orbi"
-    ) == "xqliu/orbi"
+        "git@github.com:owner.invalid/repo"
+    ) == "owner.invalid/repo"
     assert git_transport._remote_repo_path(
-        "ssh://git@github.com/xqliu/orbi.git"
-    ) == "xqliu/orbi"
+        "ssh://git@github.com/owner.invalid/repo.git"
+    ) == "owner.invalid/repo"
     assert git_transport._remote_repo_path(
-        "https://github.com/xqliu/orbi.git"
-    ) == "xqliu/orbi"
+        "https://github.com/owner.invalid/repo.git"
+    ) == "owner.invalid/repo"
     assert git_transport._remote_repo_path(
-        "http://github.com/xqliu/orbi"
-    ) == "xqliu/orbi"
+        "http://github.com/owner.invalid/repo"
+    ) == "owner.invalid/repo"
 
 
 def test_remote_repo_path_returns_none_for_a_non_github_url():
@@ -485,12 +485,12 @@ def test_check_transport_never_migrates_a_remote_pointing_at_a_different_repo(
         git_transport.TransportError, match="mismatch",
     ) as exc:
         git_transport.check_transport(
-            tmp_path, ["xqliu/orbi"],
+            tmp_path, ["owner.invalid/repo"],
             run_command=fake_run, migrate=True,
         )
     message = str(exc.value)
     assert "https://github.com/other/repo.git" in message
-    assert "git@github.com:xqliu/orbi.git" in message
+    assert "git@github.com:owner.invalid/repo.git" in message
     # No rewrite of the mismatching remote, no probe.
     assert [c for c in calls if c[:3] == ["git", "remote", "set-url"]] == []
     assert [c for c in calls if c[:2] == ["git", "ls-remote"]] == []
@@ -507,7 +507,7 @@ def test_check_transport_never_migrates_a_non_github_remote(tmp_path):
         git_transport.TransportError, match="mismatch",
     ) as exc:
         git_transport.check_transport(
-            tmp_path, ["xqliu/orbi"],
+            tmp_path, ["owner.invalid/repo"],
             run_command=fake_run, migrate=True,
         )
     assert "repo=None" in str(exc.value)
@@ -522,17 +522,17 @@ def test_check_transport_https_passes_for_a_matching_https_remote(tmp_path):
     no SSH requirement, no rewrite; the probe is
     `git ls-remote <https-url>` (credentials via the gh credential
     helper)."""
-    state = {"origin_url": "https://github.com/xqliu/orbi.git"}
+    state = {"origin_url": "https://github.com/owner.invalid/repo.git"}
     fake_run, calls, _ = ok_run_factory(state)
     result = git_transport.check_transport(
-        tmp_path, ["xqliu/orbi"],
+        tmp_path, ["owner.invalid/repo"],
         run_command=fake_run, mode="https",
     )
     assert result == {
         "remote": "origin",
         "protocol": "https",
-        "url": "https://github.com/xqliu/orbi.git",
-        "expected": "https://github.com/xqliu/orbi.git",
+        "url": "https://github.com/owner.invalid/repo.git",
+        "expected": "https://github.com/owner.invalid/repo.git",
         "migrated": False,
         "ssh_reachable": None,
         "transport_reachable": True,
@@ -541,7 +541,7 @@ def test_check_transport_https_passes_for_a_matching_https_remote(tmp_path):
     # HTTPS URL.
     assert [c for c in calls if c[:3] == ["git", "remote", "set-url"]] == []
     assert [
-        "git", "ls-remote", "https://github.com/xqliu/orbi.git",
+        "git", "ls-remote", "https://github.com/owner.invalid/repo.git",
     ] in calls
     assert [c for c in calls if c[2].startswith("git@github.com:")] == []
 
@@ -552,21 +552,21 @@ def test_check_transport_https_migrates_an_ssh_remote_when_authorized(
     """Issue #580: setup (the human-run entry) migrates symmetrically —
     in https mode an SSH `origin` is rewritten to the HTTPS URL of the
     first configured source repo."""
-    state = {"origin_url": "git@github.com:xqliu/orbi.git"}
+    state = {"origin_url": "git@github.com:owner.invalid/repo.git"}
     fake_run, calls, _ = ok_run_factory(state)
     result = git_transport.check_transport(
-        tmp_path, ["xqliu/orbi"],
+        tmp_path, ["owner.invalid/repo"],
         run_command=fake_run, migrate=True, mode="https",
     )
     assert result["protocol"] == "https"
     assert result["migrated"] is True
-    assert result["url"] == "https://github.com/xqliu/orbi.git"
+    assert result["url"] == "https://github.com/owner.invalid/repo.git"
     assert result["transport_reachable"] is True
     assert result["ssh_reachable"] is None
-    assert state["migrations"] == ["https://github.com/xqliu/orbi.git"]
+    assert state["migrations"] == ["https://github.com/owner.invalid/repo.git"]
     # The probe runs against the HTTPS URL (after the migration).
     assert [
-        "git", "ls-remote", "https://github.com/xqliu/orbi.git",
+        "git", "ls-remote", "https://github.com/owner.invalid/repo.git",
     ] in calls
 
 
@@ -576,16 +576,16 @@ def test_check_transport_https_fails_fast_on_an_ssh_remote_without_migrating(
     """Issue #580: outside setup an SSH origin is never rewritten — the
     failure carries the exact HTTPS migration command and the setup
     entry, and nothing is probed."""
-    state = {"origin_url": "git@github.com:xqliu/orbi.git"}
+    state = {"origin_url": "git@github.com:owner.invalid/repo.git"}
     fake_run, calls, _ = ok_run_factory(state)
     with pytest.raises(git_transport.TransportError, match="SSH") as exc:
         git_transport.check_transport(
-            tmp_path, ["xqliu/orbi"],
+            tmp_path, ["owner.invalid/repo"],
             run_command=fake_run, mode="https",
         )
     message = str(exc.value)
     assert (
-        "git remote set-url origin https://github.com/xqliu/orbi.git"
+        "git remote set-url origin https://github.com/owner.invalid/repo.git"
     ) in message
     assert "orbi setup" in message
     assert [c for c in calls if c[:3] == ["git", "remote", "set-url"]] == []
@@ -597,7 +597,7 @@ def test_check_transport_https_fails_fast_when_the_probe_fails(tmp_path):
     with the structured `transport_unreachable` reason — the exact
     probe command and git stderr, never a fallback probe."""
     state = {
-        "origin_url": "https://github.com/xqliu/orbi.git",
+        "origin_url": "https://github.com/owner.invalid/repo.git",
         "ssh_down": True,
     }
     fake_run, calls, _ = ok_run_factory(state)
@@ -605,11 +605,11 @@ def test_check_transport_https_fails_fast_when_the_probe_fails(tmp_path):
         git_transport.TransportError, match="transport_unreachable",
     ) as exc:
         git_transport.check_transport(
-            tmp_path, ["xqliu/orbi"],
+            tmp_path, ["owner.invalid/repo"],
             run_command=fake_run, mode="https",
         )
     message = str(exc.value)
-    assert "git ls-remote https://github.com/xqliu/orbi.git" in message
+    assert "git ls-remote https://github.com/owner.invalid/repo.git" in message
     assert "Permission denied (publickey)" in message
     # The credential fix hint: the transport authenticates via the gh
     # credential helper.
@@ -617,15 +617,15 @@ def test_check_transport_https_fails_fast_when_the_probe_fails(tmp_path):
     # Exactly one probe, of the HTTPS URL — no SSH fallback.
     probes = [c for c in calls if c[:2] == ["git", "ls-remote"]]
     assert probes == [
-        ["git", "ls-remote", "https://github.com/xqliu/orbi.git"],
+        ["git", "ls-remote", "https://github.com/owner.invalid/repo.git"],
     ]
 
 
 def test_check_transport_https_skips_the_probe_when_disabled(tmp_path):
-    state = {"origin_url": "https://github.com/xqliu/orbi.git"}
+    state = {"origin_url": "https://github.com/owner.invalid/repo.git"}
     fake_run, calls, _ = ok_run_factory(state)
     result = git_transport.check_transport(
-        tmp_path, ["xqliu/orbi"],
+        tmp_path, ["owner.invalid/repo"],
         run_command=fake_run, probe=False, mode="https",
     )
     assert result["transport_reachable"] is None
@@ -643,27 +643,27 @@ def test_check_transport_https_still_fails_fast_on_a_repo_mismatch(tmp_path):
         git_transport.TransportError, match="mismatch",
     ) as exc:
         git_transport.check_transport(
-            tmp_path, ["xqliu/orbi"],
+            tmp_path, ["owner.invalid/repo"],
             run_command=fake_run, mode="https",
         )
     message = str(exc.value)
     assert "https://github.com/other/repo.git" in message
-    assert "https://github.com/xqliu/orbi.git" in message
+    assert "https://github.com/owner.invalid/repo.git" in message
     assert [c for c in calls if c[:3] == ["git", "remote", "set-url"]] == []
     assert [c for c in calls if c[:2] == ["git", "ls-remote"]] == []
 
 
 def test_check_transport_https_rejects_an_http_remote(tmp_path):
-    state = {"origin_url": "http://github.com/xqliu/orbi.git"}
+    state = {"origin_url": "http://github.com/owner.invalid/repo.git"}
     fake_run, calls, _ = ok_run_factory(state)
     with pytest.raises(
         git_transport.TransportError, match="git_transport",
     ) as exc:
         git_transport.check_transport(
-            tmp_path, ["xqliu/orbi"],
+            tmp_path, ["owner.invalid/repo"],
             run_command=fake_run, mode="https",
         )
-    assert "https://github.com/xqliu/orbi.git" in str(exc.value)
+    assert "https://github.com/owner.invalid/repo.git" in str(exc.value)
 
 
 def test_check_transport_rejects_an_unknown_mode(tmp_path):
@@ -672,7 +672,7 @@ def test_check_transport_rejects_an_unknown_mode(tmp_path):
         git_transport.TransportError, match="git_transport",
     ) as exc:
         git_transport.check_transport(
-            tmp_path, ["xqliu/orbi"],
+            tmp_path, ["owner.invalid/repo"],
             run_command=fake_run, mode="gopher",
         )
     assert "'ssh' or 'https'" in str(exc.value)
@@ -701,7 +701,7 @@ def test_real_worktree_inherits_the_checkout_origin_remote(tmp_path):
     git(clone, "commit", "--allow-empty", "-m", "first")
     # The checkout's origin is a local path (the stand-in for the
     # remote); the transport is configured by rewriting it.
-    ssh_style = "git@github.com:xqliu/orbi.git"
+    ssh_style = "git@github.com:owner.invalid/repo.git"
     git(clone, "remote", "set-url", "origin", ssh_style)
     assert git(clone, "remote", "get-url", "origin") == ssh_style
     worktree = tmp_path / "wt"
@@ -735,7 +735,7 @@ def test_real_workflow_file_push_goes_over_the_ssh_transport(tmp_path):
     git(clone, "commit", "--allow-empty", "-m", "first")
     # The transport: SSH URL on the remote, local data plane (the
     # e2e mechanism, git-config(1) `url.<base>.insteadOf`).
-    ssh_style = "git@github.com:xqliu/orbi.git"
+    ssh_style = "git@github.com:owner.invalid/repo.git"
     git(clone, "remote", "set-url", "origin", ssh_style)
     git(clone, "config", f"url.{origin}.insteadOf", ssh_style)
     worktree = tmp_path / "wt"
@@ -779,7 +779,7 @@ def test_real_https_mode_checkout_and_worktree_delivery_without_ssh(tmp_path):
     git(clone, "config", "user.name", "Pilot")
     git(clone, "commit", "--allow-empty", "-m", "first")
     # The transport: HTTPS URL on the remote, local data plane.
-    https_style = "https://github.com/xqliu/orbi.git"
+    https_style = "https://github.com/owner.invalid/repo.git"
     git(clone, "remote", "set-url", "origin", https_style)
     git(clone, "config", f"url.{origin}.insteadOf", https_style)
 
@@ -799,7 +799,7 @@ def test_real_https_mode_checkout_and_worktree_delivery_without_ssh(tmp_path):
         run_command(["git", "rev-parse", "no-such-ref"], clone)
 
     result = git_transport.check_transport(
-        clone, ["xqliu/orbi"], run_command=run_command, mode="https",
+        clone, ["owner.invalid/repo"], run_command=run_command, mode="https",
     )
     assert result["protocol"] == "https"
     assert result["migrated"] is False
@@ -836,7 +836,7 @@ def test_real_set_url_migration_rewrites_only_the_origin_remote(tmp_path):
     git(clone, "config", "user.email", "pilot@test.local")
     git(clone, "config", "user.name", "Pilot")
     git(clone, "commit", "--allow-empty", "-m", "first")
-    https_style = "https://github.com/xqliu/orbi.git"
+    https_style = "https://github.com/owner.invalid/repo.git"
     git(clone, "remote", "set-url", "origin", https_style)
     assert git(clone, "remote", "get-url", "origin") == https_style
     assert git_transport.remote_protocol(
@@ -844,9 +844,9 @@ def test_real_set_url_migration_rewrites_only_the_origin_remote(tmp_path):
     ) == "https"
     # The migration (the exact command the failure message reports).
     git(clone, "remote", "set-url", "origin",
-        "git@github.com:xqliu/orbi.git")
+        "git@github.com:owner.invalid/repo.git")
     assert git(clone, "remote", "get-url", "origin") == (
-        "git@github.com:xqliu/orbi.git"
+        "git@github.com:owner.invalid/repo.git"
     )
     assert git_transport.remote_protocol(
         git(clone, "remote", "get-url", "origin")

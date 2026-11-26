@@ -45,8 +45,8 @@ from seam import seam
 from tests.fakes.pi import install_fake_pi
 
 REPO = "owner/repo"
-RENAME_OLD = "xqliu/orbi"
-RENAME_NEW = "orbi-build/orbi"
+RENAME_OLD = "owner.invalid/repo"
+RENAME_NEW = "renamed.invalid/repo"
 ISSUE_NUMBER = 219
 PR_URL = "https://github.com/owner/repo/pull/219"
 
@@ -413,10 +413,10 @@ def test_e2e_restart_continues_on_the_uncommitted_work(
 def test_e2e_repo_rename_finds_the_old_worktree_by_issue_and_name(
     clone, tmp_path, monkeypatch, caplog,
 ):
-    """AC2: the repo was renamed (slug `xqliu-orbi` ->
-    `orbi-build-orbi`): the old worktree is found by issue number +
-    repo NAME and the SAME run/branch/worktree continues — no second
-    run/branch/worktree is created."""
+    """AC2: the repository OWNER was renamed (slug
+    `owner.invalid-repo` -> `renamed.invalid-repo`): the old worktree is
+    found by issue number + repo NAME and the SAME run/branch/worktree
+    continues — no second run/branch/worktree is created."""
     comments: list[str] = []
     labels: dict[int, list[str]] = {ISSUE_NUMBER: ["ai-ready"]}
     worktree = run_first_attempt(

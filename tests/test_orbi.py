@@ -41,13 +41,13 @@ def _write_prompts(tmp_path):
 
 def test_issue_number_extracts_number_from_github_url():
     assert github.issue_number_from_url(
-        "https://github.com/xqliu/orbi/issues/3"
+        "https://github.com/owner.invalid/repo/issues/3"
     ) == 3
 
 
 def test_issue_number_rejects_url_without_issue_number():
     with pytest.raises(ValueError, match="no issue number"):
-        github.issue_number_from_url("https://github.com/xqliu/orbi")
+        github.issue_number_from_url("https://github.com/owner.invalid/repo")
 
 
 def test_create_issue_runs_gh_issue_create_and_returns_its_number(monkeypatch):
@@ -57,14 +57,14 @@ def test_create_issue_runs_gh_issue_create_and_returns_its_number(monkeypatch):
     monkeypatch.setattr(
         seam, "run_command",
         lambda command, **kwargs: calls.append(command)
-        or "https://github.com/xqliu/orbi/issues/13",
+        or "https://github.com/owner.invalid/repo/issues/13",
     )
     number = github.create_issue(
-        "xqliu/orbi", title="New task", body="Do it",
+        "owner.invalid/repo", title="New task", body="Do it",
     )
     assert number == 13
     assert calls == [[
-        "gh", "issue", "create", "--repo", "xqliu/orbi",
+        "gh", "issue", "create", "--repo", "owner.invalid/repo",
         "--title", "New task", "--body", "Do it",
     ]]
 
@@ -74,17 +74,17 @@ def test_dispatch_issue_creates_issue_and_adds_ai_ready(monkeypatch):
     monkeypatch.setattr(
         seam, "run_command",
         lambda command, **kwargs: calls.append(command)
-        or "https://github.com/xqliu/orbi/issues/13",
+        or "https://github.com/owner.invalid/repo/issues/13",
     )
-    url = cli_commands.dispatch_issue("xqliu/orbi", "New task", "Do it")
-    assert url == "https://github.com/xqliu/orbi/issues/13"
+    url = cli_commands.dispatch_issue("owner.invalid/repo", "New task", "Do it")
+    assert url == "https://github.com/owner.invalid/repo/issues/13"
     assert calls == [
         [
-            "gh", "issue", "create", "--repo", "xqliu/orbi",
+            "gh", "issue", "create", "--repo", "owner.invalid/repo",
             "--title", "New task", "--body", "Do it",
         ],
         [
-            "gh", "issue", "edit", "13", "--repo", "xqliu/orbi",
+            "gh", "issue", "edit", "13", "--repo", "owner.invalid/repo",
             "--add-label", "ai-ready",
         ],
     ]
@@ -95,9 +95,9 @@ def test_dispatch_issue_uses_english_first_body_when_body_is_omitted(monkeypatch
     monkeypatch.setattr(
         seam, "run_command",
         lambda command, **kwargs: calls.append(command)
-        or "https://github.com/xqliu/orbi/issues/13",
+        or "https://github.com/owner.invalid/repo/issues/13",
     )
-    cli_commands.dispatch_issue("xqliu/orbi", "English task", "")
+    cli_commands.dispatch_issue("owner.invalid/repo", "English task", "")
     body = calls[0][-1]
     assert body.startswith("## User outcome")
     assert all(section in body for section in (
@@ -113,7 +113,7 @@ def test_dispatch_issue_propagates_create_failure(monkeypatch):
         ),
     )
     with pytest.raises(runner.subprocess.CalledProcessError):
-        cli_commands.dispatch_issue("xqliu/orbi", "t", "b")
+        cli_commands.dispatch_issue("owner.invalid/repo", "t", "b")
 
 
 def test_list_labeled_issues_queries_github_with_label_and_state(monkeypatch):
@@ -124,11 +124,11 @@ def test_list_labeled_issues_queries_github_with_label_and_state(monkeypatch):
         or json.dumps([issue]),
     )
     issues = cli_status.list_labeled_issues(
-        "xqliu/orbi", "ai-in-progress", state="open",
+        "owner.invalid/repo", "ai-in-progress", state="open",
     )
     assert issues == [issue]
     assert calls == [[
-        "gh", "issue", "list", "--repo", "xqliu/orbi",
+        "gh", "issue", "list", "--repo", "owner.invalid/repo",
         "--state", "open", "--search", "label:ai-in-progress",
         "--json", "number,title,url,state", "--limit", "1",
     ]]
@@ -136,7 +136,7 @@ def test_list_labeled_issues_queries_github_with_label_and_state(monkeypatch):
 
 def test_list_labeled_issues_returns_empty_list_when_idle(monkeypatch):
     monkeypatch.setattr(seam, "run_command", lambda command, **kwargs: "[]")
-    assert cli_status.list_labeled_issues("xqliu/orbi", "ai-ready") == []
+    assert cli_status.list_labeled_issues("owner.invalid/repo", "ai-ready") == []
 
 
 def test_current_issue_returns_first_in_progress_issue(monkeypatch):
@@ -145,12 +145,12 @@ def test_current_issue_returns_first_in_progress_issue(monkeypatch):
         cli_status, "list_labeled_issues",
         lambda repo, label, state="open": [issue] if label == "ai-in-progress" else [],
     )
-    assert cli_status.current_issue("xqliu/orbi") == issue
+    assert cli_status.current_issue("owner.invalid/repo") == issue
 
 
 def test_current_issue_returns_none_when_idle(monkeypatch):
     monkeypatch.setattr(cli_status, "list_labeled_issues", lambda *a, **k: [])
-    assert cli_status.current_issue("xqliu/orbi") is None
+    assert cli_status.current_issue("owner.invalid/repo") is None
 
 
 def test_ready_issue_runs_the_claim_searches_under_the_status_bound(
@@ -166,7 +166,7 @@ def test_ready_issue_runs_the_claim_searches_under_the_status_bound(
 
     monkeypatch.setattr(seam, "run_command", fake_run)
     config = config_domain.RunnerConfig(active_milestone="v1.0")
-    assert cli_status.ready_issue("xqliu/orbi", config) is None
+    assert cli_status.ready_issue("owner.invalid/repo", config) is None
     searches = [
         command[command.index("--search") + 1]
         for command, _ in calls
@@ -189,7 +189,7 @@ def test_ready_issue_builds_no_search_of_its_own():
 def test_ready_issue_returns_none_when_idle(monkeypatch):
     monkeypatch.setattr(seam, "run_command", lambda command, **kwargs: "[]")
     assert cli_status.ready_issue(
-        "xqliu/orbi", config_domain.RunnerConfig(),
+        "owner.invalid/repo", config_domain.RunnerConfig(),
     ) is None
 
 
@@ -207,7 +207,7 @@ def test_recent_result_returns_newest_pr_opened_or_blocked_issue(monkeypatch):
         return [blocked]
 
     monkeypatch.setattr(cli_status, "list_labeled_issues", fake_list)
-    assert cli_status.recent_result("xqliu/orbi") == blocked
+    assert cli_status.recent_result("owner.invalid/repo") == blocked
     assert calls == [
         ("ai-pr-opened", "all"), ("ai-fix-needed", "all"),
         ("ai-merged", "all"), ("ai-blocked", "all"),
@@ -229,7 +229,7 @@ def test_recent_result_includes_fix_needed_issue(monkeypatch):
         return []
 
     monkeypatch.setattr(cli_status, "list_labeled_issues", fake_list)
-    assert cli_status.recent_result("xqliu/orbi") == fix_needed
+    assert cli_status.recent_result("owner.invalid/repo") == fix_needed
 
 
 def test_recent_result_includes_merged_issue(monkeypatch):
@@ -247,7 +247,7 @@ def test_recent_result_includes_merged_issue(monkeypatch):
         return []
 
     monkeypatch.setattr(cli_status, "list_labeled_issues", fake_list)
-    assert cli_status.recent_result("xqliu/orbi") == merged
+    assert cli_status.recent_result("owner.invalid/repo") == merged
 
 
 def test_recent_result_prefers_pr_opened_when_newer(monkeypatch):
@@ -262,12 +262,12 @@ def test_recent_result_prefers_pr_opened_when_newer(monkeypatch):
         return [blocked]
 
     monkeypatch.setattr(cli_status, "list_labeled_issues", fake_list)
-    assert cli_status.recent_result("xqliu/orbi") == pr_opened
+    assert cli_status.recent_result("owner.invalid/repo") == pr_opened
 
 
 def test_recent_result_returns_none_when_no_result(monkeypatch):
     monkeypatch.setattr(cli_status, "list_labeled_issues", lambda *a, **k: [])
-    assert cli_status.recent_result("xqliu/orbi") is None
+    assert cli_status.recent_result("owner.invalid/repo") is None
 
 
 def test_format_issue_shows_number_title_and_url():
@@ -330,12 +330,12 @@ def test_status_report_lists_sources_active_ready_and_result(monkeypatch):
     monkeypatch.setattr(cli_status, "ready_issue", lambda repo, config: ready)
     monkeypatch.setattr(cli_status, "recent_result", lambda repo: result)
     monkeypatch.setattr(cli_commands, "freeze_base", lambda repo_dir, base_branch: "abc123def456")
-    config = config_domain.RunnerConfig(source_repos=("xqliu/orbi",), repo_dir=Path("/srv/orbi/orbi"), base_branch="main", max_concurrency=1, slot_dir=Path("/srv/orbi/orbi/.orbi/slots"))
+    config = config_domain.RunnerConfig(source_repos=("owner.invalid/repo",), repo_dir=Path("/srv/orbi/orbi"), base_branch="main", max_concurrency=1, slot_dir=Path("/srv/orbi/orbi/.orbi/slots"))
     scope, observer = _status_observer(config, {
-        "xqliu/orbi": [_raw_delivery_issue(3, title="now", url="u3")],
+        "owner.invalid/repo": [_raw_delivery_issue(3, title="now", url="u3")],
     })
     report = cli_status.status_report(config, scope, observer)
-    assert "source: xqliu/orbi" in report
+    assert "source: owner.invalid/repo" in report
     assert "base: main abc123def456" in report
     assert "active: #3 now u3 state=open labels=ai-in-progress" in report
     assert "ready: #11 next u11" in report
@@ -350,7 +350,7 @@ def test_status_report_freezes_base_from_configured_repo_dir(monkeypatch):
     )
     monkeypatch.setattr(cli_status, "ready_issue", lambda repo, config: None)
     monkeypatch.setattr(cli_status, "recent_result", lambda repo: None)
-    config = config_domain.RunnerConfig(source_repos=("xqliu/orbi",), repo_dir=Path("/srv/orbi/orbi"), base_branch="develop", max_concurrency=1, slot_dir=Path("/srv/orbi/orbi/.orbi/slots"))
+    config = config_domain.RunnerConfig(source_repos=("owner.invalid/repo",), repo_dir=Path("/srv/orbi/orbi"), base_branch="develop", max_concurrency=1, slot_dir=Path("/srv/orbi/orbi/.orbi/slots"))
     scope, observer = _status_observer(config, {})
     cli_status.status_report(config, scope, observer)
     assert calls == [(Path("/srv/orbi/orbi"), "develop")]
@@ -360,7 +360,7 @@ def test_status_report_marks_empty_lookups(monkeypatch):
     monkeypatch.setattr(cli_status, "ready_issue", lambda repo, config: None)
     monkeypatch.setattr(cli_status, "recent_result", lambda repo: None)
     monkeypatch.setattr(cli_commands, "freeze_base", lambda repo_dir, base_branch: "abc123def456")
-    config = config_domain.RunnerConfig(source_repos=("xqliu/orbi",), repo_dir=Path("/srv/orbi/orbi"), base_branch="main", max_concurrency=1, slot_dir=Path("/srv/orbi/orbi/.orbi/slots"))
+    config = config_domain.RunnerConfig(source_repos=("owner.invalid/repo",), repo_dir=Path("/srv/orbi/orbi"), base_branch="main", max_concurrency=1, slot_dir=Path("/srv/orbi/orbi/.orbi/slots"))
     scope, observer = _status_observer(config, {})
     report = cli_status.status_report(config, scope, observer)
     assert "base: main abc123def456" in report
@@ -372,7 +372,7 @@ def test_status_report_marks_empty_lookups(monkeypatch):
 def test_main_add_dispatches_to_selected_source_repo(monkeypatch, tmp_path, capsys):
     config = tmp_path / "orbi.toml"
     config.write_text(
-        "source_repos = [\"xqliu/orbi\"]\n",
+        "source_repos = [\"owner.invalid/repo\"]\n",
         encoding="utf-8",
     )
     _write_prompts(tmp_path)
@@ -380,21 +380,21 @@ def test_main_add_dispatches_to_selected_source_repo(monkeypatch, tmp_path, caps
     monkeypatch.setattr(
         cli_commands, "dispatch_issue",
         lambda repo, title, body: calls.append((repo, title, body))
-        or "https://github.com/xqliu/orbi/issues/13",
+        or "https://github.com/owner.invalid/repo/issues/13",
     )
     assert orbi.main([
         "add", "New task", "--body", "Do it", "--config", str(config),
     ]) == 0
-    assert calls == [("xqliu/orbi", "New task", "Do it")]
+    assert calls == [("owner.invalid/repo", "New task", "Do it")]
     out = capsys.readouterr().out
-    assert "created: https://github.com/xqliu/orbi/issues/13" in out
+    assert "created: https://github.com/owner.invalid/repo/issues/13" in out
     assert "label: ai-ready" in out
 
 
 def test_main_add_uses_explicit_repo_override(monkeypatch, tmp_path, capsys):
     config = tmp_path / "orbi.toml"
     config.write_text(
-        "source_repos = [\"xqliu/orbi\"]\n",
+        "source_repos = [\"owner.invalid/repo\"]\n",
         encoding="utf-8",
     )
     _write_prompts(tmp_path)
@@ -404,14 +404,14 @@ def test_main_add_uses_explicit_repo_override(monkeypatch, tmp_path, capsys):
         lambda repo, title, body: calls.append(repo) or "https://github.com/x/y/issues/1",
     )
     assert orbi.main([
-        "add", "T", "--repo", "xqliu/orbi", "--config", str(config),
+        "add", "T", "--repo", "owner.invalid/repo", "--config", str(config),
     ]) == 0
-    assert calls == ["xqliu/orbi"]
+    assert calls == ["owner.invalid/repo"]
 
 
 def test_main_add_rejects_repo_not_in_config(monkeypatch, tmp_path):
     config = tmp_path / "orbi.toml"
-    config.write_text("source_repos = [\"xqliu/orbi\"]\n", encoding="utf-8")
+    config.write_text("source_repos = [\"owner.invalid/repo\"]\n", encoding="utf-8")
     _write_prompts(tmp_path)
     with pytest.raises(SystemExit):
         orbi.main([
@@ -421,7 +421,7 @@ def test_main_add_rejects_repo_not_in_config(monkeypatch, tmp_path):
 
 def test_main_status_prints_report(monkeypatch, tmp_path, capsys):
     config = tmp_path / "orbi.toml"
-    config.write_text("source_repos = [\"xqliu/orbi\"]\n", encoding="utf-8")
+    config.write_text("source_repos = [\"owner.invalid/repo\"]\n", encoding="utf-8")
     _write_prompts(tmp_path)
     monkeypatch.setattr(
         observe, "StatusObserver",
@@ -429,11 +429,11 @@ def test_main_status_prints_report(monkeypatch, tmp_path, capsys):
     )
     monkeypatch.setattr(
         cli_status, "status_report",
-        lambda config, scope, observer: "source: xqliu/orbi\nactive: -",
+        lambda config, scope, observer: "source: owner.invalid/repo\nactive: -",
     )
     assert orbi.main(["status", "--config", str(config)]) == 0
     out = capsys.readouterr().out
-    assert "source: xqliu/orbi" in out
+    assert "source: owner.invalid/repo" in out
     assert "active: -" in out
 
 
@@ -614,7 +614,7 @@ def test_main_doctor_fails_fast_on_multiple_source_repos(tmp_path, caplog):
     Runner will reject instead of staying green while every tick fails."""
     config = tmp_path / "orbi.toml"
     config.write_text(
-        "source_repos = [\"xqliu/orbi\", \"xqliu/orbi-backlog\"]\n",
+        "source_repos = [\"owner.invalid/repo\", \"owner.invalid/repo-backlog\"]\n",
         encoding="utf-8",
     )
     _write_prompts(tmp_path)
@@ -640,7 +640,7 @@ def test_main_rejects_unknown_command(tmp_path):
 def _session_config(tmp_path):
     config = tmp_path / "orbi.toml"
     config.write_text(
-        "source_repos = [\"xqliu/orbi\"]\nrepo_dir = \".\"\n",
+        "source_repos = [\"owner.invalid/repo\"]\nrepo_dir = \".\"\n",
         encoding="utf-8",
     )
     _write_prompts(tmp_path)
@@ -649,7 +649,7 @@ def _session_config(tmp_path):
 
 def _write_session(tmp_path, name="sess.jsonl", records=None, run="run1"):
     session_dir = tmp_path / ".worktrees" / \
-        f"orbi-xqliu-orbi-issue-3-{run}" / ".pi-session"
+        f"orbi-owner.invalid-repo-issue-3-{run}" / ".pi-session"
     session_dir.mkdir(parents=True, exist_ok=True)
     path = session_dir / name
     path.write_text(
@@ -1520,7 +1520,7 @@ def test_status_report_shows_active_observation_for_an_issue(
 ):
     """The active section attributes the run from the worktree name and
     the session/activity from the complete JSONL records."""
-    worktree = tmp_path / ".worktrees" / "orbi-xqliu-orbi-issue-3-86b57234"
+    worktree = tmp_path / ".worktrees" / "orbi-owner.invalid-repo-issue-3-86b57234"
     session_dir = worktree / ".pi-session"
     session_dir.mkdir(parents=True)
     with (session_dir / "s.jsonl").open("w", encoding="utf-8") as handle:
@@ -1538,9 +1538,9 @@ def test_status_report_shows_active_observation_for_an_issue(
     monkeypatch.setattr(cli_status, "ready_issue", lambda repo, config: None)
     monkeypatch.setattr(cli_status, "recent_result", lambda repo: None)
     monkeypatch.setattr(cli_commands, "freeze_base", lambda repo_dir, base_branch: "abc123def456")
-    config = config_domain.RunnerConfig(source_repos=("xqliu/orbi",), repo_dir=tmp_path, base_branch="main", max_concurrency=1, slot_dir=tmp_path / ".orbi" / "slots")
+    config = config_domain.RunnerConfig(source_repos=("owner.invalid/repo",), repo_dir=tmp_path, base_branch="main", max_concurrency=1, slot_dir=tmp_path / ".orbi" / "slots")
     scope, observer = _status_observer(config, {
-        "xqliu/orbi": [_raw_delivery_issue(3, title="now", url="u3")],
+        "owner.invalid/repo": [_raw_delivery_issue(3, title="now", url="u3")],
     })
     report = cli_status.status_report(config, scope, observer)
     assert "active: #3 now u3 state=open labels=ai-in-progress" in report
@@ -1576,7 +1576,7 @@ def test_status_report_issue_scope_shows_confirmed_state(
     monkeypatch.setattr(cli_status, "ready_issue", lambda repo, config: None)
     monkeypatch.setattr(cli_status, "recent_result", lambda repo: None)
     monkeypatch.setattr(cli_commands, "freeze_base", lambda repo_dir, base_branch: "abc123def456")
-    config = config_domain.RunnerConfig(source_repos=("xqliu/orbi",), repo_dir=tmp_path, base_branch="main", max_concurrency=1, slot_dir=tmp_path / ".orbi" / "slots")
+    config = config_domain.RunnerConfig(source_repos=("owner.invalid/repo",), repo_dir=tmp_path, base_branch="main", max_concurrency=1, slot_dir=tmp_path / ".orbi" / "slots")
     scope = observe.parse_scope(config.source_repos, issue=7)
     observer = observe.StatusObserver(
         config, scope,
@@ -1597,7 +1597,7 @@ def test_status_report_issue_scope_without_a_confirmed_read(
     monkeypatch.setattr(cli_status, "ready_issue", lambda repo, config: None)
     monkeypatch.setattr(cli_status, "recent_result", lambda repo: None)
     monkeypatch.setattr(cli_commands, "freeze_base", lambda repo_dir, base_branch: "abc123def456")
-    config = config_domain.RunnerConfig(source_repos=("xqliu/orbi",), repo_dir=tmp_path, base_branch="main", max_concurrency=1, slot_dir=tmp_path / ".orbi" / "slots")
+    config = config_domain.RunnerConfig(source_repos=("owner.invalid/repo",), repo_dir=tmp_path, base_branch="main", max_concurrency=1, slot_dir=tmp_path / ".orbi" / "slots")
     scope = observe.parse_scope(config.source_repos, issue=7)
     observer = observe.StatusObserver(config, scope)
     report = cli_status.status_report(config, scope, observer)
@@ -1609,7 +1609,7 @@ def test_status_report_marks_no_active_delivery(monkeypatch, tmp_path):
     monkeypatch.setattr(cli_status, "ready_issue", lambda repo, config: None)
     monkeypatch.setattr(cli_status, "recent_result", lambda repo: None)
     monkeypatch.setattr(cli_commands, "freeze_base", lambda repo_dir, base_branch: "abc123def456")
-    config = config_domain.RunnerConfig(source_repos=("xqliu/orbi",), repo_dir=tmp_path, base_branch="main", max_concurrency=1, slot_dir=tmp_path / ".orbi" / "slots")
+    config = config_domain.RunnerConfig(source_repos=("owner.invalid/repo",), repo_dir=tmp_path, base_branch="main", max_concurrency=1, slot_dir=tmp_path / ".orbi" / "slots")
     scope, observer = _status_observer(config, {})
     report = cli_status.status_report(config, scope, observer)
     assert "active: -" in report
@@ -1626,7 +1626,7 @@ def test_status_report_shows_capacity_and_free_slots(monkeypatch, tmp_path):
     )
     monkeypatch.setattr(cli_status, "ready_issue", lambda repo, config: None)
     monkeypatch.setattr(cli_status, "recent_result", lambda repo: None)
-    config = config_domain.RunnerConfig(source_repos=("xqliu/orbi",), repo_dir=tmp_path, base_branch="main", max_concurrency=2, slot_dir=tmp_path / ".orbi" / "slots")
+    config = config_domain.RunnerConfig(source_repos=("owner.invalid/repo",), repo_dir=tmp_path, base_branch="main", max_concurrency=2, slot_dir=tmp_path / ".orbi" / "slots")
     scope, observer = _status_observer(config, {})
     report = cli_status.status_report(config, scope, observer)
     assert "capacity: 2" in report
@@ -1648,7 +1648,7 @@ def test_status_report_shows_occupied_slots_with_pids(monkeypatch, tmp_path):
     )
     monkeypatch.setattr(cli_status, "ready_issue", lambda repo, config: None)
     monkeypatch.setattr(cli_status, "recent_result", lambda repo: None)
-    config = config_domain.RunnerConfig(source_repos=("xqliu/orbi",), repo_dir=tmp_path, base_branch="main", max_concurrency=2, slot_dir=slot_dir)
+    config = config_domain.RunnerConfig(source_repos=("owner.invalid/repo",), repo_dir=tmp_path, base_branch="main", max_concurrency=2, slot_dir=slot_dir)
     scope, observer = _status_observer(config, {})
     report = cli_status.status_report(config, scope, observer)
     assert "capacity: 2" in report
@@ -1672,7 +1672,7 @@ def test_status_report_shows_free_slot_when_file_exists_without_lock(
     )
     monkeypatch.setattr(cli_status, "ready_issue", lambda repo, config: None)
     monkeypatch.setattr(cli_status, "recent_result", lambda repo: None)
-    config = config_domain.RunnerConfig(source_repos=("xqliu/orbi",), repo_dir=tmp_path, base_branch="main", max_concurrency=1, slot_dir=slot_dir)
+    config = config_domain.RunnerConfig(source_repos=("owner.invalid/repo",), repo_dir=tmp_path, base_branch="main", max_concurrency=1, slot_dir=slot_dir)
     scope, observer = _status_observer(config, {})
     report = cli_status.status_report(config, scope, observer)
     assert "slots: 0/1" in report
@@ -1723,7 +1723,7 @@ def _deploy_world(
             "[Service]\n# drift\n", encoding="utf-8",
         )
     config = config_domain.RunnerConfig(
-        source_repos=("xqliu/orbi",),
+        source_repos=("owner.invalid/repo",),
         repo_dir=repo,
         # Issue #330: the bootstrap deployment — home == delivery checkout.
         deploy_home=repo,
@@ -1754,7 +1754,7 @@ def _fake_doctor_commands(monkeypatch, ssh_down: bool = False,
                 raise subprocess.CalledProcessError(128, command)
             return engine_expected or "0123456789abcdef0123456789abcdef01234567"
         if command[:2] == ["git", "config"]:
-            return "git@github.com:xqliu/orbi.git"
+            return "git@github.com:owner.invalid/repo.git"
         if command[:2] == ["git", "status"]:
             return dirty
         if command[:2] == ["git", "ls-remote"]:
@@ -1899,7 +1899,7 @@ def test_main_install_units_prints_report_and_returns_zero(
     monkeypatch, tmp_path, capsys,
 ):
     config = tmp_path / "orbi.toml"
-    config.write_text("source_repos = [\"xqliu/orbi\"]\n",
+    config.write_text("source_repos = [\"owner.invalid/repo\"]\n",
                       encoding="utf-8")
     _write_prompts(tmp_path)
     seen = {}
@@ -1953,7 +1953,7 @@ def test_main_sync_engine_source_locks_the_deploy_home(
     _write_prompts(home)
     config_path = tmp_path / "orbi.toml"
     config_path.write_text(
-        'source_repos = ["xqliu/orbi"]\n'
+        'source_repos = ["owner.invalid/repo"]\n'
         'deploy_home = "deploy"\n'
         'engine_source_track = "tag:v0.4.2"\n',
         encoding="utf-8",
@@ -1977,7 +1977,7 @@ def test_main_sync_engine_source_fails_closed_on_a_dirty_checkout(
     _write_prompts(home)
     config_path = tmp_path / "orbi.toml"
     config_path.write_text(
-        'source_repos = ["xqliu/orbi"]\n'
+        'source_repos = ["owner.invalid/repo"]\n'
         'deploy_home = "deploy"\n'
         'engine_source_track = "tag:v0.4.2"\n',
         encoding="utf-8",
@@ -2008,7 +2008,7 @@ def _setup_result() -> dict:
         },
         "repos": [
             {
-                "repo": "xqliu/orbi",
+                "repo": "owner.invalid/repo",
                 "permission": "ADMIN",
                 "default_branch": "main",
                 "labels": {"aligned": 7, "total": 7},
@@ -2034,7 +2034,7 @@ def _setup_result() -> dict:
             "branch": "main",
             "clean": True,
             "base_fresh": True,
-            "remote_url": "git@github.com:xqliu/orbi.git",
+            "remote_url": "git@github.com:owner.invalid/repo.git",
             "remote_protocol": "ssh",
             "migrated": False,
             "ssh_reachable": True,
@@ -2049,7 +2049,7 @@ def _setup_result() -> dict:
 
 def _setup_world(tmp_path):
     config = tmp_path / "orbi.toml"
-    config.write_text("source_repos = [\"xqliu/orbi\"]\n",
+    config.write_text("source_repos = [\"owner.invalid/repo\"]\n",
                       encoding="utf-8")
     _write_prompts(tmp_path)
     return config
@@ -2075,13 +2075,13 @@ def test_main_setup_prints_key_value_lines_and_returns_zero(
     ]) == 0
     assert seen["installed_dir"] == tmp_path / "u"
     assert seen["repos"] is None
-    assert seen["config"].source_repos == ("xqliu/orbi",)
+    assert seen["config"].source_repos == ("owner.invalid/repo",)
     out = capsys.readouterr().out
     assert "setup=ok" in out
     # Issue #1576: without a terminal, setup prints the suggest hint
     # instead of asking (and makes no extra call).
     assert (
-        "Run 'orbi suggest --repo xqliu/orbi' to get three suggested Issues."
+        "Run 'orbi suggest --repo owner.invalid/repo' to get three suggested Issues."
         in out
     )
 
@@ -2114,9 +2114,9 @@ def test_main_setup_repo_override_is_passed_through(
 
     monkeypatch.setattr(orbi.pilot_setup, "run_setup", fake_run_setup)
     assert orbi.main([
-        "setup", "--repo", "xqliu/orbi", "--config", str(config),
+        "setup", "--repo", "owner.invalid/repo", "--config", str(config),
     ]) == 0
-    assert seen["repos"] == ["xqliu/orbi"]
+    assert seen["repos"] == ["owner.invalid/repo"]
 
 
 def test_main_setup_config_failure_prints_structured_reason(
@@ -2160,7 +2160,7 @@ def test_main_setup_failure_prints_the_reason_and_returns_nonzero(
 
     def failing(cfg, installed_dir, **kwargs):
         raise orbi.pilot_setup.SetupError(
-            "insufficient permission for xqliu/orbi",
+            "insufficient permission for owner.invalid/repo",
         )
 
     monkeypatch.setattr(orbi.pilot_setup, "run_setup", failing)
@@ -2212,7 +2212,7 @@ def test_doctor_report_clean(tmp_path, monkeypatch):
     assert lines[1] == "commit: 0123456789abcdef0123456789abcdef01234567"
     assert "unit_drift: clean" in lines
     assert "deploy_home: clean" in lines
-    assert "  merge_gate: PASS repo=xqliu/orbi branch=main protection readable" in lines
+    assert "  merge_gate: PASS repo=owner.invalid/repo branch=main protection readable" in lines
     # Both units are reported with their installed hash.
     from orbi import scheduler, systemd_deploy
     status = scheduler.unit_status(config.repo_dir, installed)
@@ -2224,14 +2224,14 @@ def test_doctor_report_clean(tmp_path, monkeypatch):
     # the configured source repo and the SSH probe succeeded.
     assert (
         "transport: remote=origin "
-        "url=git@github.com:xqliu/orbi.git protocol=ssh "
-        "expected=git@github.com:xqliu/orbi.git "
+        "url=git@github.com:owner.invalid/repo.git protocol=ssh "
+        "expected=git@github.com:owner.invalid/repo.git "
         "ssh_reachable=true transport_reachable=true"
     ) in lines
     # The probe is the real read-only command (verified against the
     # live CLI: exit 0 = reachable + authenticated).
     assert [
-        "git", "ls-remote", "git@github.com:xqliu/orbi.git",
+        "git", "ls-remote", "git@github.com:owner.invalid/repo.git",
     ] in calls
     # Issue #149: all FOUR instances are reported (the doctor world runs
     # at capacity two); Issue #827: the instance set follows the
@@ -2242,7 +2242,7 @@ def test_doctor_report_clean(tmp_path, monkeypatch):
     assert "orbi@2.service: active" in lines
     assert "slots: 0/2" in lines
     assert "pi: none" in lines
-    assert "source: xqliu/orbi" in lines
+    assert "source: owner.invalid/repo" in lines
     assert "  current: -" in lines
     assert "journal:" in lines
     assert "  line one" in lines
@@ -2595,7 +2595,7 @@ def test_doctor_report_shows_current_issue_and_session(tmp_path, monkeypatch):
     config, installed = _deploy_world(tmp_path, drift=False)
     _fake_doctor_commands(monkeypatch)
     issue = {"number": 7, "title": "task",
-             "url": "https://github.com/xqliu/orbi/issues/7"}
+             "url": "https://github.com/owner.invalid/repo/issues/7"}
     monkeypatch.setattr(
         cli_status, "current_issue", lambda repo: issue,
     )
@@ -2604,7 +2604,7 @@ def test_doctor_report_shows_current_issue_and_session(tmp_path, monkeypatch):
     session.parent.mkdir(parents=True)
     session.write_text("{}", encoding="utf-8")
     report = cli_doctor.doctor_report(config, installed)
-    assert "  current: #7 task https://github.com/xqliu/orbi/issues/7" in report
+    assert "  current: #7 task https://github.com/owner.invalid/repo/issues/7" in report
     assert f"pi: {session}" in report
 
 
@@ -2618,7 +2618,7 @@ def _write_orbi_unit(installed: Path, name: str, config: Path) -> Path:
     return unit
 
 
-def _source_pool_world(tmp_path, repos=("xqliu/orbi",)):
+def _source_pool_world(tmp_path, repos=("owner.invalid/repo",)):
     """A deployment world with an on-disk current config path."""
     config, installed = _deploy_world(tmp_path, drift=False)
     this_config = tmp_path / "this-deploy" / "orbi.toml"
@@ -2635,7 +2635,7 @@ def _source_pool_world(tmp_path, repos=("xqliu/orbi",)):
 
 
 def _other_config(
-    path: Path, repos=("xqliu/orbi",), *, body: str | None = None,
+    path: Path, repos=("owner.invalid/repo",), *, body: str | None = None,
 ) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     if body is None:
@@ -2657,7 +2657,7 @@ def test_doctor_source_pool_reports_overlap_between_named_deployments(
     config, installed, this_config = _source_pool_world(tmp_path)
     _write_orbi_unit(installed, "orbi-this.service", this_config)
     other_config = _other_config(
-        tmp_path / "other-deploy" / "orbi.toml", ("xqliu/orbi",),
+        tmp_path / "other-deploy" / "orbi.toml", ("owner.invalid/repo",),
     )
     _write_orbi_unit(installed, "orbi-other.service", other_config)
     _fake_doctor_commands(monkeypatch)
@@ -2668,7 +2668,7 @@ def test_doctor_source_pool_reports_overlap_between_named_deployments(
         line for line in lines if line.startswith("source_pool: FAILED")
     ]
     assert len(failed) == 1, report
-    assert "repo=xqliu/orbi" in failed[0]
+    assert "repo=owner.invalid/repo" in failed[0]
     assert f"this_config={this_config.resolve()}" in failed[0]
     assert f"other_config={other_config.resolve()}" in failed[0]
     assert "max_concurrency" in failed[0]
@@ -2720,7 +2720,7 @@ def test_doctor_source_pool_detects_repository_case_variants(
     config, installed, this_config = _source_pool_world(tmp_path)
     _write_orbi_unit(installed, "orbi-this.service", this_config)
     other_config = _other_config(
-        tmp_path / "other-deploy" / "orbi.toml", ("XQLIU/Orbi",),
+        tmp_path / "other-deploy" / "orbi.toml", ("OWNER.INVALID/Repo",),
     )
     _write_orbi_unit(installed, "orbi-other.service", other_config)
     _fake_doctor_commands(monkeypatch)
@@ -2731,7 +2731,7 @@ def test_doctor_source_pool_detects_repository_case_variants(
         if line.startswith("source_pool: FAILED")
     ]
     assert len(failed) == 1, report
-    assert "repo=xqliu/orbi" in failed[0]
+    assert "repo=owner.invalid/repo" in failed[0]
     assert f"other_config={other_config.resolve()}" in failed[0]
 
 
@@ -2742,8 +2742,8 @@ def test_doctor_source_pool_detects_repository_case_variants(
         ("unreadable", "reason=unreadable", None),
         ("malformed", "reason=malformed", "source_repos = [\n"),
         ("invalid_empty_list", "reason=invalid_source_repos", "source_repos = []\n"),
-        ("invalid_type", "reason=invalid_source_repos", 'source_repos = "xqliu/orbi"\n'),
-        ("invalid_element", "reason=invalid_source_repos", 'source_repos = ["xqliu/orbi", 3]\n'),
+        ("invalid_type", "reason=invalid_source_repos", 'source_repos = "owner.invalid/repo"\n'),
+        ("invalid_element", "reason=invalid_source_repos", 'source_repos = ["owner.invalid/repo", 3]\n'),
         ("invalid_empty_string", "reason=invalid_source_repos", 'source_repos = [""]\n'),
     ),
 )
@@ -2789,10 +2789,10 @@ def test_doctor_source_pool_reports_each_overlap_once(
     _write_orbi_unit(installed, "orbi-this.service", this_config)
     first = _other_config(
         tmp_path / "b-deploy" / "orbi.toml",
-        body='source_repos = ["xqliu/orbi", "XQLIU/orbi"]\n',
+        body='source_repos = ["owner.invalid/repo", "XQLIU/orbi"]\n',
     )
     second = _other_config(
-        tmp_path / "a-deploy" / "orbi.toml", ("xqliu/orbi",),
+        tmp_path / "a-deploy" / "orbi.toml", ("owner.invalid/repo",),
     )
     _write_orbi_unit(installed, "orbi-b.service", first)
     _write_orbi_unit(installed, "orbi-a.service", second)
@@ -2819,7 +2819,7 @@ def test_installed_unit_configs_discovers_systemd_and_launchd_fixtures(
     from orbi import launchd_deploy
 
     other_config = _other_config(
-        tmp_path / "other-deploy" / "orbi.toml", ("xqliu/orbi",),
+        tmp_path / "other-deploy" / "orbi.toml", ("owner.invalid/repo",),
     )
 
     systemd_dir = tmp_path / "systemd-units"
@@ -2854,7 +2854,7 @@ def test_main_doctor_reports_source_pool_overlap_via_cli(
     _write_prompts(this_config.parent)
     _write_orbi_unit(installed, "orbi-this.service", this_config)
     other_config = _other_config(
-        tmp_path / "other-deploy" / "orbi.toml", ("xqliu/orbi",),
+        tmp_path / "other-deploy" / "orbi.toml", ("owner.invalid/repo",),
     )
     _write_orbi_unit(installed, "orbi-other.service", other_config)
     _fake_doctor_commands(monkeypatch)
@@ -2865,7 +2865,7 @@ def test_main_doctor_reports_source_pool_overlap_via_cli(
     ]) == 0
     out = capsys.readouterr().out
     assert (
-        f"source_pool: FAILED repo=xqliu/orbi "
+        f"source_pool: FAILED repo=owner.invalid/repo "
         f"this_config={this_config.resolve()}" in out
     )
     assert f"other_config={other_config.resolve()}" in out
@@ -2885,9 +2885,9 @@ def test_doctor_source_pool_never_loads_or_mutates_other_deployments(
         "PI_MODEL_API_KEY=secret-value\n", encoding="utf-8",
     )
     other_config = _other_config(
-        other_home / "orbi.toml", ("xqliu/orbi",),
+        other_home / "orbi.toml", ("owner.invalid/repo",),
         body=(
-            'source_repos = ["xqliu/orbi"]\n'
+            'source_repos = ["owner.invalid/repo"]\n'
             f'repo_dir = "{other_home}"\n'
             'pi_provider = "openai"\n'
         ),
@@ -2938,7 +2938,7 @@ def test_main_doctor_prints_report_and_returns_zero(
     monkeypatch, tmp_path, capsys,
 ):
     config = tmp_path / "orbi.toml"
-    config.write_text("source_repos = [\"xqliu/orbi\"]\n",
+    config.write_text("source_repos = [\"owner.invalid/repo\"]\n",
                       encoding="utf-8")
     _write_prompts(tmp_path)
     seen = {}
@@ -2995,7 +2995,7 @@ def _review_provider_world(tmp_path):
     providers_path.write_text(json.dumps(providers), encoding="utf-8")
     config_path = config.repo_dir / "orbi.toml"
     config_path.write_text(
-        'source_repos = ["xqliu/orbi"]\n'
+        'source_repos = ["owner.invalid/repo"]\n'
         'pi_providers = "providers.json"\n'
         'pi_provider = "implement"\n'
         'pi_model = "m"\n'

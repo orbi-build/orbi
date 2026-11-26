@@ -30,6 +30,7 @@ import orbi.pi_session as pi_session
 import orbi.release_run as release_run
 from tests.fakes.bootstrap_delivery import install_ticket_only_runtime
 from tests.fakes.bootstrap_preflight import GROQ_PROVIDERS, _user_agent_dir
+from tests.fakes.github import install_empty_issue_comments
 from seam import seam
 from orbi.delivery_scene import RunContext
 
@@ -84,6 +85,9 @@ def test_is_ops_requires_the_explicit_label():
 
 def test_run_ticket_agent_uses_a_temporary_session_without_git(monkeypatch, tmp_path):
     calls = []
+    # The ticket session reads the Issue timeline; no comments here
+    # (Issue #2253).
+    install_empty_issue_comments(monkeypatch)
     monkeypatch.setattr(
         pi_session, "stream_pi",
         # The prompt FILE lives in the session's TemporaryDirectory
@@ -126,6 +130,7 @@ def test_run_ticket_agent_materializes_provider_dir_and_env(
     home = tmp_path / "home"
     _user_agent_dir(home, auth=False, settings=False)
     monkeypatch.setenv("HOME", str(home))
+    install_empty_issue_comments(monkeypatch)
     seen: dict = {}
 
     def fake_stream(command, **kwargs):
@@ -164,6 +169,7 @@ def test_run_ticket_agent_logs_provider_config_loaded(monkeypatch, tmp_path, cap
     """Issue #176: the ticket-only session logs the provider config
     line too (role=ticket) — every Pi session has the same startup
     sequence."""
+    install_empty_issue_comments(monkeypatch)
     monkeypatch.setattr(pi_session, "stream_pi", lambda command, **kwargs: "copy")
     with caplog.at_level("INFO"):
         pi_session.run_ticket_agent(

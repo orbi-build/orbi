@@ -179,13 +179,13 @@ def test_setup_result_lines_are_byte_identical(tmp_path):
     assert pilot_setup.format_setup(result) == [
         "setup=ok version=4 base_branch=main",
         f"cli=installed source={repo / 'src' / 'orbi'}",
-        "repo=xqliu/orbi permission=ADMIN default_branch=main labels=14/14",
+        "repo=owner.invalid/repo permission=ADMIN default_branch=main labels=14/14",
         'service=installed path=' + str(installed / "orbi@.service")
         + " sha256=cb20e033651429a2c7fc54e6cce789ac72578b8f5605fa1709b8d3298a7b536c",
         'timer=orbi@1.timer enabled active=true next="Thu 2026-08-27 '
         '10:00:00 +08"',
         "checkout=remote=origin branch=main clean=true base_fresh=true "
-        "remote_url=git@github.com:xqliu/orbi.git protocol=ssh migrated=false "
+        "remote_url=git@github.com:owner.invalid/repo.git protocol=ssh migrated=false "
         "ssh_reachable=true transport_reachable=true "
         "worktrees_exclude_added=true",
         "model_provider=NOT CONFIGURED \u2014 edit orbi.toml "
@@ -270,15 +270,15 @@ def test_label_alignment_repair_message_is_byte_identical(tmp_path):
 
     assert _raised(
         lambda: pilot_setup.align_labels(
-            "xqliu/orbi",
+            "owner.invalid/repo",
             pilot_setup.load_label_defs(repo / "labels.toml"),
             run_command=failing,
         ),
         pilot_setup.SetupError,
     ).startswith(
-        "label alignment failed for xqliu/orbi: ai-ready "
+        "label alignment failed for owner.invalid/repo: ai-ready "
         "(gh label create failed: Command "
-        "'['gh', 'label', 'create', 'ai-ready', '--repo', 'xqliu/orbi', "
+        "'['gh', 'label', 'create', 'ai-ready', '--repo', 'owner.invalid/repo', "
         "'--color', '1d76db', '--description', 'dispatched', '--force']' "
         "returned non-zero exit status 1.)",
     )
@@ -307,16 +307,16 @@ def test_machine_and_checkout_repair_messages_are_byte_identical(
     )
     assert _raised(
         lambda: pilot_setup.check_repo(
-            "xqliu/orbi",
+            "owner.invalid/repo",
             lambda command, **kwargs: json.dumps({
-                "nameWithOwner": "xqliu/orbi",
+                "nameWithOwner": "owner.invalid/repo",
                 "viewerPermission": "READ",
                 "defaultBranchRef": {"name": "main"},
             }),
         ),
         pilot_setup.SetupError,
     ) == (
-        "insufficient permission for xqliu/orbi: viewerPermission='READ' "
+        "insufficient permission for owner.invalid/repo: viewerPermission='READ' "
         "(one of ['ADMIN', 'MAINTAIN', 'WRITE'] required to manage labels)"
     )
     checkout = tmp_path / "checkout"
@@ -325,7 +325,7 @@ def test_machine_and_checkout_repair_messages_are_byte_identical(
     def dirty(command, **kwargs):
         head = list(command)
         if head[:2] == ["git", "config"]:
-            return "git@github.com:xqliu/orbi.git"
+            return "git@github.com:owner.invalid/repo.git"
         if head[:2] == ["git", "ls-remote"]:
             return "abc\tHEAD"
         if head[:2] == ["git", "status"]:
@@ -334,7 +334,7 @@ def test_machine_and_checkout_repair_messages_are_byte_identical(
 
     assert _raised(
         lambda: pilot_setup.check_checkout(
-            checkout, "main", ["xqliu/orbi"], run_command=dirty,
+            checkout, "main", ["owner.invalid/repo"], run_command=dirty,
         ),
         pilot_setup.SetupError,
     ) == (

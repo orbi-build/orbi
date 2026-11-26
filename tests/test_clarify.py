@@ -35,7 +35,7 @@ from tests.fakes.clarify import (
     record_stop_notifications, stop_comment_entry, stub_judgment,
     stub_runner_login, stub_stop_history, verdict_agent,
 )
-from tests.fakes.github import FakeGh
+from tests.fakes.github import FakeGh, install_empty_issue_comments
 from tests.fakes.pi import install_fake_pi
 
 from tests.test_run_id_e2e import (
@@ -466,6 +466,7 @@ def test_the_gate_pi_command_loads_only_the_shipped_extension(
 ):
     argv_path = tmp_path / "argv.json"
     install_fake_pi(monkeypatch, tmp_path, _gate_fake_pi(argv_path))
+    install_empty_issue_comments(monkeypatch)
     verdict = clarify.judge_issue_body(
         ISSUE, config_domain.RunnerConfig(), REPO, RUN_ID,
     )
@@ -549,7 +550,7 @@ def test_the_gate_judges_the_issue_with_its_image_in_view(
 ):
     """Acceptance 1 (Issue #2390): the image reaches the clarify session.
 
-    The repro (xqliu/orbi-e2e-new-2611242209#3) put the flag and its output
+    The repro (owner.invalid/repo-e2e-new-2611242209#3) put the flag and its output
     in the screenshot; the gate read only the text and stopped the ticket.
     The session now receives the staged image as a Pi file argument and the
     ticket's images are named in its context, so a passing verdict is
@@ -1299,7 +1300,7 @@ def test_the_real_runner_proposes_the_split_for_a_bundled_ticket(
 ):
     """Acceptance 1 (Issue #1978) at the real entry point: a ticket that
     fails `single_outcome` AND `acceptance_condition` (the evidence shape:
-    xqliu/orbi-e2e-2609260042#253) is stopped with the split plan, not with
+    owner.invalid/repo-e2e-2609260042#253) is stopped with the split plan, not with
     the generic repair block. `/orbi split` reads that very section."""
     fix_run_id(monkeypatch, RUN_ID)
     answer = {

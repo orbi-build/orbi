@@ -37,6 +37,7 @@ from tests.fakes.bootstrap_preflight import (
     _user_agent_dir,
     _user_settings,
 )
+from tests.fakes.github import install_absent_repo_policy
 from tests.test_bootstrap_runner_main import _write_prompts
 
 
@@ -44,6 +45,12 @@ from tests.test_bootstrap_runner_main import _write_prompts
 # authoritative. The unit-drift preflight scenes contract the
 # systemd deployment over systemd-shaped fixtures.
 _unit_drift_systemd = pytest.mark.usefixtures("systemd_scheduler")
+
+
+@pytest.fixture(autouse=True)
+def _absent_repo_policy(monkeypatch):
+    """The policy read is incidental to every scene here (Issue #2253)."""
+    install_absent_repo_policy(monkeypatch)
 
 
 @pytest.fixture(autouse=True)

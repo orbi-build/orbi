@@ -1804,10 +1804,16 @@ def test_readme_titles_the_project_orbi():
     )
 
 
+# The repository's pre-rebrand name, composed so that no test file
+# carries a repository path that resolves on GitHub (Issue #2253). The
+# docs still must not teach the old name.
+STALE_REPO_REFERENCE = "/".join(("xqliu", "orbi"))
+
+
 def test_docs_getting_started_clones_the_orbi_build_org_repo():
     """Issue #183: the repository moved to the orbi-build org — the
     smoke walkthrough clone URL must be the new address, and no doc
-    page may keep the stale xqliu/orbi clone URL (the old
+    page may keep the stale old-organization clone URL (the old
     addresses still redirect on GitHub, but the docs must teach the
     current one)."""
     text = page_text("getting-started")
@@ -1816,8 +1822,8 @@ def test_docs_getting_started_clones_the_orbi_build_org_repo():
     )
     for path in docs_files():
         content = path.read_text(encoding="utf-8")
-        assert "xqliu/orbi" not in content, (
-            f"{path.name} keeps the stale xqliu/orbi reference"
+        assert STALE_REPO_REFERENCE not in content, (
+            f"{path.name} keeps the stale {STALE_REPO_REFERENCE} reference"
         )
 
 

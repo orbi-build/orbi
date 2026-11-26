@@ -114,7 +114,7 @@ def test_run_command_logs_multiline_body_as_one_journal_line(
         "- elapsed: 8m 2s"
     )
     command = [
-        "gh", "api", "repos/xqliu/orbi/issues/143/comments",
+        "gh", "api", "repos/owner.invalid/repo/issues/143/comments",
         "--method", "POST", "--field", f"body={body}",
     ]
     bind_run_id(None)
@@ -229,9 +229,9 @@ def test_list_issues_builds_each_parameter_combination(monkeypatch):
 def test_edit_issue_builds_add_and_remove_command(monkeypatch):
     calls = []
     monkeypatch.setattr(seam, "run_command", lambda command, **kwargs: calls.append(command))
-    runner.edit_issue(3, repo="xqliu/orbi-backlog", add="ai-in-progress", remove="ai-ready")
+    runner.edit_issue(3, repo="owner.invalid/repo-backlog", add="ai-in-progress", remove="ai-ready")
     assert calls == [[
-        "gh", "issue", "edit", "3", "--repo", "xqliu/orbi-backlog",
+        "gh", "issue", "edit", "3", "--repo", "owner.invalid/repo-backlog",
         "--add-label", "ai-in-progress", "--remove-label", "ai-ready",
     ]]
 
@@ -239,16 +239,16 @@ def test_edit_issue_builds_add_and_remove_command(monkeypatch):
 def test_edit_issue_allows_no_label_change(monkeypatch):
     calls = []
     monkeypatch.setattr(seam, "run_command", lambda command, **kwargs: calls.append(command))
-    runner.edit_issue(3, repo="xqliu/orbi-backlog")
-    assert calls == [["gh", "issue", "edit", "3", "--repo", "xqliu/orbi-backlog"]]
+    runner.edit_issue(3, repo="owner.invalid/repo-backlog")
+    assert calls == [["gh", "issue", "edit", "3", "--repo", "owner.invalid/repo-backlog"]]
 
 
 def test_comment_issue_runs_gh_comment(monkeypatch):
     calls = []
     monkeypatch.setattr(seam, "run_command", lambda command, **kwargs: calls.append(command))
-    runner.comment_issue(3, repo="xqliu/orbi-backlog", body="done")
+    runner.comment_issue(3, repo="owner.invalid/repo-backlog", body="done")
     assert calls == [[
-        "gh", "issue", "comment", "3", "--repo", "xqliu/orbi-backlog",
+        "gh", "issue", "comment", "3", "--repo", "owner.invalid/repo-backlog",
         "--body", "done\n\n<!-- runner="
         + progress.runner_fingerprint() + " -->",
     ]]

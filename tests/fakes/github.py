@@ -1199,3 +1199,143 @@ def install_broken_push(monkeypatch, *, stderr: str,
     """Install a push failure that is NOT an advanced-remote rejection."""
     install_rejected_push(monkeypatch, stderr=stderr, returncode=returncode)
 
+
+
+
+def command_repo(command: list[str]) -> str | None:
+    """The repository one gh argv names, if it names one."""
+    for index, argument in enumerate(command):
+        if argument in {"--repo", "-R"} and index + 1 < len(command):
+            return command[index + 1]
+    for argument in command:
+        match = re.match(r"repos/([^/]+/[^/]+)(?:[/?]|$)", argument)
+        if match:
+            return match.group(1)
+    return None
+
+
+def install_fake_gh_repositories(monkeypatch, *repos: str) -> dict:
+    """Answer each repository's gh argv from its own FakeGh (Issue #2253).
+
+    The claim sweep can span more than one source repository; a single
+    FakeGh refuses the other repository's `--repo`, so this dispatcher
+    keeps one in-memory world per repository. A command that names no
+    repository falls back to the first world.
+    """
+    fakes = {repo: FakeGh(repo) for repo in repos}
+    fallback = next(iter(fakes.values()))
+
+    def dispatch(command, **kwargs):
+        fake = fakes.get(command_repo(command), fallback)
+        return fake(command, **kwargs)
+
+    install_run_command(monkeypatch, dispatch)
+    return fakes
+
+
+def install_absent_repo_policy(monkeypatch) -> None:
+    """Answer the `.github/orbi.toml` read with GitHub's 404 (Issue #2253).
+
+    A repository without a policy file is the host-config fallback — the
+    answer the real `gh` gave for the placeholder repositories these tests
+    use. The read is incidental to the scenario, so it is stubbed here;
+    every other command still reaches the suite's external-command guard.
+    """
+    from seam import seam
+
+    delegate = seam.run_command
+    suffix = "/contents/.github/orbi.toml"
+
+    def run(command, **kwargs):
+        if (
+            len(command) > 2
+            and command[0:2] == ["gh", "api"]
+            and command[2].endswith(suffix)
+        ):
+            raise subprocess.CalledProcessError(
+                1, command,
+                output='{"message":"Not Found","status":"404"}',
+                stderr="gh: Not Found (HTTP 404)",
+            )
+        return delegate(command, **kwargs)
+
+    monkeypatch.setattr(seam, "run_command", run)
+
+
+
+def install_progress_gh(monkeypatch, comments=None, *, comment_id: int = 77):
+    """Answer the failure report's progress publisher (Issue #2253).
+
+    Only the publisher's gh traffic is answered: the comment list read, a
+    created comment and an in-place edit. Any other command fails the test
+    loudly instead of reaching the subprocess seam.
+    """
+    from seam import seam
+
+    calls: list[list[str]] = []
+
+    def run(command, **kwargs):
+        calls.append(list(command))
+        if command[:2] == ["gh", "api"]:
+            if "--method" not in command:
+                return json.dumps(list(comments or []))
+            method = command[command.index("--method") + 1]
+            if method == "POST":
+                field = command[command.index("--field") + 1]
+                body = field[len("body="):] if field.startswith("body=") else field
+                return json.dumps({"id": comment_id, "body": body})
+            return ""
+        if command[:3] == ["gh", "issue", "view"] and command[-1:] == ["comments"]:
+            return json.dumps({"comments": list(comments or [])})
+        raise AssertionError(
+            "unexpected external command: " + " ".join(command)
+        )
+
+    monkeypatch.setattr(seam, "run_command", run)
+    return calls
+
+
+
+def install_empty_issue_comments(monkeypatch) -> None:
+    """Answer the Issue timeline read with no comments (Issue #2253).
+
+    These scenes do not model comments; the read is a gh command like any
+    other, so it is stubbed at the subprocess seam and every other command
+    still reaches the suite's external-command guard.
+    """
+    from seam import seam
+
+    delegate = seam.run_command
+
+    def run(command, **kwargs):
+        if command[:3] == ["gh", "issue", "view"] and command[-1:] == ["comments"]:
+            return json.dumps({"comments": []})
+        return delegate(command, **kwargs)
+
+    monkeypatch.setattr(seam, "run_command", run)
+
+
+
+def install_pr_state_gh(monkeypatch, *, head_oid: str = "def",
+                        mergeable: str = "MERGEABLE",
+                        state: str = "OPEN", rollup=None) -> None:
+    """Answer the merge gate's PR state read (Issue #2253).
+
+    The review round reads the frozen PR's state, mergeability, head and
+    check rollup once; this scene models a clean, mergeable head. Every
+    other command still reaches the suite's external-command guard.
+    """
+    from seam import seam
+
+    delegate = seam.run_command
+    payload = {
+        "state": state, "mergeable": mergeable, "headRefOid": head_oid,
+        "statusCheckRollup": list(rollup or []),
+    }
+
+    def run(command, **kwargs):
+        if command[:3] == ["gh", "pr", "view"]:
+            return json.dumps(payload)
+        return delegate(command, **kwargs)
+
+    monkeypatch.setattr(seam, "run_command", run)

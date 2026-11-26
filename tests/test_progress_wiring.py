@@ -128,12 +128,12 @@ def make_issue():
 
 def derived_wt(tmp_path, number=18):
     """The worktree path `worktree_path` derives for the fakes' scene."""
-    return runner.worktree_path(tmp_path, "xqliu/orbi", number, "a1b2c3d4")
+    return runner.worktree_path(tmp_path, "owner.invalid/repo", number, "a1b2c3d4")
 
 
 def patch_process_deps(
     monkeypatch, tmp_path, *, run_pi_side_effect=None,
-    deliver_pr_result="https://github.com/xqliu/orbi/pull/40",
+    deliver_pr_result="https://github.com/owner.invalid/repo/pull/40",
 ):
     monkeypatch.setattr(seam, "edit_issue", Mock())
     monkeypatch.setattr(seam, "freeze_base",
@@ -309,7 +309,7 @@ def test_plan_ready_milestone_posts_once_per_run(tmp_path):
     def publish(run_id):
         plan_milestone.publish(
             progress.ProgressPublisher(
-                18, "xqliu/orbi", run_id, run_command=fake_run_command,
+                18, "owner.invalid/repo", run_id, run_command=fake_run_command,
                 language_code="en",
             ),
             tmp_path,
@@ -336,7 +336,7 @@ def test_plan_ready_milestone_posts_once_per_run(tmp_path):
     # Only the plan-ready milestone is once per run: every failure
     # milestone reports a different outcome and keeps posting.
     failure = progress.ProgressPublisher(
-        18, "xqliu/orbi", "a1b2c3d4", run_command=fake_run_command,
+        18, "owner.invalid/repo", "a1b2c3d4", run_command=fake_run_command,
         language_code="en",
     )
     failure.milestone("blocked: boom")
@@ -351,7 +351,7 @@ def test_process_issue_creates_progress_comment_with_marker(monkeypatch, tmp_pat
     calls, posted = make_fake_gh(monkeypatch)
     patch_process_deps(monkeypatch, tmp_path)
     runner.process_issue(make_issue(), make_config(tmp_path),
-                         "xqliu/orbi")
+                         "owner.invalid/repo")
     progress_posts = [
         body for body in posted
         if "**Orbi progress**" in body
@@ -363,7 +363,7 @@ def test_process_issue_creates_progress_comment_with_marker(monkeypatch, tmp_pat
     # Issue #100: the issue line shows the number AND the title.
     assert "**#18 Publish progress**" in body
     assert "- role: implement" in body
-    assert "- branch: orbi/xqliu-orbi-issue-18" in body
+    assert "- branch: orbi/owner.invalid-repo-issue-18" in body
     assert "- PR: -" in body
 
 
@@ -381,7 +381,7 @@ def test_process_issue_p0_progress_comment_and_milestones_carry_priority(
     monkeypatch.setattr(seam, "edit_issue", edit)
     issue = make_issue()
     issue["labels"] = [{"name": "p0"}, {"name": "ai-ready"}]
-    runner.process_issue(issue, make_config(tmp_path), "xqliu/orbi")
+    runner.process_issue(issue, make_config(tmp_path), "owner.invalid/repo")
     progress_posts = [
         body for body in posted if "**Orbi progress**" in body
     ]
@@ -418,19 +418,19 @@ def test_process_issue_p0_failure_enters_ai_blocked_terminal_state(
     # instead of re-raising; the terminal-state assertions below are
     # unchanged.
     assert runner.process_issue(issue, make_config(tmp_path),
-                                "xqliu/orbi").kind == "failed"
+                                "owner.invalid/repo").kind == "failed"
     # Issue #2369: the claim is ONE whole-set replacement (the queue
     # entry goes, `ai-in-progress` comes). Issue #2426: the blocked
     # terminal is ONE more, ending on `ai-blocked` alone.
     assert _label_writes(calls) == [
         [
             "gh", "api", "--method", "PUT",
-            "repos/xqliu/orbi/issues/18/labels",
+            "repos/owner.invalid/repo/issues/18/labels",
             "-f", "labels[]=ai-in-progress", "--include",
         ],
         [
             "gh", "api", "--method", "PUT",
-            "repos/xqliu/orbi/issues/18/labels",
+            "repos/owner.invalid/repo/issues/18/labels",
             "-f", "labels[]=ai-blocked", "--include",
         ],
     ]
@@ -447,7 +447,7 @@ def test_process_issue_p0_failure_enters_ai_blocked_terminal_state(
     final_patches = [
         command for command in calls
         if command[:2] == ["gh", "api"]
-        and command[2] == "repos/xqliu/orbi/issues/comments/77"
+        and command[2] == "repos/owner.invalid/repo/issues/comments/77"
         and "PATCH" in command
     ]
     assert final_patches, "no PATCH of the progress comment"
@@ -472,7 +472,7 @@ def test_process_issue_fails_fast_on_missing_issue_title(
     issue = {"number": 18, "body": "body"}  # no "title"
     with pytest.raises(KeyError):
         runner.process_issue(issue, make_config(tmp_path),
-                             "xqliu/orbi")
+                             "owner.invalid/repo")
 
 
 def test_process_issue_passes_issue_number_to_deliver_pr(
@@ -488,11 +488,11 @@ def test_process_issue_passes_issue_number_to_deliver_pr(
 
     def fake_deliver_pr(*args, **kwargs):
         deliver_calls.append((args, kwargs))
-        return "https://github.com/xqliu/orbi/pull/40"
+        return "https://github.com/owner.invalid/repo/pull/40"
 
     monkeypatch.setattr(runner, "deliver_pr", fake_deliver_pr)
     runner.process_issue(make_issue(), make_config(tmp_path),
-                         "xqliu/orbi")
+                         "owner.invalid/repo")
     assert len(deliver_calls) == 1
     args, kwargs = deliver_calls[0]
     assert args[0].issue == 18, (
@@ -509,7 +509,7 @@ def test_process_issue_posts_one_scene_announcement_per_delivery_transition(
     calls, posted = make_fake_gh(monkeypatch)
     patch_process_deps(monkeypatch, tmp_path)
     runner.process_issue(make_issue(), make_config(tmp_path),
-                         "xqliu/orbi")
+                         "owner.invalid/repo")
 
     comments = [
         command[-1] for command in calls
@@ -539,12 +539,12 @@ def test_process_issue_finishes_progress_comment_with_delivery_summary(
 
     monkeypatch.setattr(pi_session, "run_pi", fake_run_pi)
     runner.process_issue(make_issue(), make_config(tmp_path),
-                         "xqliu/orbi")
+                         "owner.invalid/repo")
     # The final PATCH of comment 77 must carry the delivery summary.
     final_patches = [
         command for command in calls
         if command[:2] == ["gh", "api"]
-        and command[2] == "repos/xqliu/orbi/issues/comments/77"
+        and command[2] == "repos/owner.invalid/repo/issues/comments/77"
         and "--method" in command
         and "PATCH" in command
     ]
@@ -556,7 +556,7 @@ def test_process_issue_finishes_progress_comment_with_delivery_summary(
     # the delivery is not "delivered" (merged) yet.
     assert "waiting for checks and review" in last_body
     assert "Orbi delivered" not in last_body
-    assert "https://github.com/xqliu/orbi/pull/40" in last_body
+    assert "https://github.com/owner.invalid/repo/pull/40" in last_body
     # Issue #1613: no PR/checks at implementation end -> no test status
     # (the progress comment never parses the local test log).
     assert "- tests: -" in last_body
@@ -572,11 +572,11 @@ def test_progress_outcome_line_follows_the_language_on_delivery(
     it was delivered)."""
     calls, _posted = make_fake_gh(monkeypatch)
     patch_process_deps(monkeypatch, tmp_path)
-    runner.process_issue(make_issue(), _zh_config(tmp_path), "xqliu/orbi")
+    runner.process_issue(make_issue(), _zh_config(tmp_path), "owner.invalid/repo")
     last_body = _last_progress_body(calls)
     assert "**Orbi 已打开 PR：等待检查与评审**" in last_body
     assert "Orbi delivered" not in last_body
-    assert "https://github.com/xqliu/orbi/pull/40" in last_body
+    assert "https://github.com/owner.invalid/repo/pull/40" in last_body
 
 
 def _visible_step_row(body: str, language_code: str) -> str:
@@ -609,12 +609,12 @@ def _merge_gate_checks_body(language_code: str) -> str:
         publisher,
         RunContext(
             run_id="a1b2c3d4", issue=18, branch="b",
-            worktree=Path("-"), source_repo="xqliu/orbi",
+            worktree=Path("-"), source_repo="owner.invalid/repo",
         ),
         role=runner.ROLE_REVIEW, title="Publish progress", started=0.0,
         priority="normal",
     )
-    publish("https://github.com/xqliu/orbi/pull/40", 1, step="checks")
+    publish("https://github.com/owner.invalid/repo/pull/40", 1, step="checks")
     assert len(published) == 1
     return published[0]
 
@@ -631,7 +631,7 @@ def test_pr_opened_progress_reports_the_checks_stage(
     patch_process_deps(monkeypatch, tmp_path)
     config = (make_config(tmp_path) if language_code == "en"
               else _zh_config(tmp_path))
-    runner.process_issue(make_issue(), config, "xqliu/orbi")
+    runner.process_issue(make_issue(), config, "owner.invalid/repo")
     body = _last_progress_body(calls)
     match = re.search(r"<!-- orbi:progress:v1 ({.*?}) -->", body)
     assert match is not None, body
@@ -659,7 +659,7 @@ def test_pr_opened_outcome_says_the_pr_waits_for_checks_and_review(
     patch_process_deps(monkeypatch, tmp_path)
     config = (make_config(tmp_path) if language_code == "en"
               else _zh_config(tmp_path))
-    runner.process_issue(make_issue(), config, "xqliu/orbi")
+    runner.process_issue(make_issue(), config, "owner.invalid/repo")
     body = _last_progress_body(calls)
     assert language.text(
         language_code, "delivery.outcome_pr_opened",
@@ -677,7 +677,7 @@ def test_progress_outcome_line_follows_the_language_when_the_issue_closes(
     calls, _posted = make_fake_gh(monkeypatch)
     patch_process_deps(monkeypatch, tmp_path, deliver_pr_result=None)
     result = runner.process_issue(
-        make_issue(), _zh_config(tmp_path), "xqliu/orbi",
+        make_issue(), _zh_config(tmp_path), "owner.invalid/repo",
     )
     assert result == ("issue-closed", None)
     last_body = _last_progress_body(calls)
@@ -697,7 +697,7 @@ def test_progress_outcome_line_follows_the_language_on_recoverable_failure(
             1, ["pi"], stderr="provider unavailable",
         ),
     )
-    runner.process_issue(make_issue(), _zh_config(tmp_path), "xqliu/orbi")
+    runner.process_issue(make_issue(), _zh_config(tmp_path), "owner.invalid/repo")
     last_body = _last_progress_body(calls)
     assert "**Orbi Pi 失败已恢复**" in last_body
     assert "下一步：无需操作" in last_body
@@ -715,12 +715,12 @@ def test_process_issue_pi_infrastructure_failure_keeps_run_for_resume(
         1, ["pi"], stderr="provider unavailable",
     )
     patch_process_deps(monkeypatch, tmp_path, run_pi_side_effect=error)
-    runner.process_issue(make_issue(), make_config(tmp_path), "xqliu/orbi")
+    runner.process_issue(make_issue(), make_config(tmp_path), "owner.invalid/repo")
 
     # Issue #2369: the claim is the one whole-set replacement.
     assert _label_writes(calls) == [[
         "gh", "api", "--method", "PUT",
-        "repos/xqliu/orbi/issues/18/labels",
+        "repos/owner.invalid/repo/issues/18/labels",
         "-f", "labels[]=ai-in-progress", "--include",
     ]]
     state = json.loads(
@@ -800,7 +800,7 @@ def test_process_issue_repeated_recoverable_failure_updates_one_comment(
     # the SAME run id.
     for _ in range(2):
         assert runner.process_issue(
-            make_issue(), make_config(tmp_path), "xqliu/orbi",
+            make_issue(), make_config(tmp_path), "owner.invalid/repo",
         ).kind == "failed"
 
     scenes = [
@@ -922,7 +922,7 @@ def test_recoverable_401_posts_one_classified_comment(monkeypatch, tmp_path):
         monkeypatch, tmp_path, run_pi_side_effect=error,
     )
     assert runner.process_issue(
-        make_issue(), make_config(tmp_path), "xqliu/orbi",
+        make_issue(), make_config(tmp_path), "owner.invalid/repo",
     ).kind == "failed"
     scenes = _recoverable_scenes(comments)
     assert len(scenes) == 1, scenes
@@ -938,7 +938,7 @@ def test_recoverable_401_posts_one_classified_comment(monkeypatch, tmp_path):
     # The Issue stays ai-in-progress: the only label write is the claim.
     assert _label_writes(calls) == [[
         "gh", "api", "--method", "PUT",
-        "repos/xqliu/orbi/issues/18/labels",
+        "repos/owner.invalid/repo/issues/18/labels",
         "-f", "labels[]=ai-in-progress", "--include",
     ]]
     assert runner.edit_issue.call_args_list == []
@@ -956,7 +956,7 @@ def test_recoverable_401_next_tick_patches_the_same_comment(
     )
     for _ in range(2):
         assert runner.process_issue(
-            make_issue(), make_config(tmp_path), "xqliu/orbi",
+            make_issue(), make_config(tmp_path), "owner.invalid/repo",
         ).kind == "failed"
     scenes = _recoverable_scenes(comments)
     assert len(scenes) == 1, scenes
@@ -985,7 +985,7 @@ def test_recoverable_401_stops_after_three_identical_ticks(monkeypatch, tmp_path
     )
     for _ in range(2):
         assert runner.process_issue(
-            make_issue(), make_config(tmp_path), "xqliu/orbi",
+            make_issue(), make_config(tmp_path), "owner.invalid/repo",
         ).kind == "failed"
     assert all(
         "labels[]=ai-blocked" not in write
@@ -994,7 +994,7 @@ def test_recoverable_401_stops_after_three_identical_ticks(monkeypatch, tmp_path
     assert len(_recoverable_scenes(comments)) == 1
 
     assert runner.process_issue(
-        make_issue(), make_config(tmp_path), "xqliu/orbi",
+        make_issue(), make_config(tmp_path), "owner.invalid/repo",
     ).kind == "failed"
     blockers = [
         body for body in (comment["body"] for comment in comments)
@@ -1005,7 +1005,7 @@ def test_recoverable_401_stops_after_three_identical_ticks(monkeypatch, tmp_path
     # replacement ending on ai-blocked alone.
     writes = _label_writes(_calls)
     assert writes[-1] == [
-        "gh", "api", "--method", "PUT", "repos/xqliu/orbi/issues/18/labels",
+        "gh", "api", "--method", "PUT", "repos/owner.invalid/repo/issues/18/labels",
         "-f", "labels[]=ai-blocked", "--include",
     ]
     # The recovery comment keeps the two prior occurrences.
@@ -1026,7 +1026,7 @@ def test_recoverable_timeout_posts_its_own_comment(monkeypatch, tmp_path):
     )
     for _ in range(2):
         assert runner.process_issue(
-            make_issue(), make_config(tmp_path), "xqliu/orbi",
+            make_issue(), make_config(tmp_path), "owner.invalid/repo",
         ).kind == "failed"
     scenes = _recoverable_scenes(comments)
     assert len(scenes) == 2, scenes
@@ -1084,7 +1084,7 @@ def test_process_issue_resumes_update_one_started_comment(monkeypatch, tmp_path)
     # The run starts, then resumes three times under the SAME run id.
     for _ in range(4):
         assert runner.process_issue(
-            make_issue(), make_config(tmp_path), "xqliu/orbi",
+            make_issue(), make_config(tmp_path), "owner.invalid/repo",
         ).kind == "failed"
 
     assert len(started_posts) == 1, started_posts
@@ -1163,14 +1163,14 @@ def test_process_issue_keeps_the_claim_when_the_journal_proves_the_request(
 
     monkeypatch.setattr(seam, "create_worktree", fake_create_worktree)
     result = runner.process_issue(
-        make_issue(), make_config(tmp_path), "xqliu/orbi",
+        make_issue(), make_config(tmp_path), "owner.invalid/repo",
     )
     assert result.kind == "failed"
     # The only label transition is the claim's whole-set replacement
     # (Issue #2369): the Issue stays ai-in-progress (no `ai-blocked`).
     assert _label_writes(calls) == [[
         "gh", "api", "--method", "PUT",
-        "repos/xqliu/orbi/issues/18/labels",
+        "repos/owner.invalid/repo/issues/18/labels",
         "-f", "labels[]=ai-in-progress", "--include",
     ]]
     assert runner.edit_issue.call_args_list == []
@@ -1180,7 +1180,7 @@ def test_process_issue_keeps_the_claim_when_the_journal_proves_the_request(
     assert state["run_id"] == "a1b2c3d4"
     assert any("Pi failure recovered" in str(call) for call in calls)
     # The next tick's in-flight restart scan resumes the SAME run.
-    assert runner.worktree_resume_scene(tmp_path, "xqliu/orbi", 18) == (
+    assert runner.worktree_resume_scene(tmp_path, "owner.invalid/repo", 18) == (
         "a1b2c3d4", worktree,
     )
 
@@ -1199,7 +1199,7 @@ def test_process_issue_failure_updates_progress_comment_with_blocked_scene(
     # instead of re-raising; the blocked-scene assertions below are
     # unchanged.
     assert runner.process_issue(make_issue(), make_config(tmp_path),
-                                "xqliu/orbi").kind == "failed"
+                                "owner.invalid/repo").kind == "failed"
     milestones = [
         body for body in posted
         if any(line.startswith(progress.MILESTONE_PREFIX)
@@ -1209,7 +1209,7 @@ def test_process_issue_failure_updates_progress_comment_with_blocked_scene(
     final_patches = [
         command for command in calls
         if command[:2] == ["gh", "api"]
-        and command[2] == "repos/xqliu/orbi/issues/comments/77"
+        and command[2] == "repos/owner.invalid/repo/issues/comments/77"
         and "PATCH" in command
     ]
     assert final_patches, "no PATCH of the progress comment"
@@ -1234,7 +1234,7 @@ def test_process_issue_resumes_existing_progress_comment_after_restart(
     calls, posted = make_fake_gh(monkeypatch, comments=[existing])
     patch_process_deps(monkeypatch, tmp_path)
     runner.process_issue(make_issue(), make_config(tmp_path),
-                         "xqliu/orbi")
+                         "owner.invalid/repo")
     # No new progress comment is posted: the restarted run reuses id 77.
     progress_posts = [
         body for body in posted
@@ -1246,7 +1246,7 @@ def test_process_issue_resumes_existing_progress_comment_after_restart(
     patches = [
         command for command in calls
         if command[:2] == ["gh", "api"]
-        and command[2] == "repos/xqliu/orbi/issues/comments/77"
+        and command[2] == "repos/owner.invalid/repo/issues/comments/77"
         and "PATCH" in command
     ]
     assert patches, "existing progress comment was not updated"
@@ -1270,7 +1270,7 @@ def test_process_issue_posts_plan_ready_milestone_when_plan_written(
 
     monkeypatch.setattr(pi_session, "run_pi", fake_run_pi)
     runner.process_issue(make_issue(), make_config(tmp_path),
-                         "xqliu/orbi")
+                         "owner.invalid/repo")
     milestones = [
         body for body in posted
         if any(line.startswith(progress.MILESTONE_PREFIX)
@@ -1300,7 +1300,7 @@ def test_process_issue_posts_no_tests_milestone(monkeypatch, tmp_path):
 
     monkeypatch.setattr(pi_session, "run_pi", fake_run_pi)
     runner.process_issue(make_issue(), make_config(tmp_path),
-                         "xqliu/orbi")
+                         "owner.invalid/repo")
     milestones = [
         body for body in posted
         if any(line.startswith(progress.MILESTONE_PREFIX)
@@ -1325,7 +1325,7 @@ def test_process_issue_never_posts_fix_pushed_on_a_fresh_claim(
     patch_process_deps(monkeypatch, tmp_path)
     monkeypatch.setattr(runner, "delivery_head_advanced", lambda *args: True)
     runner.process_issue(make_issue(), make_config(tmp_path),
-                         "xqliu/orbi")
+                         "owner.invalid/repo")
     milestones = [
         body for body in posted
         if any(line.startswith(progress.MILESTONE_PREFIX)
@@ -1379,7 +1379,7 @@ def _progress_patch_of(command) -> bool:
     return (
         command[:2] == ["gh", "api"]
         # GitHub update route (Issue #58): no issue number.
-        and command[2] == "repos/xqliu/orbi/issues/comments/77"
+        and command[2] == "repos/owner.invalid/repo/issues/comments/77"
         and "--method" in command
         and "PATCH" in command
     )
@@ -1428,9 +1428,9 @@ def test_pr_opened_transition_removes_a_pre_upgrade_queue_label(
     issue = make_issue()
     issue["labels"] = [{"name": "ai-ready"}]
 
-    result = runner.process_issue(issue, make_config(tmp_path), "xqliu/orbi")
+    result = runner.process_issue(issue, make_config(tmp_path), "owner.invalid/repo")
 
-    assert result.url == "https://github.com/xqliu/orbi/pull/40"
+    assert result.url == "https://github.com/owner.invalid/repo/pull/40"
     # Issue #2369: both transitions are one whole-set replacement each;
     # the PR-opened one ends on `ai-pr-opened` with the queue residue gone.
     writes = [
@@ -1456,9 +1456,9 @@ def test_process_issue_delivered_patch_failure_does_not_fail_delivery(
     caplog.set_level("ERROR")
 
     result = runner.process_issue(make_issue(), make_config(tmp_path),
-                                  "xqliu/orbi")
+                                  "owner.invalid/repo")
 
-    assert result.url == "https://github.com/xqliu/orbi/pull/40"
+    assert result.url == "https://github.com/owner.invalid/repo/pull/40"
     # The state transition happened (the Issue awaits review)...
     writes = _label_writes(calls)
     assert len(writes) == 2
@@ -1469,7 +1469,7 @@ def test_process_issue_delivered_patch_failure_does_not_fail_delivery(
     assert any(
         "progress_publish_failed" in line
         and "run=a1b2c3d4" in line
-        and "issue=xqliu/orbi#18" in line
+        and "issue=owner.invalid/repo#18" in line
         and "role=implement" in line
         for line in caplog.text.splitlines()
     ), caplog.text
@@ -1504,9 +1504,9 @@ def test_process_issue_pr_opened_scene_has_no_duplicate_milestone(
     caplog.set_level("ERROR")
 
     result = runner.process_issue(make_issue(), make_config(tmp_path),
-                                  "xqliu/orbi")
+                                  "owner.invalid/repo")
 
-    assert result.url == "https://github.com/xqliu/orbi/pull/40"
+    assert result.url == "https://github.com/owner.invalid/repo/pull/40"
     assert ["ai-blocked"] not in edits
     # No duplicate PR-opened milestone is attempted. The delivered
     # finish still ran (independent step)...
@@ -1540,14 +1540,14 @@ def test_process_issue_post_pr_comment_failure_keeps_delivery_open(
     caplog.set_level("WARNING")
 
     result = runner.process_issue(make_issue(), make_config(tmp_path),
-                                  "xqliu/orbi")
+                                  "owner.invalid/repo")
 
-    assert result.url == "https://github.com/xqliu/orbi/pull/40"
+    assert result.url == "https://github.com/owner.invalid/repo/pull/40"
     writes = _label_writes(calls)
     assert len(writes) == 2
     assert "labels[]=ai-pr-opened" in writes[-1]
     assert "progress_comment_failed" in caplog.text
-    assert "pr=https://github.com/xqliu/orbi/pull/40" in caplog.text
+    assert "pr=https://github.com/owner.invalid/repo/pull/40" in caplog.text
     assert any(command[:2] == ["gh", "issue"] for command in calls)
     assert not any("Orbi failed" in body for body in posted)
 
@@ -1562,13 +1562,13 @@ def test_process_issue_publishing_failure_still_logs_run_end(
     caplog.set_level("INFO")
 
     runner.process_issue(make_issue(), make_config(tmp_path),
-                         "xqliu/orbi")
+                         "owner.invalid/repo")
 
     ends = [line for line in caplog.text.splitlines()
             if " run_end " in line]
     assert len(ends) == 1
     assert "result=pr_opened" in ends[0]
-    assert "pr=https://github.com/xqliu/orbi/pull/40" in ends[0]
+    assert "pr=https://github.com/owner.invalid/repo/pull/40" in ends[0]
 
 
 def test_process_issue_publishing_failure_is_never_blocked_scene(
@@ -1581,9 +1581,9 @@ def test_process_issue_publishing_failure_is_never_blocked_scene(
     patch_process_deps(monkeypatch, tmp_path)
 
     result = runner.process_issue(make_issue(), make_config(tmp_path),
-                                  "xqliu/orbi")
+                                  "owner.invalid/repo")
 
-    assert result.url == "https://github.com/xqliu/orbi/pull/40"
+    assert result.url == "https://github.com/owner.invalid/repo/pull/40"
     # No blocked milestone...
     assert not any(is_blocked_scene(body) for body in posted)
     # ...no `Orbi failed` comment...
@@ -1627,10 +1627,10 @@ def test_process_issue_ensure_failure_does_not_fail_delivery(
     caplog.set_level("ERROR")
 
     result = runner.process_issue(make_issue(), make_config(tmp_path),
-                                  "xqliu/orbi")
+                                  "owner.invalid/repo")
 
     # The delivery completed: the PR is open and awaits review...
-    assert result.url == "https://github.com/xqliu/orbi/pull/40"
+    assert result.url == "https://github.com/owner.invalid/repo/pull/40"
     assert any(
         "labels[]=ai-pr-opened" in command for command in calls
     )
@@ -1642,7 +1642,7 @@ def test_process_issue_ensure_failure_does_not_fail_delivery(
     assert any(
         "progress_publish_failed" in line
         and "run=a1b2c3d4" in line
-        and "issue=xqliu/orbi#18" in line
+        and "issue=owner.invalid/repo#18" in line
         and "role=implement" in line
         for line in caplog.text.splitlines()
     ), caplog.text
@@ -1672,9 +1672,9 @@ def test_process_issue_started_scene_has_no_duplicate_milestone(
     caplog.set_level("ERROR")
 
     result = runner.process_issue(make_issue(), make_config(tmp_path),
-                                  "xqliu/orbi")
+                                  "owner.invalid/repo")
 
-    assert result.url == "https://github.com/xqliu/orbi/pull/40"
+    assert result.url == "https://github.com/owner.invalid/repo/pull/40"
     assert pi_session.run_pi.called
     assert ["ai-blocked"] not in edits
     # The ensure itself succeeded; the scene comment is the sole
@@ -1718,9 +1718,9 @@ def test_process_issue_plan_milestone_failure_does_not_fail_delivery(
     )
 
     result = runner.process_issue(make_issue(), make_config(tmp_path),
-                                  "xqliu/orbi")
+                                  "owner.invalid/repo")
 
-    assert result.url == "https://github.com/xqliu/orbi/pull/40"
+    assert result.url == "https://github.com/owner.invalid/repo/pull/40"
     assert ["ai-blocked"] not in edits
     assert caplog.text.count("progress_publish_failed") >= 1, caplog.text
     # The failed milestone was not posted...
@@ -1772,7 +1772,7 @@ def test_process_issue_failure_path_progress_failure_keeps_blocked_transition(
     # `None` instead of re-raising; the bypass assertions below are
     # unchanged.
     assert runner.process_issue(make_issue(), make_config(tmp_path),
-                                "xqliu/orbi").kind == "failed"
+                                "owner.invalid/repo").kind == "failed"
 
     # The `ai-blocked` transition completed even though the progress
     # publishing 404'd...
@@ -1833,7 +1833,7 @@ def test_review_and_merge_posts_review_findings_milestone(monkeypatch, tmp_path)
     final_patches = [
         command for command in calls
         if command[:2] == ["gh", "api"]
-        and command[2] == "repos/xqliu/orbi/issues/comments/77"
+        and command[2] == "repos/owner.invalid/repo/issues/comments/77"
         and "PATCH" in command
     ]
     assert final_patches
@@ -1878,7 +1878,7 @@ def test_review_and_merge_posts_merged_milestone_and_final_summary(
     final_patches = [
         command for command in calls
         if command[:2] == ["gh", "api"]
-        and command[2] == "repos/xqliu/orbi/issues/comments/77"
+        and command[2] == "repos/owner.invalid/repo/issues/comments/77"
         and "PATCH" in command
     ]
     assert final_patches
@@ -1964,7 +1964,7 @@ def _run_review_and_merge(monkeypatch, tmp_path, *, verdict,
     monkeypatch.setattr(seam, "run_command", fake_run_command)
     monkeypatch.setattr(seam, "issue_comments", lambda *a, **k: [])
     monkeypatch.setattr(review_merge, "freeze_pr", lambda *a, **k: {
-        "number": 4, "url": "https://github.com/xqliu/orbi/pull/40",
+        "number": 4, "url": "https://github.com/owner.invalid/repo/pull/40",
         "base_ref": "main", "base_oid": "b1",
         "head_ref": "h", "head_oid": "h1",
     })
@@ -1985,7 +1985,7 @@ def _run_review_and_merge(monkeypatch, tmp_path, *, verdict,
     monkeypatch.setattr(failure_report, "comment_pr", Mock())
     if "pass" in verdict:
         monkeypatch.setattr(merge_exec, "merge_gate", lambda *a, **k: {
-            "number": 4, "url": "https://github.com/xqliu/orbi/pull/40",
+            "number": 4, "url": "https://github.com/owner.invalid/repo/pull/40",
             "base_ref": "main", "base_oid": "b1",
             "head_ref": "h", "head_oid": "h1", "merged": True,
         })
@@ -2002,7 +2002,7 @@ def _run_review_and_merge(monkeypatch, tmp_path, *, verdict,
     merged = review_merge.review_and_merge_if_clean(
         tmp_path, "branch", "main",
         config_domain.RunnerConfig(repo_dir=tmp_path, base_branch="main", base_sha="b1", run_id="a1b2c3d4"),
-        "xqliu/orbi", 18, title="Publish progress",
+        "owner.invalid/repo", 18, title="Publish progress",
         priority="normal",
         scene=run_state.ResumeScene(parsed=scene.Scene(
             run_id="a1b2c3d4", base_branch="main", base_sha="b1",
@@ -2045,7 +2045,7 @@ def test_review_and_merge_ensure_failure_does_not_block_issue(
     assert any(
         "progress_publish_failed" in line
         and "run=a1b2c3d4" in line
-        and "issue=xqliu/orbi#18" in line
+        and "issue=owner.invalid/repo#18" in line
         and "role=review" in line
         for line in caplog.text.splitlines()
     ), caplog.text
@@ -2627,9 +2627,9 @@ def test_delivery_step_review_failure_progress_failure_still_releases(
 
 EXTERNAL_PR_BODY = (
     "## CI failure: tests\n\n"
-    "- branch/PR: [PR #592](https://github.com/xqliu/orbi/pull/592)"
+    "- branch/PR: [PR #592](https://github.com/owner.invalid/repo/pull/592)"
     " (head branch `fix/outer`)\n"
-    "- external PR: [592](https://github.com/xqliu/orbi/pull/592) —"
+    "- external PR: [592](https://github.com/owner.invalid/repo/pull/592) —"
     " head branch `fix/outer` is outside the stable delivery naming\n"
     "<!-- orbi:external-pr:592 -->\n"
 )
@@ -2653,7 +2653,7 @@ def _make_takeover_gh(monkeypatch, monkeypatched, tmp_path, *, pr_state="OPEN",
         if command[:3] == ["gh", "pr", "view"]:
             return json.dumps({
                 "state": pr_state, "url":
-                    "https://github.com/xqliu/orbi/pull/592",
+                    "https://github.com/owner.invalid/repo/pull/592",
                 "baseRefName": pr_base, "headRefName": "fix/outer",
                 "headRefOid": "e592a11",
             })
@@ -2697,9 +2697,9 @@ def test_process_issue_claims_external_pr_and_skips_run_pi(
         "body": EXTERNAL_PR_BODY,
         "labels": [{"name": "ai-ready"}],
     }
-    result = runner.process_issue(issue, make_config(tmp_path), "xqliu/orbi")
+    result = runner.process_issue(issue, make_config(tmp_path), "owner.invalid/repo")
     assert result.kind == "external-pr"
-    assert result.url == "https://github.com/xqliu/orbi/pull/592"
+    assert result.url == "https://github.com/owner.invalid/repo/pull/592"
     # The implementer never ran: the review loop is the FIRST touch.
     assert not pi_session.run_pi.called
     # The worktree was created on the contributor's head branch.
@@ -2733,9 +2733,9 @@ def test_process_issue_external_pr_closed_claims_fresh(monkeypatch, tmp_path):
         "body": EXTERNAL_PR_BODY,
         "labels": [{"name": "ai-ready"}],
     }
-    result = runner.process_issue(issue, make_config(tmp_path), "xqliu/orbi")
+    result = runner.process_issue(issue, make_config(tmp_path), "owner.invalid/repo")
     assert result.kind == "pr"
-    assert result.url == "https://github.com/xqliu/orbi/pull/40"
+    assert result.url == "https://github.com/owner.invalid/repo/pull/40"
     assert pi_session.run_pi.called
 
 
@@ -2770,7 +2770,7 @@ def test_process_issue_claims_fresh_with_surviving_stable_branch(
     }
     with caplog.at_level("INFO"):
         result = runner.process_issue(
-            issue, make_config(tmp_path), "xqliu/orbi",
+            issue, make_config(tmp_path), "owner.invalid/repo",
         )
 
     # The claim proceeded to implementation on the existing branch...
@@ -2809,13 +2809,13 @@ def test_delivery_step_external_merge_closes_the_triage_issue(
     monkeypatch.setattr(seam, "comment_issue", Mock())
     bind_run_id("a1b2c3d4")
     runner.delivery_step(
-        "https://github.com/xqliu/orbi/pull/592",
+        "https://github.com/owner.invalid/repo/pull/592",
         {"number": 608, "title": "t", "body": ""},
         config_domain.RunnerConfig(repo_dir=Path("/srv/repo"), base_branch="main"),
-        "xqliu/orbi", external_takeover=True,
+        "owner.invalid/repo", external_takeover=True,
     )
     assert close_calls == [
-        ["gh", "issue", "close", "608", "--repo", "xqliu/orbi"],
+        ["gh", "issue", "close", "608", "--repo", "owner.invalid/repo"],
     ]
     body = runner.comment_issue.call_args.kwargs["body"]
     assert "<!-- orbi:run=a1b2c3d4 -->" in body
@@ -2839,10 +2839,10 @@ def test_delivery_step_external_close_failure_never_rewrites(
     bind_run_id("a1b2c3d4")
     caplog.set_level("ERROR")
     runner.delivery_step(
-        "https://github.com/xqliu/orbi/pull/592",
+        "https://github.com/owner.invalid/repo/pull/592",
         {"number": 608, "title": "t", "body": ""},
         config_domain.RunnerConfig(repo_dir=Path("/srv/repo"), base_branch="main"),
-        "xqliu/orbi", external_takeover=True,
+        "owner.invalid/repo", external_takeover=True,
     )
     assert "external_takeover_close_failed" in caplog.text
 
@@ -2875,10 +2875,10 @@ def test_delivery_step_external_closed_requeues_for_internal_redo(
     )
     bind_run_id("a1b2c3d4")
     runner.delivery_step(
-        "https://github.com/xqliu/orbi/pull/592",
+        "https://github.com/owner.invalid/repo/pull/592",
         {"number": 608, "title": "t", "body": ""},
         config_domain.RunnerConfig(repo_dir=Path("/srv/repo"), base_branch="main"),
-        "xqliu/orbi", external_takeover=True,
+        "owner.invalid/repo", external_takeover=True,
     )
     assert edits == [["ai-ready"]]
     assert any(
@@ -3026,7 +3026,7 @@ def test_review_round_reports_checks_then_merge_in_the_same_comment(
         command[command.index("--field") + 1][len("body="):]
         for command in calls
         if command[0] == "gh" and command[1] == "api" and "PATCH" in command
-        and command[2].startswith("repos/xqliu/orbi/issues/comments/")
+        and command[2].startswith("repos/owner.invalid/repo/issues/comments/")
     ][-2]
     assert "- step: checks" in checks_body
 
@@ -3054,7 +3054,7 @@ def test_process_issue_notifications_carry_the_configured_status_link(
         make_config(tmp_path), status_url=STATUS_URL,
         attribution_footer=False,
     )
-    runner.process_issue(make_issue(), config, "xqliu/orbi")
+    runner.process_issue(make_issue(), config, "owner.invalid/repo")
 
     link = f"**Project status:** [Open project status]({STATUS_URL})"
     started = [body for body in posted if "Orbi started Pi:" in body]
@@ -3078,12 +3078,12 @@ def test_process_issue_notifications_carry_the_configured_status_link(
         return json.dumps({"id": 88})
 
     milestone_publisher = progress.ProgressPublisher(
-        18, "xqliu/orbi", "a1b2c3d4", run_command=fake_milestone_gh,
+        18, "owner.invalid/repo", "a1b2c3d4", run_command=fake_milestone_gh,
         language_code="en", status_url=STATUS_URL,
     )
     plan_milestone.publish(milestone_publisher, derived_wt(tmp_path))
     milestone_publisher.milestone(
-        "merged: https://github.com/xqliu/orbi/pull/40 "
+        "merged: https://github.com/owner.invalid/repo/pull/40 "
         "(merge_commit=m1 review_rounds=1 external_commits=0 commits=1)"
     )
     (derived_wt(tmp_path) / ".orbi").mkdir(parents=True, exist_ok=True)
@@ -3102,7 +3102,7 @@ def test_process_issue_notifications_stay_github_only_without_status_url(
     """Omitting the optional value is quiet: no link, no placeholder."""
     calls, posted = make_fake_gh(monkeypatch)
     patch_process_deps(monkeypatch, tmp_path)
-    runner.process_issue(make_issue(), make_config(tmp_path), "xqliu/orbi")
+    runner.process_issue(make_issue(), make_config(tmp_path), "owner.invalid/repo")
     assert posted
     assert not any("Open project status" in body for body in posted)
     assert not any("Project status" in body for body in posted)
@@ -3140,7 +3140,7 @@ def test_invalid_status_url_warns_and_the_same_delivery_continues(
     caplog.set_level(logging.WARNING, logger="orbi.bootstrap")
     config_path = tmp_path / "orbi.toml"
     config_path.write_text(
-        f'source_repos = ["xqliu/orbi"]\nstatus_url = "{raw}"\n',
+        f'source_repos = ["owner.invalid/repo"]\nstatus_url = "{raw}"\n',
         encoding="utf-8",
     )
     loaded = config_domain.load_config(config_path)
@@ -3159,7 +3159,7 @@ def test_invalid_status_url_warns_and_the_same_delivery_continues(
         loaded, repo_dir=tmp_path, prompt=tmp_path / "prompt.md",
         base_branch="main", message_language=language_code,
     )
-    runner.process_issue(make_issue(), config, "xqliu/orbi")
+    runner.process_issue(make_issue(), config, "owner.invalid/repo")
     header = language.text(language_code, "progress.header")
     assert header in {line for body in posted for line in body.splitlines()}
     assert not any("Project status" in body for body in posted)
@@ -3199,7 +3199,7 @@ def test_fresh_claim_yields_when_another_executor_already_started(
 
     with caplog.at_level("INFO"):
         result = runner.process_issue(
-            make_issue(), make_config(tmp_path), "xqliu/orbi",
+            make_issue(), make_config(tmp_path), "owner.invalid/repo",
         )
 
     assert result == runner.IssueResult("claim-yielded", None)
@@ -3218,7 +3218,7 @@ def test_fresh_claim_yields_when_another_executor_already_started(
     # (Issue #2369: one whole-set replacement).
     assert _label_writes(calls) == [[
         "gh", "api", "--method", "PUT",
-        "repos/xqliu/orbi/issues/18/labels",
+        "repos/owner.invalid/repo/issues/18/labels",
         "-f", "labels[]=ai-in-progress", "--include",
     ]]
     assert edit_issue.call_args_list == []
@@ -3238,7 +3238,7 @@ def test_fresh_claim_runs_when_no_other_executor_started(
 
     with caplog.at_level("INFO"):
         result = runner.process_issue(
-            make_issue(), make_config(tmp_path), "xqliu/orbi",
+            make_issue(), make_config(tmp_path), "owner.invalid/repo",
         )
 
     assert result.kind == "pr"

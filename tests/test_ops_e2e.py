@@ -381,6 +381,7 @@ def worktree_for(clone: Path, run_id: str) -> Path:
 
 def test_e2e_pure_ops_ticket_executes_merges_and_delivers_evidence(
     clone, gh_world, tmp_path, monkeypatch, caplog,
+    allow_external_commands,
 ):
     install_fake_pi(monkeypatch, tmp_path, FAKE_PI_OPS)
     monkeypatch.setenv(
@@ -448,7 +449,7 @@ def test_e2e_pure_ops_ticket_executes_merges_and_delivers_evidence(
 
 
 def test_e2e_ops_ticket_with_code_change_takes_the_pr_ceremony(
-    clone, gh_world, tmp_path, monkeypatch,
+    clone, gh_world, tmp_path, monkeypatch, allow_external_commands,
 ):
     install_fake_pi(monkeypatch, tmp_path, FAKE_PI_OPS_COMMIT)
     monkeypatch.setenv(

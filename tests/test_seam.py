@@ -39,6 +39,20 @@ def bindings(name: str) -> list:
     return [vars(module)[name] for module in BINDING_MODULES]
 
 
+def suite_baseline(name: str) -> list:
+    """The binding a fresh TEST starts with (Issue #2253).
+
+    `run_command` is wrapped by the suite's external-command guard for every
+    test, so the restore target inside a test is that wrapper — never the
+    import-time function. The guard itself is undone by its own fixture
+    after the last test's teardown (asserted below).
+    """
+    current = bindings(name)
+    assert current == [current[0]] * 3
+    assert current[0] is not REAL_RUN_COMMAND
+    return current
+
+
 @pytest.fixture(autouse=True, scope="module")
 def _seam_isolation_after_the_module():
     """The last test's teardown — the autouse `_default_cli_install_preflight`
@@ -65,11 +79,11 @@ def test_one_patch_reaches_every_module_that_binds_the_function():
 
 def test_nested_contexts_restore_the_outer_fake_then_the_original():
     """Issue #1953: an inner context restores the OUTER fake — the outer
-    patch is still active — and only the outer exit restores the real
-    binding. pytest 9.2.0's `undo()` runs `setattr` here, the delete path of
-    a stateful proxy restored the original too early."""
-    original = bindings("run_command")
-    assert original == [REAL_RUN_COMMAND] * 3
+    patch is still active — and only the outer exit restores the baseline
+    binding (the suite's external-command guard, Issue #2253). pytest
+    9.2.0's `undo()` runs `setattr` here, the delete path of a stateful
+    proxy restored the original too early."""
+    original = suite_baseline("run_command")
     first, second = object(), object()
     with pytest.MonkeyPatch.context() as outer:
         outer.setattr(seam, "run_command", first)
@@ -177,4 +191,4 @@ def test_a_patched_seam_is_gone_for_the_next_test():
 def test_the_next_test_sees_the_original_bindings():
     """The isolation the CI teardown error robbed: the previous test's fake
     does not outlive it."""
-    assert bindings("run_command") == [REAL_RUN_COMMAND] * 3
+    assert bindings("run_command") == suite_baseline("run_command")

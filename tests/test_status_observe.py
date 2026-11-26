@@ -1053,7 +1053,8 @@ def _run_status(monkeypatch, tmp_path, argv, *, stall_subcommand=None,
 
 
 def test_status_issue_scope_bounds_a_hung_issue_view(monkeypatch, tmp_path,
-                                                     capsys):
+                                                     capsys,
+                                                     allow_external_commands):
     """Acceptance: `orbi status --repo acme/shop --issue 42` with a
     `gh issue view` that never answers exits 1 within the bound, with
     the scope named."""
@@ -1072,7 +1073,8 @@ def test_status_issue_scope_bounds_a_hung_issue_view(monkeypatch, tmp_path,
 
 
 def test_status_repo_scope_bounds_a_hung_ready_list(monkeypatch, tmp_path,
-                                                    capsys):
+                                                    capsys,
+                                                    allow_external_commands):
     """Acceptance: repository scope with a ready-queue `gh issue list`
     that never answers exits 1 within the bound, with the scope named."""
     rc = _run_status(
@@ -1120,7 +1122,8 @@ def _search_failing_gh(tmp_path):
 
 
 def test_status_repo_scope_names_a_failed_ready_scan(monkeypatch, tmp_path,
-                                                     capsys):
+                                                     capsys,
+                                                     allow_external_commands):
     """Acceptance #1773 + #1668: the ready decision is the claim's own
     scan, so a ready-scan read that fails must be NAMED and exit non-zero
     — it is never rendered as `ready: -`, an empty queue.

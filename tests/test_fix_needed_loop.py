@@ -33,6 +33,9 @@ import orbi.runner_health as runner_health
 from orbi import failure, language, progress, provider_balance, scene
 from orbi.delivery_labels import EVENT_BLOCKED
 from seam import seam
+from tests.fakes.github import (
+    install_empty_issue_comments, install_pr_state_gh,
+)
 from tests.test_progress_wiring import is_blocked_scene
 
 PR_URL = "https://github.com/owner/repo/pull/46"
@@ -1219,6 +1222,9 @@ def test_exhausted_review_enters_new_budget_after_human_recovery(
     from tests.test_resume_pr import FAKE_RUN_ID
     monkeypatch.setattr(seam, "human_review_recovery_at",
                         lambda *a, **k: "2026-02-01T00:00:00Z")
+    # The round's one PR read (base absorb arm): no failing check, so no
+    # absorb and the review session runs (Issue #2253).
+    install_pr_state_gh(monkeypatch)
     frozen = {"number": 46, "url": PR_URL, "base_ref": "main",
               "base_oid": "abc", "head_ref": "b", "head_oid": "def"}
     freezes = []
@@ -1313,6 +1319,9 @@ def _external_review_env(monkeypatch, tmp_path, *, external: bool):
     monkeypatch.setattr(seam, "confirm_merged",
                         lambda *a, **k: (_ for _ in ()).throw(
                             AssertionError("confirm_merged must not run")))
+    # The stop scenes read the Issue timeline; none exists here (Issue
+    # #2253).
+    install_empty_issue_comments(monkeypatch)
     monkeypatch.setattr(seam, "human_review_recovery_at",
                         lambda *a, **k: None)
     monkeypatch.setattr(seam, "pr_delivery_rollup",
@@ -1429,6 +1438,8 @@ def test_internal_clean_verdict_still_merges(monkeypatch, tmp_path):
     the merge gate exactly as before."""
     comments, patches = _external_review_env(monkeypatch, tmp_path,
                                              external=False)
+    # The round's one PR read (base absorb arm) answers the frozen head.
+    install_pr_state_gh(monkeypatch)
     # Replace the failing gate stubs with the real merge path fakes.
     monkeypatch.setattr(seam, "merge_gate",
                         lambda *a, **k: {"url": PR_URL})

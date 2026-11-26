@@ -52,7 +52,7 @@ from orbi.delivery_labels import (
 from seam import seam
 
 from tests.fakes.clarify import stub_judgment
-from tests.fakes.github import FakeGh
+from tests.fakes.github import FakeGh, install_empty_issue_comments
 from tests.fakes.telegram import (
     TelegramEndpoint,
     bind_notify,
@@ -847,6 +847,9 @@ def _record_writes(monkeypatch):
         lambda number, *, repo, add=None, remove=None: edits.append(
             (number, repo, add, remove)),
     )
+    # The clarify stop reads the Issue timeline before it writes; no
+    # comments here (Issue #2253).
+    install_empty_issue_comments(monkeypatch)
     return comments, edits
 
 

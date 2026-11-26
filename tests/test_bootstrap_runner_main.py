@@ -28,7 +28,9 @@ import orbi.runner as runner
 import orbi.resume_verification as resume_verification
 import orbi.milestone as milestone
 from orbi import pi_stream_log, progress
-from tests.fakes.github import FakeGh
+from tests.fakes.github import (
+    FakeGh, install_absent_repo_policy, install_fake_gh_repositories,
+)
 from seam import seam
 from tests.fakes.bootstrap_delivery import PR_URL
 
@@ -47,6 +49,12 @@ def _write_prompts(tmp_path):
     prompts.mkdir(exist_ok=True)
     for name in ("prompt.md", "prompt_review.md"):
         (prompts / name).write_text("prompt", encoding="utf-8")
+
+
+@pytest.fixture(autouse=True)
+def _absent_repo_policy(monkeypatch):
+    """The policy read is incidental to these tick scenes (Issue #2253)."""
+    install_absent_repo_policy(monkeypatch)
 
 
 def test_idle_diagnostic_logs_ready_outside_active_milestone(
@@ -183,6 +191,7 @@ def test_main_passes_configured_active_milestone_to_the_claim_scan(
     scan (the fresh-claim scope), and an unconfigured one passes None
     (the compat behavior — no milestone filter)."""
     monkeypatch.setitem(milestone.__dict__, "validate_active_milestone", lambda *args, **k: None)
+    install_fake_gh_repositories(monkeypatch, "owner/repo")
     _write_prompts(tmp_path)
     config = tmp_path / "orbi.toml"
     config.write_text(
@@ -206,6 +215,7 @@ def test_main_advances_milestone_only_after_no_ready_issue(
     monkeypatch, tmp_path,
 ):
     monkeypatch.setitem(milestone.__dict__, "validate_active_milestone", lambda *args, **k: None)
+    install_fake_gh_repositories(monkeypatch, "owner/repo")
     _write_prompts(tmp_path)
     config = tmp_path / "orbi.toml"
     config.write_text(
@@ -240,6 +250,7 @@ def test_main_passes_disabled_auto_next_milestone_to_idle_advance(
     monkeypatch, tmp_path,
 ):
     monkeypatch.setitem(milestone.__dict__, "validate_active_milestone", lambda *args, **k: None)
+    install_fake_gh_repositories(monkeypatch, "owner/repo")
     _write_prompts(tmp_path)
     config = tmp_path / "orbi.toml"
     config.write_text(
@@ -275,6 +286,7 @@ def test_main_idle_uses_the_single_milestone_reconcile_entry_point(
     """Issue #856: the idle path makes ONE Milestone bookkeeping call, so a
     new step never becomes a second, separately-failing call."""
     monkeypatch.setitem(milestone.__dict__, "validate_active_milestone", lambda *args, **k: None)
+    install_fake_gh_repositories(monkeypatch, "owner/repo")
     _write_prompts(tmp_path)
     config = tmp_path / "orbi.toml"
     config.write_text(
@@ -548,7 +560,7 @@ def test_main_processes_one_issue(monkeypatch, tmp_path):
     monkeypatch.setattr(
         claim, "pick_next_delivery",
         lambda repos, slot_dir, max_concurrency, active_milestone=None, **_kwargs: (
-            "xqliu/orbi", issue, None
+            "owner.invalid/repo", issue, None
         ),
     )
     monkeypatch.setattr(runner, "process_issue", lambda *args, **kwargs: calls.append((args, kwargs)) or runner.IssueResult("pr", "https://github.com/x/y/pull/12"))
@@ -798,7 +810,7 @@ def test_main_rejects_repeated_source_repo_before_execution(
     seen = []
     config = tmp_path / "orbi.toml"
     config.write_text(
-        "source_repos = [\"xqliu/orbi\", \"xqliu/orbi-backlog\"]\n",
+        "source_repos = [\"owner.invalid/repo\", \"owner.invalid/repo-backlog\"]\n",
         encoding="utf-8",
     )
     monkeypatch.setattr(

@@ -12,11 +12,16 @@ fan-out already reaches every module that binds the name, so the second
 patch was dead code the next reader had to explain).
 """
 import ast
+import shutil
 from pathlib import Path
 
 import pytest
 
 from conftest import git
+from external_guard import (
+    ExternalCallGuard, UnstubbedExternalCommand, git_subcommand,
+)
+from seam import seam
 
 TESTS_DIR = Path(__file__).resolve().parent
 
@@ -110,3 +115,136 @@ def test_the_cli_install_fixture_patches_the_seam_once():
         and node.args[1].value == "refresh_cli_install"
     ]
     assert len(patches) == 1
+
+
+
+def test_external_guard_refuses_an_unstubbed_gh_write_before_any_process(tmp_path):
+    """A gh write the test did not stub is refused with the command named
+    and no process started (Issue #2253)."""
+    started: list = []
+    guard = ExternalCallGuard(
+        lambda command, **kwargs: started.append(command) or "",
+        temp_root=tmp_path,
+    )
+    with pytest.raises(
+        UnstubbedExternalCommand,
+        match=r"gh issue create --repo owner\.invalid/repo",
+    ):
+        guard.run(
+            ["gh", "issue", "create", "--repo", "owner.invalid/repo"],
+            cwd=tmp_path,
+        )
+    assert started == []
+    assert guard.calls[0].render() == (
+        "unstubbed external gh command: gh issue create "
+        "--repo owner.invalid/repo"
+    )
+
+
+def test_external_guard_refuses_network_git_but_allows_a_local_repository(
+        tmp_path):
+    """A network Git verb is refused outside the temp base, while the same
+    verb against a temporary local repository is the intentional operation
+    the suite allows (Issue #2253)."""
+    started: list = []
+    guard = ExternalCallGuard(
+        lambda command, **kwargs: started.append(command) or "",
+        temp_root=tmp_path,
+    )
+    with pytest.raises(
+        UnstubbedExternalCommand,
+        match="unstubbed network git command: git fetch origin",
+    ):
+        guard.run(["git", "fetch", "origin"], cwd=tmp_path.parent)
+    repository = tmp_path / "repository"
+    repository.mkdir()
+    assert guard.run(["git", "status"], cwd=repository) == ""
+    assert guard.run(["git", "fetch", "origin"], cwd=repository) == ""
+    assert started == [
+        ["git", "status"], ["git", "fetch", "origin"],
+    ]
+
+
+def test_external_guard_still_fails_when_the_code_swallows_the_refusal(
+        tmp_path):
+    """Recording is what makes a best-effort read a failure: the test that
+    swallowed the refusal still fails at teardown (Issue #2253)."""
+    guard = ExternalCallGuard(lambda *a, **k: "", temp_root=tmp_path)
+    try:
+        guard.run(["gh", "issue", "list"], cwd=tmp_path)
+    except UnstubbedExternalCommand:
+        pass  # the code under test's best-effort handler
+    with pytest.raises(
+        pytest.fail.Exception,
+        match="unstubbed external gh command: gh issue list",
+    ):
+        guard.assert_no_unexpected_calls()
+
+
+def test_a_seam_stub_intercepts_the_guarded_read(monkeypatch):
+    """The control: a properly stubbed read reaches the fake, not the
+    guard — the guard only fails the test that forgot the stub (Issue
+    #2253)."""
+    from orbi import github
+
+    seen: list = []
+    monkeypatch.setattr(
+        seam, "run_command",
+        lambda command, **kwargs: seen.append(command) or "[]",
+    )
+    assert github.list_issues(
+        "owner.invalid/repo", json_fields="number", limit=100,
+    ) == []
+    assert seen and seen[0][:3] == ["gh", "issue", "list"]
+
+
+def test_the_offline_sentinel_owns_gh_and_a_private_home(
+        offline_external_sentinel):
+    """The bypass net: the gh name resolves to the recording sentinel and
+    HOME carries no stored login (Issue #2253)."""
+    sentinel = offline_external_sentinel
+    assert Path(shutil.which("gh")) == sentinel.gh
+    assert Path.home() == sentinel.home
+    assert not (sentinel.home / ".config" / "gh").exists()
+
+
+
+def test_git_subcommand_skips_the_global_options_before_the_verb():
+    """The guard reads the Git verb past the options (Issue #2253)."""
+    assert git_subcommand(["git", "-C", "/repo", "fetch", "origin"]) == "fetch"
+    assert git_subcommand(["git", "-c", "user.name=x", "status"]) == "status"
+    assert git_subcommand(["git", "--no-pager", "status"]) == "status"
+    assert git_subcommand(["git", "--version"]) is None
+    assert git_subcommand([]) is None
+    assert git_subcommand(["gh", "fetch"]) is None
+
+
+def test_external_guard_delegates_when_the_process_boundary_is_stubbed(
+        monkeypatch, tmp_path):
+    """A test that replaced subprocess.run itself has stubbed below the
+    seam, so the guard delegates (Issue #2253)."""
+    import subprocess
+
+    started: list = []
+    guard = ExternalCallGuard(
+        lambda command, **kwargs: started.append(command) or "ok",
+        temp_root=tmp_path,
+    )
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: None)
+    assert guard.run(["gh", "issue", "list"], cwd=tmp_path) == "ok"
+    assert started == [["gh", "issue", "list"]]
+
+
+def test_external_guard_delegates_an_empty_command_and_an_opt_in(tmp_path):
+    """No command means nothing to refuse, and allowed() opts one test
+    into real process execution (Issue #2253)."""
+    started: list = []
+    guard = ExternalCallGuard(
+        lambda command, **kwargs: started.append(command) or "ok",
+        temp_root=tmp_path,
+    )
+    assert guard.run([], cwd=tmp_path) == "ok"
+    with guard.allowed():
+        assert guard.run(["gh", "issue", "list"], cwd=tmp_path) == "ok"
+    assert guard.calls == []
+    assert started == [[], ["gh", "issue", "list"]]

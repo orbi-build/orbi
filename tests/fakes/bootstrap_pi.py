@@ -517,7 +517,7 @@ def make_idle_recovery_tracker(monkeypatch, *, window=0.3, targets=None,
         pi_idle.time, "monotonic", lambda: state["mono"],
     )
     state["tracker"] = pi_idle.IdleRecoveryTracker(
-        window, run_id="deadbeef", issue_ref="xqliu/orbi#94",
+        window, run_id="deadbeef", issue_ref="owner.invalid/repo#94",
         role="implement",
     )
     return state

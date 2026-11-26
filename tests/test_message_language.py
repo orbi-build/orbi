@@ -27,6 +27,7 @@ from orbi.config import RunnerConfig
 from orbi.delivery_scene import RunContext
 from orbi.repo_config import RepoConfigError, parse_repo_config, resolve_policy
 from orbi.run_fields import RunFields
+from tests.fakes.github import install_empty_issue_comments
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -586,7 +587,7 @@ def test_milestone_plan_ready_follows_the_publisher_language(tmp_path):
 
     def publisher(language_code):
         return progress.ProgressPublisher(
-            18, "xqliu/orbi", "abcdef12", run_command=fake_run_command,
+            18, "owner.invalid/repo", "abcdef12", run_command=fake_run_command,
             language_code=language_code,
         )
 
@@ -895,7 +896,9 @@ def test_the_clarify_ticket_agent_stays_protocol_only(monkeypatch, tmp_path):
     """AC4: the thin-ticket gate keeps its JSON protocol -- no language
     instruction is added to the shared no-tools ticket agent."""
     from orbi import pi_session
+    from seam import seam
 
+    install_empty_issue_comments(monkeypatch)
     captured: list[str] = []
     monkeypatch.setattr(
         pi_session, "stream_pi",

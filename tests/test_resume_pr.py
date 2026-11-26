@@ -3164,7 +3164,7 @@ def test_verify_resumed_pr_external_scene_reads_branch_from_worktree(
             (ctx.worktree, ctx.branch, expected_url, require_latest_base,
              external_pr),
         )
-        return "https://github.com/xqliu/orbi/pull/592"
+        return "https://github.com/owner.invalid/repo/pull/592"
 
     def fake_edit(number, *, repo, add=None, remove=None):
         edits.append((number, repo, add, remove))
@@ -3178,13 +3178,13 @@ def test_verify_resumed_pr_external_scene_reads_branch_from_worktree(
     monkeypatch.setattr(seam, "edit_issue", fake_edit)
     expected_resume_worktree(tmp_path).mkdir(parents=True)
     scene = make_resume_scene(
-        "https://github.com/xqliu/orbi/pull/592", external="true",
+        "https://github.com/owner.invalid/repo/pull/592", external="true",
     )
     url = resume_verification.verify_resumed_pr(
         scene, make_resume_issue(),
         make_resume_config(tmp_path), "owner/repo",
     )
-    assert url == "https://github.com/xqliu/orbi/pull/592"
+    assert url == "https://github.com/owner.invalid/repo/pull/592"
     worktree, branch, expected_url, require_latest_base, external_pr = (
         verify_calls[0]
     )
@@ -3192,7 +3192,7 @@ def test_verify_resumed_pr_external_scene_reads_branch_from_worktree(
     # worktree), the scene PR URL is the exact anchor, and the body
     # checks are off for the takeover PR.
     assert branch == "fix/outer"
-    assert expected_url == "https://github.com/xqliu/orbi/pull/592"
+    assert expected_url == "https://github.com/owner.invalid/repo/pull/592"
     assert require_latest_base is False
     assert external_pr is True
     # Issue #2357: the external takeover resume writes no label either.
@@ -3349,7 +3349,7 @@ def test_verify_resumed_pr_external_scene_recreates_worktree_from_scene_pr(
     fake_gh.add_issue(9, title="ship")
     external_head = fake_git.commit([fake_git.base_sha])
     fake_git.pull_heads["592"] = external_head
-    external_url = "https://github.com/xqliu/orbi/pull/592"
+    external_url = "https://github.com/owner.invalid/repo/pull/592"
     fake_gh.add_pr(
         592, head="fix/outer", base="main", oid=external_head,
         url=external_url,

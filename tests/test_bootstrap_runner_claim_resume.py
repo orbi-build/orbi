@@ -369,7 +369,7 @@ def test_process_issue_resumes_existing_run_and_same_progress_comment(
     gh_calls, posted = make_fake_gh(
         monkeypatch, comments=[existing_comment], in_progress=True,
     )
-    branch = "orbi/xqliu-orbi-backlog-issue-4"
+    branch = "orbi/owner.invalid-repo-backlog-issue-4"
     head = "0123456789abcdef0123456789abcdef01234567"
 
     def fake_run(command, **kwargs):
@@ -433,7 +433,7 @@ def test_process_issue_resumes_existing_run_and_same_progress_comment(
     issue = {"number": 4, "title": "Fix", "body": "Body"}
     config = config_domain.RunnerConfig(repo_dir=tmp_path, prompt=tmp_path / "prompt.md", base_branch="main")
     assert runner.process_issue(
-        issue, config, "xqliu/orbi-backlog",
+        issue, config, "owner.invalid/repo-backlog",
     ) == runner.IssueResult("pr", "https://github.com/orbi-build/orbi/pull/4")
     # The reused run id drives the branch and the scene comments. The
     # claim changes nothing on an already in-progress Issue, so Issue
@@ -443,7 +443,7 @@ def test_process_issue_resumes_existing_run_and_same_progress_comment(
         call for call in gh_calls if call[2:4] == ["--method", "PUT"]
     ] == [[
         "gh", "api", "--method", "PUT",
-        "repos/xqliu/orbi-backlog/issues/4/labels",
+        "repos/owner.invalid/repo-backlog/issues/4/labels",
         "-f", "labels[]=ai-pr-opened", "--include",
     ]]
     scene_comments = [
@@ -464,14 +464,14 @@ def test_process_issue_resumes_existing_run_and_same_progress_comment(
     patches = [
         command for command in gh_calls
         if command[:2] == ["gh", "api"]
-        and command[2] == "repos/xqliu/orbi-backlog/issues/comments/77"
+        and command[2] == "repos/owner.invalid/repo-backlog/issues/comments/77"
         and "PATCH" in command
     ]
     assert patches, "the existing progress comment was not updated"
     last_body = patches[-1][patches[-1].index("--field") + 1][len("body="):]
     # Issue #1733: the PR is open and waiting for checks and review.
     assert "waiting for checks and review" in last_body
-    assert "- branch: orbi/xqliu-orbi-backlog-issue-4" in last_body
+    assert "- branch: orbi/owner.invalid-repo-backlog-issue-4" in last_body
 
 
 def test_process_issue_second_tick_behind_the_index_resumes_not_reclaims(
@@ -495,7 +495,7 @@ def test_process_issue_second_tick_behind_the_index_resumes_not_reclaims(
     gh_calls, posted = make_fake_gh(
         monkeypatch, comments=[existing_comment], in_progress=True,
     )
-    branch = "orbi/xqliu-orbi-backlog-issue-4"
+    branch = "orbi/owner.invalid-repo-backlog-issue-4"
     head = "0123456789abcdef0123456789abcdef01234567"
 
     def fake_run(command, **kwargs):
@@ -559,7 +559,7 @@ def test_process_issue_second_tick_behind_the_index_resumes_not_reclaims(
     config = config_domain.RunnerConfig(repo_dir=tmp_path, prompt=tmp_path / "prompt.md", base_branch="main")
     with caplog.at_level(logging.INFO, logger="orbi.bootstrap"):
         result = runner.process_issue(
-            issue, config, "xqliu/orbi-backlog",
+            issue, config, "owner.invalid/repo-backlog",
         )
     assert result == runner.IssueResult(
         "pr", "https://github.com/orbi-build/orbi/pull/4",
@@ -593,7 +593,7 @@ def test_process_issue_binds_run_id_before_the_resume_scan(
     which run before the resume decision (review round 3, PR #42)."""
     gh_calls, posted = make_fake_gh(monkeypatch, in_progress=True)
     head = "0123456789abcdef0123456789abcdef01234567"
-    branch = "orbi/xqliu-orbi-backlog-issue-4"
+    branch = "orbi/owner.invalid-repo-backlog-issue-4"
 
     def fake_run(command, **kwargs):
         gh_calls.append(command)
@@ -633,7 +633,7 @@ def test_process_issue_binds_run_id_before_the_resume_scan(
         runner.process_issue(
             {"number": 4, "title": "Fix", "body": "Body"},
             config_domain.RunnerConfig(repo_dir=tmp_path, prompt=tmp_path / "prompt.md", base_branch="main"),
-            "xqliu/orbi-backlog",
+            "owner.invalid/repo-backlog",
         )
     # No unprefixed line: the claim-time gh scan and resuming_run are
     # part of the attempt's timeline.
@@ -664,7 +664,7 @@ def test_process_issue_starts_fresh_run_when_the_label_is_gone(
         if command[:2] == ["gh", "issue"]:
             return ""
         if command[:3] == ["git", "branch", "--show-current"]:
-            return "orbi/xqliu-orbi-backlog-issue-4"
+            return "orbi/owner.invalid-repo-backlog-issue-4"
         if command[:2] == ["git", "rev-parse"]:
             # Issue #1581: the tree probes get their own ref back, so
             # the delivered head tree differs from the frozen base tree.
@@ -691,7 +691,7 @@ def test_process_issue_starts_fresh_run_when_the_label_is_gone(
     runner.process_issue(
         {"number": 4, "title": "Fix", "body": "Body"},
         config_domain.RunnerConfig(repo_dir=tmp_path, prompt=tmp_path / "prompt.md", base_branch="main"),
-        "xqliu/orbi-backlog",
+        "owner.invalid/repo-backlog",
     )
     # The fresh run id is used and the old worktree's run id is never
     # consulted (the label is the gate).
@@ -721,7 +721,7 @@ def test_process_issue_keeps_fresh_run_when_no_worktree_survived(
         if command[:2] == ["gh", "issue"]:
             return ""
         if command[:3] == ["git", "branch", "--show-current"]:
-            return "orbi/xqliu-orbi-backlog-issue-4"
+            return "orbi/owner.invalid-repo-backlog-issue-4"
         if command[:2] == ["git", "rev-parse"]:
             # Issue #1581: the tree probes get their own ref back, so
             # the delivered head tree differs from the frozen base tree.
@@ -746,7 +746,7 @@ def test_process_issue_keeps_fresh_run_when_no_worktree_survived(
         runner.process_issue(
             {"number": 4, "title": "Fix", "body": "Body"},
             config_domain.RunnerConfig(repo_dir=tmp_path, prompt=tmp_path / "prompt.md", base_branch="main"),
-            "xqliu/orbi-backlog",
+            "owner.invalid/repo-backlog",
         )
     # No resume happened: the fresh run id drives the delivery.
     assert "resuming_run" not in caplog.text
@@ -773,7 +773,7 @@ def _resume_wiring_setup(monkeypatch, tmp_path, *, in_progress: bool,
     # resumed one (label on + a worktree to resume) or the fresh one.
     run_id = ("a1b2c3d4"
               if in_progress and latest_run_id_result else "ffffeeee")
-    branch = f"orbi/xqliu-orbi-backlog-issue-4"
+    branch = f"orbi/owner.invalid-repo-backlog-issue-4"
     comment_bodies = []
 
     def fake_run(command, **kwargs):
@@ -844,13 +844,13 @@ def test_process_issue_writes_run_state_and_resume_context(
     runner.process_issue(
         {"number": 4, "title": "Fix", "body": "Body"},
         config_domain.RunnerConfig(repo_dir=tmp_path, prompt=tmp_path / "prompt.md", base_branch="main"),
-        "xqliu/orbi-backlog",
+        "owner.invalid/repo-backlog",
     )
     # The run state file marks the worktree as the same run.
     state = run_state.read_run_state(worktree)
     assert state["run_id"] == "a1b2c3d4"
     assert state["issue"] == 4
-    assert state["repo"] == "xqliu/orbi-backlog"
+    assert state["repo"] == "owner.invalid/repo-backlog"
     # The new session starts from the existing work.
     assert len(resume_contexts) == 1
     assert resume_contexts[0] is not None
@@ -892,7 +892,7 @@ def test_process_issue_fresh_run_has_no_resume_context(
     runner.process_issue(
         {"number": 4, "title": "Fix", "body": "Body"},
         config_domain.RunnerConfig(repo_dir=tmp_path, prompt=tmp_path / "prompt.md", base_branch="main"),
-        "xqliu/orbi-backlog",
+        "owner.invalid/repo-backlog",
     )
     state = run_state.read_run_state(worktree)
     assert state["run_id"] == "ffffeeee"
@@ -946,7 +946,7 @@ def test_process_issue_fails_fast_when_the_run_state_is_missing(
                 repo_dir=tmp_path, prompt=tmp_path / "prompt.md",
                 base_branch="main", dispatch_label=dispatch_label,
             ),
-            "xqliu/orbi-backlog",
+            "owner.invalid/repo-backlog",
         )
     # No fresh run was started.
     assert run_pi_calls == []

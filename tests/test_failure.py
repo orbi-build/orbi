@@ -28,7 +28,7 @@ from orbi.comment_kind import (
 )
 from orbi.pi_process import RateLimitExhaustedError
 from seam import seam
-from tests.fakes.github import FakeGh
+from tests.fakes.github import FakeGh, install_progress_gh
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -954,6 +954,9 @@ def _capture_comment(monkeypatch):
     # A recoverable failure with a PR is written to the PR as well; the
     # write is never this suite's business.
     monkeypatch.setattr(seam, "comment_pr", lambda *a, **k: None)
+    # The report's progress publisher ("milestone" and "finish" scenes) is
+    # not under test here; answer its gh traffic (Issue #2253).
+    install_progress_gh(monkeypatch)
     return posted
 
 

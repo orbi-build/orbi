@@ -134,7 +134,7 @@ def make_config(tmp_path: Path, repo_dir: Path,
     config = tmp_path / "orbi.toml"
     config.write_text(
         "source_repos = ["
-        + ", ".join(f'"{r}"' for r in (source_repos or ["xqliu/orbi"]))
+        + ", ".join(f'"{r}"' for r in (source_repos or ["owner.invalid/repo"]))
         + f']\nrepo_dir = "{repo_dir}"\nbase_branch = "main"\n'
         + f'max_concurrency = {max_concurrency}\n',
         encoding="utf-8",
@@ -153,7 +153,7 @@ def fake_run_factory(state: dict):
             return "0123456789abcdef0123456789abcdef01234567"
         if head[:2] == ["git", "config"]:
             return state.get(
-                "origin_url", "git@github.com:xqliu/orbi.git",
+                "origin_url", "git@github.com:owner.invalid/repo.git",
             )
         if head[:2] == ["git", "ls-remote"]:
             if state.get("ssh_down"):
@@ -182,7 +182,7 @@ def fake_run_factory(state: dict):
             return ""
         if head[:3] == ["gh", "repo", "view"]:
             return (
-                '{"nameWithOwner":"xqliu/orbi",'
+                '{"nameWithOwner":"owner.invalid/repo",'
                 '"viewerPermission":"ADMIN",'
                 '"defaultBranchRef":{"name":"main"}}'
             )
@@ -515,17 +515,17 @@ def test_check_auth_fails_fast_when_gh_is_not_logged_in():
 
 def test_check_repo_reports_permission_and_default_branch():
     result = pilot_setup.check_repo(
-        "xqliu/orbi",
+        "owner.invalid/repo",
         run_command=lambda command, **kwargs: (
             json.dumps({
-                "nameWithOwner": "xqliu/orbi",
+                "nameWithOwner": "owner.invalid/repo",
                 "viewerPermission": "WRITE",
                 "defaultBranchRef": {"name": "main"},
             })
         ),
     )
     assert result == {
-        "repo": "xqliu/orbi",
+        "repo": "owner.invalid/repo",
         "permission": "WRITE",
         "default_branch": "main",
     }
@@ -535,16 +535,16 @@ def test_check_repo_parses_json_after_a_wrapper_preamble():
     raw = (
         "mise ~/.config/mise/config.toml tools: gh@2.100.0\n"
         "0\n"
-        '{"nameWithOwner":"xqliu/orbi",'
+        '{"nameWithOwner":"owner.invalid/repo",'
         '"viewerPermission":"WRITE",'
         '"defaultBranchRef":{"name":"main"}}'
     )
     result = pilot_setup.check_repo(
-        "xqliu/orbi",
+        "owner.invalid/repo",
         run_command=lambda command, **kwargs: raw,
     )
     assert result == {
-        "repo": "xqliu/orbi",
+        "repo": "owner.invalid/repo",
         "permission": "WRITE",
         "default_branch": "main",
     }
@@ -553,10 +553,10 @@ def test_check_repo_parses_json_after_a_wrapper_preamble():
 def test_check_repo_fails_fast_on_a_read_only_repo():
     with pytest.raises(pilot_setup.SetupError, match="permission"):
         pilot_setup.check_repo(
-            "xqliu/orbi",
+            "owner.invalid/repo",
             run_command=lambda command, **kwargs: (
                 json.dumps({
-                    "nameWithOwner": "xqliu/orbi",
+                    "nameWithOwner": "owner.invalid/repo",
                     "viewerPermission": "READ",
                     "defaultBranchRef": {"name": "main"},
                 })
@@ -582,7 +582,7 @@ def test_check_repo_fails_fast_when_the_repo_is_missing():
 def test_check_repo_fails_fast_on_unparseable_output():
     with pytest.raises(pilot_setup.SetupError, match="parse"):
         pilot_setup.check_repo(
-            "xqliu/orbi",
+            "owner.invalid/repo",
             run_command=lambda command, **kwargs: "not-json",
         )
 
@@ -600,7 +600,7 @@ def _installation_run_factory(permission="", token="ghs_installationtoken"):
     def fake_run(command, **kwargs):
         if command[:3] == ["gh", "repo", "view"]:
             return json.dumps({
-                "nameWithOwner": "xqliu/orbi",
+                "nameWithOwner": "owner.invalid/repo",
                 "viewerPermission": permission,
                 "defaultBranchRef": {"name": "main"},
             })
@@ -619,23 +619,23 @@ def test_check_repo_probes_labels_for_an_installation_token():
         calls.append(command)
         return _installation_run_factory()(command, **kwargs)
 
-    result = pilot_setup.check_repo("xqliu/orbi", run_command=fake_run)
+    result = pilot_setup.check_repo("owner.invalid/repo", run_command=fake_run)
     assert result == {
-        "repo": "xqliu/orbi",
+        "repo": "owner.invalid/repo",
         "permission": "INSTALLATION",
         "default_branch": "main",
     }
     api_calls = [c for c in calls if c[:2] == ["gh", "api"]]
     assert len(api_calls) == 2
     create, delete = api_calls
-    assert create[:5] == ["gh", "api", "-X", "POST", "repos/xqliu/orbi/labels"]
+    assert create[:5] == ["gh", "api", "-X", "POST", "repos/owner.invalid/repo/labels"]
     name_args = [arg for arg in create if arg.startswith("name=")]
     assert len(name_args) == 1
     probe_name = name_args[0][len("name="):]
     assert probe_name.startswith("orbi-setup-probe-")
     assert delete == [
         "gh", "api", "-X", "DELETE",
-        f"repos/xqliu/orbi/labels/{probe_name}",
+        f"repos/owner.invalid/repo/labels/{probe_name}",
     ]
 
 
@@ -654,7 +654,7 @@ def test_check_repo_fails_fast_when_an_installation_token_cannot_write_labels():
         return _installation_run_factory()(command, **kwargs)
 
     with pytest.raises(pilot_setup.SetupError, match="installation token"):
-        pilot_setup.check_repo("xqliu/orbi", run_command=fake_run)
+        pilot_setup.check_repo("owner.invalid/repo", run_command=fake_run)
 
 
 def test_check_repo_fails_fast_when_the_probe_label_delete_fails():
@@ -671,7 +671,7 @@ def test_check_repo_fails_fast_when_the_probe_label_delete_fails():
         return _installation_run_factory()(command, **kwargs)
 
     with pytest.raises(pilot_setup.SetupError, match="probe cleanup") as excinfo:
-        pilot_setup.check_repo("xqliu/orbi", run_command=fake_run)
+        pilot_setup.check_repo("owner.invalid/repo", run_command=fake_run)
     # The readable failure names the probe label a human may have to
     # delete by hand.
     assert created_names[0] in str(excinfo.value)
@@ -680,7 +680,7 @@ def test_check_repo_fails_fast_when_the_probe_label_delete_fails():
 def test_check_repo_fails_fast_on_an_empty_permission_for_a_user_token():
     fake_run = _installation_run_factory(token="gho_usertoken")
     with pytest.raises(pilot_setup.SetupError, match="insufficient permission"):
-        pilot_setup.check_repo("xqliu/orbi", run_command=fake_run)
+        pilot_setup.check_repo("owner.invalid/repo", run_command=fake_run)
 
 
 def test_check_repo_treats_an_unreadable_token_as_a_user_token():
@@ -692,7 +692,7 @@ def test_check_repo_treats_an_unreadable_token_as_a_user_token():
         return _installation_run_factory()(command, **kwargs)
 
     with pytest.raises(pilot_setup.SetupError, match="insufficient permission"):
-        pilot_setup.check_repo("xqliu/orbi", run_command=fake_run)
+        pilot_setup.check_repo("owner.invalid/repo", run_command=fake_run)
 
 
 # --- label alignment ---------------------------------------------------------
@@ -716,11 +716,11 @@ def test_align_labels_creates_missing_and_edits_drifted(tmp_path):
     fake_run, calls = fake_run_factory(state)
     repo = make_repo(tmp_path)
     result = pilot_setup.align_labels(
-        "xqliu/orbi",
+        "owner.invalid/repo",
         pilot_setup.load_label_defs(repo / "labels.toml"),
         run_command=fake_run,
     )
-    assert result["repo"] == "xqliu/orbi"
+    assert result["repo"] == "owner.invalid/repo"
     assert result["aligned"] == 14
     assert result["total"] == 14
     # Only the drifted p0 label is written; ai-ready already matches and
@@ -740,7 +740,7 @@ def test_align_labels_is_idempotent_when_everything_matches(tmp_path):
     fake_run, calls = fake_run_factory(state)
     repo = make_repo(tmp_path)
     result = pilot_setup.align_labels(
-        "xqliu/orbi",
+        "owner.invalid/repo",
         pilot_setup.load_label_defs(repo / "labels.toml"),
         run_command=fake_run,
     )
@@ -753,7 +753,7 @@ def test_align_labels_reports_partial_alignment(tmp_path):
     fake_run, calls = fake_run_factory(state)
     repo = make_repo(tmp_path)
     result = pilot_setup.align_labels(
-        "xqliu/orbi",
+        "owner.invalid/repo",
         pilot_setup.load_label_defs(repo / "labels.toml"),
         run_command=fake_run,
     )
@@ -776,7 +776,7 @@ def test_align_labels_fails_fast_on_a_label_write_error(tmp_path):
     repo = make_repo(tmp_path)
     with pytest.raises(pilot_setup.SetupError, match="label"):
         pilot_setup.align_labels(
-            "xqliu/orbi",
+            "owner.invalid/repo",
             pilot_setup.load_label_defs(repo / "labels.toml"),
             run_command=failing,
         )
@@ -816,7 +816,7 @@ def test_align_labels_creates_concurrently_with_at_most_six_in_flight(
         return ""
 
     result = pilot_setup.align_labels(
-        "xqliu/orbi",
+        "owner.invalid/repo",
         pilot_setup.load_label_defs(repo / "labels.toml"),
         run_command=tracking_run,
     )
@@ -842,10 +842,10 @@ def test_align_labels_names_the_first_failure_by_definition_order(tmp_path):
     repo = make_repo(tmp_path)
     defs = pilot_setup.load_label_defs(repo / "labels.toml")
     with pytest.raises(pilot_setup.SetupError) as excinfo:
-        pilot_setup.align_labels("xqliu/orbi", defs, run_command=failing)
+        pilot_setup.align_labels("owner.invalid/repo", defs, run_command=failing)
     first = defs[0]["name"]
     assert str(excinfo.value).startswith(
-        f"label alignment failed for xqliu/orbi: {first} "
+        f"label alignment failed for owner.invalid/repo: {first} "
         "(gh label create failed: ",
     )
 
@@ -1091,7 +1091,7 @@ def test_check_checkout_reports_remote_branch_clean_and_fresh(tmp_path):
 
     def fake_run(command, **kwargs):
         if command[:2] == ["git", "config"]:
-            return "git@github.com:xqliu/orbi.git"
+            return "git@github.com:owner.invalid/repo.git"
         if command[:2] == ["git", "ls-remote"]:
             return "abc\tHEAD"
         if command[:3] == ["git", "rev-parse", "origin/main"]:
@@ -1103,14 +1103,14 @@ def test_check_checkout_reports_remote_branch_clean_and_fresh(tmp_path):
         return ""
 
     result = pilot_setup.check_checkout(
-        repo, "main", ["xqliu/orbi"], run_command=fake_run,
+        repo, "main", ["owner.invalid/repo"], run_command=fake_run,
     )
     assert result == {
         "remote": "origin",
         "branch": "main",
         "clean": True,
         "base_fresh": True,
-        "remote_url": "git@github.com:xqliu/orbi.git",
+        "remote_url": "git@github.com:owner.invalid/repo.git",
         "remote_protocol": "ssh",
         "migrated": False,
         "ssh_reachable": True,
@@ -1124,7 +1124,7 @@ def test_check_checkout_fails_fast_on_a_dirty_checkout(tmp_path):
 
     def fake_run(command, **kwargs):
         if command[:2] == ["git", "config"]:
-            return "git@github.com:xqliu/orbi.git"
+            return "git@github.com:owner.invalid/repo.git"
         if command[:2] == ["git", "ls-remote"]:
             return "abc\tHEAD"
         if command[:2] == ["git", "status"]:
@@ -1133,7 +1133,7 @@ def test_check_checkout_fails_fast_on_a_dirty_checkout(tmp_path):
 
     with pytest.raises(pilot_setup.SetupError, match="not clean"):
         pilot_setup.check_checkout(
-            repo, "main", ["xqliu/orbi"], run_command=fake_run,
+            repo, "main", ["owner.invalid/repo"], run_command=fake_run,
         )
 
 
@@ -1143,7 +1143,7 @@ def test_check_checkout_reports_a_stale_base(tmp_path):
 
     def fake_run(command, **kwargs):
         if command[:2] == ["git", "config"]:
-            return "git@github.com:xqliu/orbi.git"
+            return "git@github.com:owner.invalid/repo.git"
         if command[:2] == ["git", "ls-remote"]:
             return "abc\tHEAD"
         if command[:3] == ["git", "rev-parse", "origin/main"]:
@@ -1153,7 +1153,7 @@ def test_check_checkout_reports_a_stale_base(tmp_path):
         return ""
 
     result = pilot_setup.check_checkout(
-        repo, "main", ["xqliu/orbi"], run_command=fake_run,
+        repo, "main", ["owner.invalid/repo"], run_command=fake_run,
     )
     assert result["base_fresh"] is False
 
@@ -1169,9 +1169,9 @@ def test_check_checkout_missing_head_names_fetch_and_checkout_of_the_base(
 
     def fake_run(command, **kwargs):
         if command == ["git", "config", "remote.origin.url"]:
-            return "https://github.com/xqliu/orbi.git"
+            return "https://github.com/owner.invalid/repo.git"
         if command == [
-            "git", "ls-remote", "https://github.com/xqliu/orbi.git",
+            "git", "ls-remote", "https://github.com/owner.invalid/repo.git",
         ]:
             return "abc\\tHEAD"
         if command == ["git", "rev-parse", "HEAD"]:
@@ -1182,7 +1182,7 @@ def test_check_checkout_missing_head_names_fetch_and_checkout_of_the_base(
 
     with pytest.raises(pilot_setup.SetupError) as error:
         pilot_setup.check_checkout(
-            repo, "main", ["xqliu/orbi"], run_command=fake_run,
+            repo, "main", ["owner.invalid/repo"], run_command=fake_run,
             mode="https",
         )
     message = str(error.value)
@@ -1197,7 +1197,7 @@ def test_check_checkout_fails_fast_without_an_origin_remote(tmp_path):
     repo.mkdir()
     with pytest.raises(pilot_setup.SetupError, match="remote"):
         pilot_setup.check_checkout(
-            repo, "main", ["xqliu/orbi"],
+            repo, "main", ["owner.invalid/repo"],
             run_command=lambda command, **kwargs: (
                 (_ for _ in ()).throw(
                     subprocess.CalledProcessError(1, command, stderr="no remote")
@@ -1211,7 +1211,7 @@ def test_check_checkout_fails_fast_on_a_git_error(tmp_path):
     repo.mkdir()
     with pytest.raises(pilot_setup.SetupError, match="checkout"):
         pilot_setup.check_checkout(
-            repo, "main", ["xqliu/orbi"],
+            repo, "main", ["owner.invalid/repo"],
             run_command=lambda command, **kwargs: (
                 (_ for _ in ()).throw(
                     subprocess.CalledProcessError(1, command, stderr="boom")
@@ -1232,9 +1232,9 @@ def test_check_checkout_wraps_a_missing_head_with_fetch_and_checkout(
 
     def fake_run(command, **kwargs):
         if command == ["git", "config", "remote.origin.url"]:
-            return "git@github.com:xqliu/orbi.git"
+            return "git@github.com:owner.invalid/repo.git"
         if command == [
-            "git", "ls-remote", "git@github.com:xqliu/orbi.git",
+            "git", "ls-remote", "git@github.com:owner.invalid/repo.git",
         ]:
             return "abc\\tHEAD"
         if command == ["git", "rev-parse", "HEAD"]:
@@ -1245,11 +1245,11 @@ def test_check_checkout_wraps_a_missing_head_with_fetch_and_checkout(
 
     with pytest.raises(pilot_setup.SetupError) as error:
         pilot_setup.check_checkout(
-            repo, "main", ["xqliu/orbi"], run_command=fake_run,
+            repo, "main", ["owner.invalid/repo"], run_command=fake_run,
         )
     message = str(error.value)
     assert "must be a git checkout" in message
-    assert "xqliu/orbi" in message
+    assert "owner.invalid/repo" in message
     assert str(repo) in message
     assert "fetch" in message
     assert "checkout" in message
@@ -1268,9 +1268,9 @@ def test_check_checkout_missing_head_quotes_a_repo_dir_with_a_space(
 
     def fake_run(command, **kwargs):
         if command == ["git", "config", "remote.origin.url"]:
-            return "git@github.com:xqliu/orbi.git"
+            return "git@github.com:owner.invalid/repo.git"
         if command == [
-            "git", "ls-remote", "git@github.com:xqliu/orbi.git",
+            "git", "ls-remote", "git@github.com:owner.invalid/repo.git",
         ]:
             return "abc\\tHEAD"
         if command == ["git", "rev-parse", "HEAD"]:
@@ -1281,7 +1281,7 @@ def test_check_checkout_missing_head_quotes_a_repo_dir_with_a_space(
 
     with pytest.raises(pilot_setup.SetupError) as error:
         pilot_setup.check_checkout(
-            repo, "main", ["xqliu/orbi"], run_command=fake_run,
+            repo, "main", ["owner.invalid/repo"], run_command=fake_run,
         )
     command = str(error.value).split("there: ", 1)[1]
     tokens = shlex.split(command)
@@ -1301,7 +1301,7 @@ def test_check_checkout_migrates_an_https_remote_to_ssh(tmp_path):
     comment or Issue)."""
     repo = tmp_path / "checkout"
     repo.mkdir()
-    state = {"url": "https://github.com/xqliu/orbi.git"}
+    state = {"url": "https://github.com/owner.invalid/repo.git"}
 
     def fake_run(command, **kwargs):
         if command[:2] == ["git", "config"]:
@@ -1316,10 +1316,10 @@ def test_check_checkout_migrates_an_https_remote_to_ssh(tmp_path):
         return ""
 
     result = pilot_setup.check_checkout(
-        repo, "main", ["xqliu/orbi"], run_command=fake_run,
+        repo, "main", ["owner.invalid/repo"], run_command=fake_run,
     )
-    assert state["url"] == "git@github.com:xqliu/orbi.git"
-    assert result["remote_url"] == "git@github.com:xqliu/orbi.git"
+    assert state["url"] == "git@github.com:owner.invalid/repo.git"
+    assert result["remote_url"] == "git@github.com:owner.invalid/repo.git"
     assert result["remote_protocol"] == "ssh"
     assert result["migrated"] is True
     assert result["ssh_reachable"] is True
@@ -1336,7 +1336,7 @@ def test_check_checkout_https_mode_is_fully_green_over_https(tmp_path):
 
     def fake_run(command, **kwargs):
         if command[:2] == ["git", "config"]:
-            return "https://github.com/xqliu/orbi.git"
+            return "https://github.com/owner.invalid/repo.git"
         if command[:2] == ["git", "ls-remote"]:
             return "abc\tHEAD"
         if command[:3] == ["git", "rev-parse", "origin/main"]:
@@ -1348,9 +1348,9 @@ def test_check_checkout_https_mode_is_fully_green_over_https(tmp_path):
         return ""
 
     result = pilot_setup.check_checkout(
-        repo, "main", ["xqliu/orbi"], run_command=fake_run, mode="https",
+        repo, "main", ["owner.invalid/repo"], run_command=fake_run, mode="https",
     )
-    assert result["remote_url"] == "https://github.com/xqliu/orbi.git"
+    assert result["remote_url"] == "https://github.com/owner.invalid/repo.git"
     assert result["remote_protocol"] == "https"
     assert result["migrated"] is False
     assert result["transport_reachable"] is True
@@ -1367,12 +1367,12 @@ def test_check_checkout_https_mode_fails_with_the_transport_reason(tmp_path):
 
     def fake_run(command, **kwargs):
         if command[:2] == ["git", "config"]:
-            return "https://github.com/xqliu/orbi.git"
+            return "https://github.com/owner.invalid/repo.git"
         if command[:2] == ["git", "ls-remote"]:
             raise subprocess.CalledProcessError(
                 128, command,
                 stderr="fatal: Authentication failed for "
-                       "'https://github.com/xqliu/orbi.git/'",
+                       "'https://github.com/owner.invalid/repo.git/'",
             )
         raise AssertionError(f"unexpected command: {command}")
 
@@ -1380,10 +1380,10 @@ def test_check_checkout_https_mode_fails_with_the_transport_reason(tmp_path):
         pilot_setup.SetupError, match="transport_unreachable",
     ) as exc:
         pilot_setup.check_checkout(
-            repo, "main", ["xqliu/orbi"], run_command=fake_run, mode="https",
+            repo, "main", ["owner.invalid/repo"], run_command=fake_run, mode="https",
         )
     message = str(exc.value)
-    assert "git ls-remote https://github.com/xqliu/orbi.git" in message
+    assert "git ls-remote https://github.com/owner.invalid/repo.git" in message
     assert "Authentication failed" in message
     # The fake is strict: an unexpected command fails loudly.
     with pytest.raises(AssertionError, match="unexpected command"):
@@ -1399,7 +1399,7 @@ def test_check_checkout_fails_fast_when_ssh_is_unreachable(tmp_path):
 
     def fake_run(command, **kwargs):
         if command[:2] == ["git", "config"]:
-            return "git@github.com:xqliu/orbi.git"
+            return "git@github.com:owner.invalid/repo.git"
         if command[:2] == ["git", "ls-remote"]:
             raise subprocess.CalledProcessError(
                 128, command,
@@ -1411,10 +1411,10 @@ def test_check_checkout_fails_fast_when_ssh_is_unreachable(tmp_path):
         pilot_setup.SetupError, match="ssh_unreachable",
     ) as exc:
         pilot_setup.check_checkout(
-            repo, "main", ["xqliu/orbi"], run_command=fake_run,
+            repo, "main", ["owner.invalid/repo"], run_command=fake_run,
         )
     message = str(exc.value)
-    assert "git ls-remote git@github.com:xqliu/orbi.git" in message
+    assert "git ls-remote git@github.com:owner.invalid/repo.git" in message
     assert "Permission denied (publickey)" in message
     # The fake is strict: an unexpected command fails loudly.
     with pytest.raises(AssertionError, match="unexpected command"):
@@ -1429,7 +1429,7 @@ def test_check_checkout_fails_fast_on_a_generic_git_error(tmp_path):
 
     def fake_run(command, **kwargs):
         if command[:2] == ["git", "config"]:
-            return "git@github.com:xqliu/orbi.git"
+            return "git@github.com:owner.invalid/repo.git"
         if command[:2] == ["git", "ls-remote"]:
             return "abc\tHEAD"
         if command[:3] == ["git", "branch", "--show-current"]:
@@ -1438,7 +1438,7 @@ def test_check_checkout_fails_fast_on_a_generic_git_error(tmp_path):
 
     with pytest.raises(pilot_setup.SetupError, match="checkout"):
         pilot_setup.check_checkout(
-            repo, "main", ["xqliu/orbi"], run_command=fake_run,
+            repo, "main", ["owner.invalid/repo"], run_command=fake_run,
         )
     # The fake is strict: an unexpected command fails loudly.
     with pytest.raises(AssertionError, match="unexpected command"):
@@ -1459,7 +1459,7 @@ def test_check_checkout_fails_fast_on_a_remote_repo_mismatch(tmp_path):
 
     with pytest.raises(pilot_setup.SetupError, match="mismatch"):
         pilot_setup.check_checkout(
-            repo, "main", ["xqliu/orbi"], run_command=fake_run,
+            repo, "main", ["owner.invalid/repo"], run_command=fake_run,
         )
     # The fake is strict: an unexpected command fails loudly.
     with pytest.raises(AssertionError, match="unexpected command"):
@@ -1617,7 +1617,7 @@ def test_run_setup_success_reports_all_steps(tmp_path):
     assert result["base_branch"] == "main"
     assert result["repos"] == [
         {
-            "repo": "xqliu/orbi",
+            "repo": "owner.invalid/repo",
             "permission": "ADMIN",
             "default_branch": "main",
             "labels": {"aligned": 14, "total": 14},
@@ -1674,15 +1674,15 @@ def test_run_setup_repo_override_limits_the_target(tmp_path):
     fake_run, calls = fake_run_factory(state)
     config = config_domain.load_config(make_config(
         tmp_path, repo,
-        source_repos=["xqliu/orbi", "xqliu/orbi-backlog"],
+        source_repos=["owner.invalid/repo", "owner.invalid/repo-backlog"],
     ))
     result = pilot_setup.run_setup(
         config, installed,
-        repos=["xqliu/orbi"],
+        repos=["owner.invalid/repo"],
         run_command=fake_run,
     )
     assert [entry["repo"] for entry in result["repos"]] == [
-        "xqliu/orbi",
+        "owner.invalid/repo",
     ]
     views = [
         c for c in calls if c[:3] == ["gh", "repo", "view"]
@@ -1815,14 +1815,14 @@ def test_run_setup_migrates_an_https_checkout_remote(tmp_path):
     checkout's HTTPS `origin` to SSH (the human-authorized path) and
     reports it in the checkout result."""
     repo, installed, state = make_run_state(tmp_path)
-    state["origin_url"] = "https://github.com/xqliu/orbi.git"
+    state["origin_url"] = "https://github.com/owner.invalid/repo.git"
     fake_run, calls = fake_run_factory(state)
     config = config_domain.load_config(make_config(tmp_path, repo))
     result = pilot_setup.run_setup(
         config, installed, run_command=fake_run,
     )
     assert result["checkout"]["remote_url"] == (
-        "git@github.com:xqliu/orbi.git"
+        "git@github.com:owner.invalid/repo.git"
     )
     assert result["checkout"]["remote_protocol"] == "ssh"
     assert result["checkout"]["migrated"] is True
@@ -1830,7 +1830,7 @@ def test_run_setup_migrates_an_https_checkout_remote(tmp_path):
     assert result["checkout"]["transport_reachable"] is True
     assert [
         "git", "remote", "set-url", "origin",
-        "git@github.com:xqliu/orbi.git",
+        "git@github.com:owner.invalid/repo.git",
     ] in calls
 
 
@@ -1871,7 +1871,7 @@ def sample_result() -> dict:
         "base_branch": "main",
         "repos": [
             {
-                "repo": "xqliu/orbi",
+                "repo": "owner.invalid/repo",
                 "permission": "ADMIN",
                 "default_branch": "main",
                 "labels": {"aligned": 10, "total": 10},
@@ -1903,7 +1903,7 @@ def sample_result() -> dict:
             "branch": "main",
             "clean": True,
             "base_fresh": True,
-            "remote_url": "git@github.com:xqliu/orbi.git",
+            "remote_url": "git@github.com:owner.invalid/repo.git",
             "remote_protocol": "ssh",
             "migrated": False,
             "ssh_reachable": True,
@@ -1931,7 +1931,7 @@ def test_format_setup_renders_stable_key_value_lines():
         "cli=verified source=/home/u/repo/src/orbi/__init__.py"
     )
     assert (
-        "repo=xqliu/orbi permission=ADMIN "
+        "repo=owner.invalid/repo permission=ADMIN "
         "default_branch=main labels=10/10" in lines
     )
     assert (
@@ -1950,7 +1950,7 @@ def test_format_setup_renders_stable_key_value_lines():
     ) in lines
     assert (
         "checkout=remote=origin branch=main clean=true base_fresh=true "
-        "remote_url=git@github.com:xqliu/orbi.git protocol=ssh "
+        "remote_url=git@github.com:owner.invalid/repo.git protocol=ssh "
         "migrated=false ssh_reachable=true transport_reachable=true"
     ) in lines
     assert (
@@ -1975,7 +1975,7 @@ def test_format_setup_renders_multiple_repos():
     result = sample_result()
     result["repos"].append(
         {
-            "repo": "xqliu/orbi-backlog",
+            "repo": "owner.invalid/repo-backlog",
             "permission": "WRITE",
             "default_branch": "main",
             "labels": {"aligned": 6, "total": 10},
@@ -1984,7 +1984,7 @@ def test_format_setup_renders_multiple_repos():
     lines = pilot_setup.format_setup(result)
     repo_lines = [line for line in lines if line.startswith("repo=")]
     assert len(repo_lines) == 2
-    assert repo_lines[1].startswith("repo=xqliu/orbi-backlog ")
+    assert repo_lines[1].startswith("repo=owner.invalid/repo-backlog ")
     assert "labels=6/10" in repo_lines[1]
 
 
@@ -2050,7 +2050,7 @@ def test_load_label_defs_rejects_an_entry_without_a_name(tmp_path):
 def test_check_repo_fails_fast_on_non_object_json():
     with pytest.raises(pilot_setup.SetupError, match="parse"):
         pilot_setup.check_repo(
-            "xqliu/orbi",
+            "owner.invalid/repo",
             run_command=lambda command, **kwargs: "[1, 2]",
         )
 
@@ -2058,7 +2058,7 @@ def test_check_repo_fails_fast_on_non_object_json():
 def test_check_repo_fails_fast_without_name_with_owner():
     with pytest.raises(pilot_setup.SetupError, match="nameWithOwner"):
         pilot_setup.check_repo(
-            "xqliu/orbi",
+            "owner.invalid/repo",
             run_command=lambda command, **kwargs: (
                 json.dumps({
                     "viewerPermission": "WRITE",
@@ -2071,10 +2071,10 @@ def test_check_repo_fails_fast_without_name_with_owner():
 def test_check_repo_fails_fast_without_default_branch():
     with pytest.raises(pilot_setup.SetupError, match="defaultBranchRef"):
         pilot_setup.check_repo(
-            "xqliu/orbi",
+            "owner.invalid/repo",
             run_command=lambda command, **kwargs: (
                 json.dumps({
-                    "nameWithOwner": "xqliu/orbi",
+                    "nameWithOwner": "owner.invalid/repo",
                     "viewerPermission": "WRITE",
                 })
             ),
@@ -2084,7 +2084,7 @@ def test_check_repo_fails_fast_without_default_branch():
 def test_align_labels_fails_fast_on_unparseable_label_list():
     with pytest.raises(pilot_setup.SetupError, match="label list"):
         pilot_setup.align_labels(
-            "xqliu/orbi",
+            "owner.invalid/repo",
             VALID_DEFS,
             run_command=lambda command, **kwargs: "not-json",
         )
@@ -2093,7 +2093,7 @@ def test_align_labels_fails_fast_on_unparseable_label_list():
 def test_align_labels_fails_fast_on_non_array_label_list():
     with pytest.raises(pilot_setup.SetupError, match="label list"):
         pilot_setup.align_labels(
-            "xqliu/orbi",
+            "owner.invalid/repo",
             VALID_DEFS,
             run_command=lambda command, **kwargs: '{"name": "bug"}',
         )
@@ -2113,7 +2113,7 @@ def test_check_checkout_fails_fast_when_origin_is_missing(tmp_path):
     repo.mkdir()
     with pytest.raises(pilot_setup.SetupError, match="origin remote"):
         pilot_setup.check_checkout(
-            repo, "main", ["xqliu/orbi"],
+            repo, "main", ["owner.invalid/repo"],
             run_command=lambda command, **kwargs: (
                 (_ for _ in ()).throw(
                     subprocess.CalledProcessError(

@@ -49,7 +49,7 @@ import orbi.gitops as gitops
 import orbi.pi_session as pi_session
 import orbi.milestone as milestone
 from orbi import failure, progress, provider_balance, scene
-from tests.fakes.github import FakeGh
+from tests.fakes.github import FakeGh, install_fake_gh_repositories
 from tests.fakes.gitops import remote_head_answer
 from tests.fakes.progress import patched_comment_bodies
 from tests.test_progress_wiring import is_blocked_scene
@@ -129,13 +129,13 @@ def test_pick_issue_uses_github_queue(monkeypatch):
         return json.dumps([issue])
 
     monkeypatch.setattr(seam, "run_command", fake_run)
-    assert claim.pick_issue("xqliu/orbi-backlog") == issue
+    assert claim.pick_issue("owner.invalid/repo-backlog") == issue
     # Issue #101: the P0 scan runs first, then the bug scan (Issue
     # #71); with nothing in either queue the plain ready scan decides.
     # All three keep the same exclusions.
     assert calls == [
         [
-            "gh", "issue", "list", "--repo", "xqliu/orbi-backlog",
+            "gh", "issue", "list", "--repo", "owner.invalid/repo-backlog",
             "--state", "open", "--search",
             "label:ai-ready label:p0 -label:ai-in-progress "
             "-label:ai-pr-opened -label:ai-fix-needed -label:ai-merged "
@@ -144,7 +144,7 @@ def test_pick_issue_uses_github_queue(monkeypatch):
             "--limit", "200",
         ],
         [
-            "gh", "issue", "list", "--repo", "xqliu/orbi-backlog",
+            "gh", "issue", "list", "--repo", "owner.invalid/repo-backlog",
             "--state", "open", "--search",
             "label:ai-ready label:bug -label:ai-in-progress "
             "-label:ai-pr-opened -label:ai-fix-needed -label:ai-merged "
@@ -153,7 +153,7 @@ def test_pick_issue_uses_github_queue(monkeypatch):
             "--limit", "200",
         ],
         [
-            "gh", "issue", "list", "--repo", "xqliu/orbi-backlog",
+            "gh", "issue", "list", "--repo", "owner.invalid/repo-backlog",
             "--state", "open", "--search",
             "label:ai-ready -label:ai-in-progress -label:ai-pr-opened "
             "-label:ai-fix-needed -label:ai-merged -label:ai-blocked "
@@ -218,7 +218,7 @@ def test_pick_issue_skips_blocked_issue_and_claims_next(monkeypatch, caplog):
         lambda command, **kwargs: json.dumps([blocked, ready]),
     )
     with caplog.at_level("INFO"):
-        assert claim.pick_issue("xqliu/orbi") == ready
+        assert claim.pick_issue("owner.invalid/repo") == ready
     assert "blocked_by" in caplog.text
     assert "54" in caplog.text
     assert "31" in caplog.text
@@ -240,7 +240,7 @@ def test_pick_issue_returns_none_when_all_ready_issues_blocked(
         lambda command, **kwargs: json.dumps([blocked_a, blocked_b]),
     )
     with caplog.at_level("INFO"):
-        assert claim.pick_issue("xqliu/orbi") is None
+        assert claim.pick_issue("owner.invalid/repo") is None
     assert caplog.text.count("blocked_by") >= 2
 
 
@@ -258,7 +258,7 @@ def test_pick_issue_claims_issue_whose_blocker_is_closed(monkeypatch):
     monkeypatch.setattr(seam, "run_command",
         lambda command, **kwargs: json.dumps([issue]),
     )
-    assert claim.pick_issue("xqliu/orbi") == issue
+    assert claim.pick_issue("owner.invalid/repo") == issue
 
 
 def test_pick_issue_claims_issue_with_empty_blocked_by(monkeypatch):
@@ -269,7 +269,7 @@ def test_pick_issue_claims_issue_with_empty_blocked_by(monkeypatch):
     monkeypatch.setattr(seam, "run_command",
         lambda command, **kwargs: json.dumps([issue]),
     )
-    assert claim.pick_issue("xqliu/orbi") == issue
+    assert claim.pick_issue("owner.invalid/repo") == issue
 
 
 def test_pick_issue_stays_blocked_while_any_blocker_is_open(monkeypatch):
@@ -283,7 +283,7 @@ def test_pick_issue_stays_blocked_while_any_blocker_is_open(monkeypatch):
     monkeypatch.setattr(seam, "run_command",
         lambda command, **kwargs: json.dumps([blocked]),
     )
-    assert claim.pick_issue("xqliu/orbi") is None
+    assert claim.pick_issue("owner.invalid/repo") is None
 
 
 def test_pick_issue_fails_open_when_blocked_by_field_missing(monkeypatch):
@@ -293,7 +293,7 @@ def test_pick_issue_fails_open_when_blocked_by_field_missing(monkeypatch):
     monkeypatch.setattr(seam, "run_command",
         lambda command, **kwargs: json.dumps([issue]),
     )
-    assert claim.pick_issue("xqliu/orbi") == issue
+    assert claim.pick_issue("owner.invalid/repo") == issue
 
 
 def test_pick_issue_fails_open_when_blocked_by_query_fails(
@@ -312,7 +312,7 @@ def test_pick_issue_fails_open_when_blocked_by_query_fails(
     # real backoff sleeps like the git/gh retry tests do.
     monkeypatch.setattr(runner.time, "sleep", lambda _: None)
     with caplog.at_level("INFO"):
-        assert claim.pick_issue("xqliu/orbi") is None
+        assert claim.pick_issue("owner.invalid/repo") is None
     assert "blocked_by_check_failed" in caplog.text
 
 
@@ -330,7 +330,7 @@ def test_pick_issue_reraises_a_failed_scan_for_the_observation(
         lambda command, **kwargs: (_ for _ in ()).throw(error),
     )
     with caplog.at_level("INFO"), pytest.raises(subprocess.CalledProcessError):
-        claim.pick_issue("xqliu/orbi", raise_on_read_failure=True)
+        claim.pick_issue("owner.invalid/repo", raise_on_read_failure=True)
     assert "blocked_by_check_failed" in caplog.text
 
 
@@ -352,7 +352,7 @@ def test_pick_ready_issue_reraises_the_release_scan_failure(
 
     monkeypatch.setattr(seam, "run_command", fake_run)
     with pytest.raises(subprocess.CalledProcessError):
-        claim.pick_ready_issue("xqliu/orbi", raise_on_read_failure=True)
+        claim.pick_ready_issue("owner.invalid/repo", raise_on_read_failure=True)
     assert any(
         "label:ai-release" in arg for command in calls for arg in command
     )
@@ -442,7 +442,7 @@ def test_pick_issue_scopes_all_three_ready_scans_to_active_milestone(
 
     monkeypatch.setattr(seam, "run_command", fake_run)
     assert claim.pick_issue(
-        "xqliu/orbi-backlog", active_milestone="v0.2.0",
+        "owner.invalid/repo-backlog", active_milestone="v0.2.0",
     ) == issue
     scope = ' milestone:"v0.2.0"'
     qualifiers = (
@@ -451,21 +451,21 @@ def test_pick_issue_scopes_all_three_ready_scans_to_active_milestone(
     )
     assert calls == [
         [
-            "gh", "issue", "list", "--repo", "xqliu/orbi-backlog",
+            "gh", "issue", "list", "--repo", "owner.invalid/repo-backlog",
             "--state", "open", "--search",
             f"label:ai-ready label:p0{scope} {qualifiers}",
             "--json", "number,title,body,labels,blockedBy,author",
             "--limit", "200",
         ],
         [
-            "gh", "issue", "list", "--repo", "xqliu/orbi-backlog",
+            "gh", "issue", "list", "--repo", "owner.invalid/repo-backlog",
             "--state", "open", "--search",
             f"label:ai-ready label:bug{scope} {qualifiers}",
             "--json", "number,title,body,labels,blockedBy,author",
             "--limit", "200",
         ],
         [
-            "gh", "issue", "list", "--repo", "xqliu/orbi-backlog",
+            "gh", "issue", "list", "--repo", "owner.invalid/repo-backlog",
             "--state", "open", "--search",
             f"label:ai-ready{scope} {qualifiers}",
             "--json", "number,title,body,labels,blockedBy,author",
@@ -564,7 +564,7 @@ def test_pick_issue_keeps_epic_and_blocked_by_guards_with_milestone(
     )
     with caplog.at_level("INFO"):
         assert claim.pick_issue(
-            "xqliu/orbi", active_milestone="v0.2.0",
+            "owner.invalid/repo", active_milestone="v0.2.0",
         ) == ready
     assert "epic_not_claimed" in caplog.text
     assert "blocked_by" in caplog.text
@@ -588,7 +588,7 @@ def test_pick_issue_fails_open_when_milestone_query_fails(
     monkeypatch.setattr(runner.time, "sleep", lambda _: None)
     with caplog.at_level("INFO"):
         assert claim.pick_issue(
-            "xqliu/orbi", active_milestone="v0.2.0",
+            "owner.invalid/repo", active_milestone="v0.2.0",
         ) is None
     assert "blocked_by_check_failed" in caplog.text
 
@@ -615,7 +615,7 @@ def test_pick_issue_prefers_bug_labeled_issues(monkeypatch):
         return json.dumps([])
 
     monkeypatch.setattr(seam, "run_command", fake_run)
-    assert claim.pick_issue("xqliu/orbi") == bug
+    assert claim.pick_issue("owner.invalid/repo") == bug
     # The P0 scan ran first and found nothing; the bug scan found the
     # bug: the plain ready scan never ran.
     assert len(searches) == 2
@@ -642,7 +642,7 @@ def test_pick_issue_bug_scan_keeps_existing_exclusions(monkeypatch):
         return json.dumps([])
 
     monkeypatch.setattr(seam, "run_command", fake_run)
-    assert claim.pick_issue("xqliu/orbi") == bug
+    assert claim.pick_issue("owner.invalid/repo") == bug
     assert searches[0] == (
         "label:ai-ready label:p0 -label:ai-in-progress "
         "-label:ai-pr-opened -label:ai-fix-needed -label:ai-merged "
@@ -672,7 +672,7 @@ def test_pick_issue_falls_back_to_ready_scan_when_no_bug(monkeypatch):
         return json.dumps([feature])
 
     monkeypatch.setattr(seam, "run_command", fake_run)
-    assert claim.pick_issue("xqliu/orbi") == feature
+    assert claim.pick_issue("owner.invalid/repo") == feature
     assert len(searches) == 3
     assert "label:p0" in searches[0]
     assert "label:bug" in searches[1]
@@ -705,7 +705,7 @@ def test_pick_issue_bug_blocked_by_open_blocker_falls_back(monkeypatch):
         return json.dumps([feature])
 
     monkeypatch.setattr(seam, "run_command", fake_run)
-    assert claim.pick_issue("xqliu/orbi") == feature
+    assert claim.pick_issue("owner.invalid/repo") == feature
     assert len(searches) == 3
 
 
@@ -718,7 +718,7 @@ def test_pick_issue_bug_scan_failure_fails_open(monkeypatch, caplog):
         lambda command, **kwargs: (_ for _ in ()).throw(error),
     )
     with caplog.at_level("INFO"):
-        assert claim.pick_issue("xqliu/orbi") is None
+        assert claim.pick_issue("owner.invalid/repo") is None
     assert "blocked_by_check_failed" in caplog.text
 
 
@@ -756,7 +756,7 @@ def test_pick_issue_prefers_p0_over_bug_and_plain(monkeypatch, caplog):
 
     monkeypatch.setattr(seam, "run_command", fake_run)
     with caplog.at_level("INFO"):
-        assert claim.pick_issue("xqliu/orbi") == p0
+        assert claim.pick_issue("owner.invalid/repo") == p0
     # The P0 scan ran first and found the P0: the bug and plain ready
     # scans never ran.
     assert len(searches) == 1
@@ -786,7 +786,7 @@ def test_pick_issue_p0_scan_keeps_existing_exclusions(monkeypatch):
         return json.dumps([p0])
 
     monkeypatch.setattr(seam, "run_command", fake_run)
-    assert claim.pick_issue("xqliu/orbi") == p0
+    assert claim.pick_issue("owner.invalid/repo") == p0
     assert searches[0] == (
         "label:ai-ready label:p0 -label:ai-in-progress "
         "-label:ai-pr-opened -label:ai-fix-needed -label:ai-merged "
@@ -848,7 +848,7 @@ def test_release_issue_not_claimed_when_ordinary_delivery_exists(
 
     monkeypatch.setattr(seam, "run_command", fake_run)
     with caplog.at_level("INFO"):
-        assert claim.pick_issue("xqliu/orbi") == feature
+        assert claim.pick_issue("owner.invalid/repo") == feature
     assert len(searches) == 3
     assert "release_not_claimed" in caplog.text
     assert "issue=254" in caplog.text
@@ -875,7 +875,7 @@ def test_release_issue_claimed_when_no_ordinary_delivery(
 
     monkeypatch.setattr(seam, "run_command", fake_run)
     with caplog.at_level("INFO"):
-        assert claim.pick_issue("xqliu/orbi") == release
+        assert claim.pick_issue("owner.invalid/repo") == release
     # Three ordinary scans + one release fallback scan.
     assert len(searches) == 4
     assert "label:ai-release" in searches[3]
@@ -907,7 +907,7 @@ def test_release_fallback_scoped_to_active_milestone(monkeypatch):
 
     monkeypatch.setattr(seam, "run_command", fake_run)
     assert claim.pick_issue(
-        "xqliu/orbi", active_milestone="v0.3.0",
+        "owner.invalid/repo", active_milestone="v0.3.0",
     ) == release
     assert 'milestone:"v0.3.0"' in searches[3]
     assert "label:ai-release" in searches[3]
@@ -942,7 +942,7 @@ def test_release_fallback_excludes_epic_and_blocked(
 
     monkeypatch.setattr(seam, "run_command", fake_run)
     with caplog.at_level("INFO"):
-        assert claim.pick_issue("xqliu/orbi") is None
+        assert claim.pick_issue("owner.invalid/repo") is None
     assert "epic_not_claimed" in caplog.text
     assert "blocked_by" in caplog.text
 
@@ -961,7 +961,7 @@ def test_release_fallback_scan_failure_fails_open(monkeypatch, caplog):
 
     monkeypatch.setattr(seam, "run_command", fake_run)
     with caplog.at_level("INFO"):
-        assert claim.pick_issue("xqliu/orbi") is None
+        assert claim.pick_issue("owner.invalid/repo") is None
     assert "blocked_by_check_failed" in caplog.text
 
 
@@ -1025,7 +1025,7 @@ def test_pick_issue_claims_milestone_less_external_ticket(
     monkeypatch.setattr(seam, "run_command", fake_run)
     with caplog.at_level("INFO"):
         assert claim.pick_issue(
-            "xqliu/orbi", active_milestone="v0.5.4",
+            "owner.invalid/repo", active_milestone="v0.5.4",
         ) == ticket
     # p0, bug, plain, release fallback — all scoped; the fifth scan is
     # not.
@@ -1062,7 +1062,7 @@ def test_pick_issue_external_scan_never_claims_a_plain_ticket(
     monkeypatch.setattr(seam, "run_command", fake_run)
     with caplog.at_level("INFO"):
         assert claim.pick_issue(
-            "xqliu/orbi", active_milestone="v0.5.4",
+            "owner.invalid/repo", active_milestone="v0.5.4",
         ) is None
     assert "claim_yield" in caplog.text
     assert "no_external_marker" in caplog.text
@@ -1083,7 +1083,7 @@ def test_pick_issue_external_scan_failure_fails_open(monkeypatch, caplog):
     monkeypatch.setattr(seam, "run_command", fake_run)
     with caplog.at_level("INFO"):
         assert claim.pick_issue(
-            "xqliu/orbi", active_milestone="v0.5.4",
+            "owner.invalid/repo", active_milestone="v0.5.4",
         ) is None
     assert "blocked_by_check_failed" in caplog.text
 
@@ -1113,7 +1113,7 @@ def test_pick_issue_without_milestone_claims_external_ticket_first(
         return json.dumps([ticket])
 
     monkeypatch.setattr(seam, "run_command", fake_run)
-    assert claim.pick_issue("xqliu/orbi") == ticket
+    assert claim.pick_issue("owner.invalid/repo") == ticket
     assert len(searches) == 3
     assert all("orbi:external-pr" not in search for search in searches)
 
@@ -1154,7 +1154,7 @@ def test_gather_claim_facts_routes_marker_ticket_to_takeover(
                         lambda *a, **k: False)
     _fake_takeover_view(monkeypatch, {
         "state": "OPEN",
-        "url": "https://github.com/xqliu/orbi/pull/838",
+        "url": "https://github.com/owner.invalid/repo/pull/838",
         "baseRefName": "main",
         "headRefName": "contributor-patch",
         "headRefOid": "abc123def456abc123def456abc123def456abcd",
@@ -1162,7 +1162,7 @@ def test_gather_claim_facts_routes_marker_ticket_to_takeover(
     config = config_domain.RunnerConfig(repo_dir=tmp_path, base_branch="main")
     with caplog.at_level("INFO"):
         facts = runner._gather_claim_facts(
-            issue, config, "xqliu/orbi", None,
+            issue, config, "owner.invalid/repo", None,
         )
     assert facts.external_takeover is True
     assert facts.takeover_pr["headRefName"] == "contributor-patch"
@@ -1186,9 +1186,9 @@ def test_milestone_open_issue_count_reads_github_counter(monkeypatch):
         return milestone_listing("v0.4.2", 3)
 
     monkeypatch.setattr(seam, "run_command", fake_run)
-    assert runner.milestone_open_issue_count("xqliu/orbi", "v0.4.2") == 3
+    assert runner.milestone_open_issue_count("owner.invalid/repo", "v0.4.2") == 3
     assert commands == [[
-        "gh", "api", "repos/xqliu/orbi/milestones?state=open&per_page=100",
+        "gh", "api", "repos/owner.invalid/repo/milestones?state=open&per_page=100",
         "--paginate", "--slurp", "--include",
     ]]
 
@@ -1200,7 +1200,7 @@ def test_milestone_open_issue_count_missing_milestone_raises(monkeypatch):
         seam, "run_command", lambda command, **kwargs: json.dumps([[]]),
     )
     with pytest.raises(RuntimeError, match="v0.4.2"):
-        runner.milestone_open_issue_count("xqliu/orbi", "v0.4.2")
+        runner.milestone_open_issue_count("owner.invalid/repo", "v0.4.2")
 
 
 def test_release_target_milestone_prefers_issue_then_active():
@@ -1229,7 +1229,7 @@ def test_release_not_claimed_when_milestone_incomplete(monkeypatch, caplog):
     indexed) can no longer let the release run ahead."""
     monkeypatch.setattr(seam, "run_command", _release_scan_fake("3"))
     with caplog.at_level("INFO"):
-        assert claim.pick_issue("xqliu/orbi") is None
+        assert claim.pick_issue("owner.invalid/repo") is None
     assert "release_milestone_incomplete" in caplog.text
     assert "milestone=v0.4.2" in caplog.text
     assert "open_issues=3" in caplog.text
@@ -1244,7 +1244,7 @@ def test_release_claimed_when_milestone_only_has_the_release(
     (`open_issues=1`) the release is claimed exactly as before."""
     monkeypatch.setattr(seam, "run_command", _release_scan_fake("1"))
     with caplog.at_level("INFO"):
-        assert claim.pick_issue("xqliu/orbi") == RELEASE_663
+        assert claim.pick_issue("owner.invalid/repo") == RELEASE_663
     assert "picked issue=254" in caplog.text
 
 
@@ -1255,7 +1255,7 @@ def test_release_not_claimed_when_milestone_check_fails(monkeypatch, caplog):
     error = subprocess.CalledProcessError(1, ["gh"], output="boom")
     monkeypatch.setattr(seam, "run_command", _release_scan_fake(error))
     with caplog.at_level("INFO"):
-        assert claim.pick_issue("xqliu/orbi") is None
+        assert claim.pick_issue("owner.invalid/repo") is None
     assert "release_milestone_check_failed" in caplog.text
     assert "picked issue=254" not in caplog.text
 
@@ -1328,9 +1328,9 @@ def test_release_milestone_read_failure_reaches_the_status_observer(
     error = subprocess.CalledProcessError(1, ["gh"], output="boom")
     monkeypatch.setattr(seam, "run_command", _release_scan_fake(error))
     with caplog.at_level("INFO"):
-        assert claim.pick_issue("xqliu/orbi") is None
+        assert claim.pick_issue("owner.invalid/repo") is None
         with pytest.raises(subprocess.CalledProcessError):
-            claim.pick_issue("xqliu/orbi", raise_on_read_failure=True)
+            claim.pick_issue("owner.invalid/repo", raise_on_read_failure=True)
     assert "release_milestone_check_failed issue=254" in caplog.text
     assert "picked issue=254" not in caplog.text
 
@@ -1356,7 +1356,7 @@ def test_release_without_milestone_claimed_without_api_call(
 
     monkeypatch.setattr(seam, "run_command", fake_run)
     with caplog.at_level("INFO"):
-        assert claim.pick_issue("xqliu/orbi") == release
+        assert claim.pick_issue("owner.invalid/repo") == release
     assert not [c for c in commands_seen if c[1] == "api"]
     assert "picked issue=254" in caplog.text
 
@@ -1386,7 +1386,7 @@ def test_release_milestone_falls_back_to_active_milestone(
     monkeypatch.setattr(seam, "run_command", fake_run)
     with caplog.at_level("INFO"):
         assert claim.pick_issue(
-            "xqliu/orbi", active_milestone="v0.3.0",
+            "owner.invalid/repo", active_milestone="v0.3.0",
         ) is None
     assert api_calls
     assert "milestone=v0.3.0" in caplog.text
@@ -1412,7 +1412,7 @@ def test_release_fallback_scan_fetches_milestone(monkeypatch):
         return json.dumps([])
 
     monkeypatch.setattr(seam, "run_command", fake_run)
-    assert claim.pick_issue("xqliu/orbi") == release
+    assert claim.pick_issue("owner.invalid/repo") == release
     fields = scans[-1][scans[-1].index("--json") + 1]
     assert "milestone" in fields.split(",")
 
@@ -1445,7 +1445,7 @@ def test_pick_issue_p0_blocked_by_open_blocker_falls_back_to_bug(
 
     monkeypatch.setattr(seam, "run_command", fake_run)
     with caplog.at_level("INFO"):
-        assert claim.pick_issue("xqliu/orbi") == bug
+        assert claim.pick_issue("owner.invalid/repo") == bug
     # The blocked P0 was skipped with the structured blocked_by line;
     # the bug was claimed with priority=normal (it is not a P0).
     assert "blocked_by" in caplog.text
@@ -1464,7 +1464,7 @@ def test_pick_issue_p0_scan_failure_fails_open(monkeypatch, caplog):
         lambda command, **kwargs: (_ for _ in ()).throw(error),
     )
     with caplog.at_level("INFO"):
-        assert claim.pick_issue("xqliu/orbi") is None
+        assert claim.pick_issue("owner.invalid/repo") is None
     assert "blocked_by_check_failed" in caplog.text
 
 
@@ -1488,7 +1488,7 @@ def test_pick_issue_logs_priority_normal_for_plain_pickup(
 
     monkeypatch.setattr(seam, "run_command", fake_run)
     with caplog.at_level("INFO"):
-        assert claim.pick_issue("xqliu/orbi") == feature
+        assert claim.pick_issue("owner.invalid/repo") == feature
     assert "priority=normal" in caplog.text
     assert "issue=10" in caplog.text
 
@@ -1561,10 +1561,10 @@ def test_pick_issue_skips_epic_and_claims_next(monkeypatch, caplog):
         lambda command, **kwargs: json.dumps([epic, ready]),
     )
     with caplog.at_level("INFO"):
-        assert claim.pick_issue("xqliu/orbi") == ready
+        assert claim.pick_issue("owner.invalid/repo") == ready
     assert "epic_not_claimed" in caplog.text
     assert "issue=80" in caplog.text
-    assert "repo=xqliu/orbi" in caplog.text
+    assert "repo=owner.invalid/repo" in caplog.text
     # The Epic was skipped for being an Epic — not for blockers — so
     # no `blocked_by` line is logged for it.
     assert "blocked_by" not in caplog.text
@@ -1601,7 +1601,7 @@ def test_pick_issue_returns_none_when_only_epics_are_ready(
 
     monkeypatch.setattr(seam, "run_command", fake_run)
     with caplog.at_level("INFO"):
-        assert claim.pick_issue("xqliu/orbi") is None
+        assert claim.pick_issue("owner.invalid/repo") is None
     assert caplog.text.count("epic_not_claimed") == 2
     assert "issue=80" in caplog.text
     assert "issue=133" in caplog.text
@@ -1623,7 +1623,7 @@ def test_pick_issue_epic_check_precedes_blocker_check(monkeypatch, caplog):
         lambda command, **kwargs: json.dumps([epic]),
     )
     with caplog.at_level("INFO"):
-        assert claim.pick_issue("xqliu/orbi") is None
+        assert claim.pick_issue("owner.invalid/repo") is None
     assert "epic_not_claimed" in caplog.text
     assert "issue=80" in caplog.text
     assert "blocked_by" not in caplog.text
@@ -1664,7 +1664,7 @@ def test_pick_issue_skips_epic_in_p0_and_bug_scans(monkeypatch, caplog):
 
     monkeypatch.setattr(seam, "run_command", fake_run)
     with caplog.at_level("INFO"):
-        assert claim.pick_issue("xqliu/orbi") == feature
+        assert claim.pick_issue("owner.invalid/repo") == feature
     assert caplog.text.count("epic_not_claimed") == 2
     assert "issue=80" in caplog.text
     assert "issue=81" in caplog.text
@@ -1683,10 +1683,10 @@ def test_pick_in_progress_issue_scan_excludes_epics(monkeypatch, tmp_path):
 
     monkeypatch.setattr(seam, "run_command", fake_run)
     assert claim.pick_in_progress_issue(
-        "xqliu/orbi", tmp_path / "slots", 1,
+        "owner.invalid/repo", tmp_path / "slots", 1,
     ) is None
     assert calls == [[
-        "gh", "issue", "list", "--repo", "xqliu/orbi",
+        "gh", "issue", "list", "--repo", "owner.invalid/repo",
         "--state", "open", "--search",
         "label:ai-in-progress -label:ai-pr-opened "
         "-label:ai-fix-needed -label:ai-merged -label:ai-blocked "
@@ -1696,7 +1696,7 @@ def test_pick_in_progress_issue_scan_excludes_epics(monkeypatch, tmp_path):
 
 
 def _local_run_worktree(repo_dir: Path, issue: int, run_id: str,
-                        source_repo: str = "xqliu/orbi") -> Path:
+                        source_repo: str = "owner.invalid/repo") -> Path:
     """Create THIS deployment's task worktree + run state for one Issue.
 
     That pair is the trace a killed run leaves behind and the scene
@@ -1731,10 +1731,10 @@ def test_pick_in_progress_issue_scan_fetches_labels(monkeypatch, tmp_path):
     _local_run_worktree(tmp_path, 18, "abcd0018")
     # No slot dir yet: every slot is free, so the scan runs.
     assert claim.pick_in_progress_issue(
-        "xqliu/orbi", tmp_path / "slots", 1, repo_dir=tmp_path,
+        "owner.invalid/repo", tmp_path / "slots", 1, repo_dir=tmp_path,
     ) == issue
     assert calls == [[
-        "gh", "issue", "list", "--repo", "xqliu/orbi",
+        "gh", "issue", "list", "--repo", "owner.invalid/repo",
         "--state", "open", "--search",
         "label:ai-in-progress -label:ai-pr-opened "
         "-label:ai-fix-needed -label:ai-merged -label:ai-blocked "
@@ -1763,10 +1763,10 @@ def test_pick_in_progress_issue_scan_fetches_milestone(monkeypatch, tmp_path):
     monkeypatch.setattr(seam, "run_command", fake_run)
     _local_run_worktree(tmp_path, 664, "abcd0664")
     resumed = claim.pick_in_progress_issue(
-        "xqliu/orbi", tmp_path / "slots", 1, repo_dir=tmp_path,
+        "owner.invalid/repo", tmp_path / "slots", 1, repo_dir=tmp_path,
     )
     assert calls == [[
-        "gh", "issue", "list", "--repo", "xqliu/orbi",
+        "gh", "issue", "list", "--repo", "owner.invalid/repo",
         "--state", "open", "--search",
         "label:ai-in-progress -label:ai-pr-opened "
         "-label:ai-fix-needed -label:ai-merged -label:ai-blocked "
@@ -1798,10 +1798,10 @@ def test_pick_in_progress_issue_scans_in_flight_issues(monkeypatch, tmp_path):
     _local_run_worktree(tmp_path, 18, "abcd0018")
     # No slot dir yet: every slot is free, so the scan runs.
     assert claim.pick_in_progress_issue(
-        "xqliu/orbi", tmp_path / "slots", 1, repo_dir=tmp_path,
+        "owner.invalid/repo", tmp_path / "slots", 1, repo_dir=tmp_path,
     ) == issue
     assert calls == [[
-        "gh", "issue", "list", "--repo", "xqliu/orbi",
+        "gh", "issue", "list", "--repo", "owner.invalid/repo",
         "--state", "open", "--search",
         "label:ai-in-progress -label:ai-pr-opened "
         "-label:ai-fix-needed -label:ai-merged -label:ai-blocked "
@@ -1830,10 +1830,10 @@ def test_pick_in_progress_issue_ignores_a_custom_dispatch_label(
     monkeypatch.setattr(seam, "run_command", fake_run)
     _local_run_worktree(tmp_path, 18, "abcd0018")
     assert claim.pick_in_progress_issue(
-        "xqliu/orbi", tmp_path / "slots", 1, repo_dir=tmp_path,
+        "owner.invalid/repo", tmp_path / "slots", 1, repo_dir=tmp_path,
     ) == issue
     assert calls == [[
-        "gh", "issue", "list", "--repo", "xqliu/orbi",
+        "gh", "issue", "list", "--repo", "owner.invalid/repo",
         "--state", "open", "--search",
         "label:ai-in-progress -label:ai-pr-opened -label:ai-fix-needed "
         "-label:ai-merged -label:ai-blocked -label:ai-epic",
@@ -1847,7 +1847,7 @@ def test_pick_in_progress_issue_returns_none_when_idle(
     monkeypatch.setattr(seam, "run_command", lambda command, **kwargs: "[]",
     )
     assert claim.pick_in_progress_issue(
-        "xqliu/orbi", tmp_path / "slots", 1,
+        "owner.invalid/repo", tmp_path / "slots", 1,
     ) is None
 
 
@@ -1865,14 +1865,14 @@ def test_pick_in_progress_issue_skips_when_another_runner_is_live(
     monkeypatch.setattr(seam, "slot_occupancy",
                         lambda slot_dir, capacity: [(1, 4242)])
     assert claim.pick_in_progress_issue(
-        "xqliu/orbi", tmp_path / "slots", 1,
+        "owner.invalid/repo", tmp_path / "slots", 1,
     ) is None
     assert gh_calls == [], "no gh traffic while another runner is live"
     # Own PID: the scan still runs (this runner holds its own slot).
     monkeypatch.setattr(seam, "slot_occupancy",
                         lambda slot_dir, capacity: [(1, os.getpid())])
     assert claim.pick_in_progress_issue(
-        "xqliu/orbi", tmp_path / "slots", 1,
+        "owner.invalid/repo", tmp_path / "slots", 1,
     ) is None
     assert len(gh_calls) == 1
 
@@ -1897,7 +1897,7 @@ def test_pick_in_progress_issue_skips_another_deployments_run(
     )
     with caplog.at_level("INFO"):
         assert claim.pick_in_progress_issue(
-            "xqliu/orbi", tmp_path / "slots", 1, repo_dir=tmp_path,
+            "owner.invalid/repo", tmp_path / "slots", 1, repo_dir=tmp_path,
         ) is None
     # One read and nothing else: no label edit, no comment, no second run.
     assert len(calls) == 1
@@ -1921,9 +1921,9 @@ def test_pick_in_progress_issue_resumes_this_deployments_killed_run(
         seam, "run_command", lambda command, **kwargs: json.dumps([issue]),
     )
     assert claim.pick_in_progress_issue(
-        "xqliu/orbi", tmp_path / "slots", 1, repo_dir=tmp_path,
+        "owner.invalid/repo", tmp_path / "slots", 1, repo_dir=tmp_path,
     ) == issue
-    assert runner.worktree_resume_scene(tmp_path, "xqliu/orbi", 42) == (
+    assert runner.worktree_resume_scene(tmp_path, "owner.invalid/repo", 42) == (
         "abcd0042", worktree,
     )
     # The same worktree without its run state file (a kill between the
@@ -1934,7 +1934,7 @@ def test_pick_in_progress_issue_resumes_this_deployments_killed_run(
     # it started.
     run_state.run_state_path(worktree).unlink()
     assert claim.pick_in_progress_issue(
-        "xqliu/orbi", tmp_path / "slots", 1, repo_dir=tmp_path,
+        "owner.invalid/repo", tmp_path / "slots", 1, repo_dir=tmp_path,
     ) == issue
 
 
@@ -1961,7 +1961,7 @@ def test_pick_in_progress_issue_keeps_looking_past_another_deployments_run(
         ),
     )
     assert claim.pick_in_progress_issue(
-        "xqliu/orbi", tmp_path / "slots", 1, repo_dir=tmp_path,
+        "owner.invalid/repo", tmp_path / "slots", 1, repo_dir=tmp_path,
     ) == mine
     assert calls[0][-2:] == ["--limit", "100"]
 
@@ -1982,7 +1982,7 @@ def test_pick_in_progress_issue_without_a_repo_dir_resumes_nothing(
         seam, "run_command", lambda command, **kwargs: json.dumps([issue]),
     )
     assert claim.pick_in_progress_issue(
-        "xqliu/orbi", tmp_path / "slots", 1,
+        "owner.invalid/repo", tmp_path / "slots", 1,
     ) is None
 
 
@@ -1992,6 +1992,7 @@ def test_pick_next_delivery_recovers_in_flight_issue_before_ready(
     """Claim order (Issue #18): resumable PRs first, then in-flight
     restarts (killed runner, `ai-in-progress` left behind), then ready
     Issues — a dead run is resumed, never skipped by the ready scan."""
+    install_fake_gh_repositories(monkeypatch, "r1", "r2")
     in_flight = {"number": 2, "title": "in flight", "body": ""}
     ready = {"number": 3, "title": "ready", "body": ""}
     monkeypatch.setattr(
@@ -2016,6 +2017,7 @@ def test_pick_next_delivery_keeps_resumable_delivery_first(
 ):
     """An `ai-fix-needed` PR resume always beats an in-flight restart:
     the PR already exists and must not be re-implemented."""
+    install_fake_gh_repositories(monkeypatch, "r1", "r2")
     in_flight = {"number": 2, "title": "in flight", "body": ""}
     resumable = {"number": 5, "title": "fix needed", "body": ""}
     scene = config_domain.RunnerConfig(run_id="a1b2c3d4")
@@ -2039,6 +2041,7 @@ def test_pick_next_delivery_keeps_resumable_delivery_first(
 def test_pick_next_delivery_falls_through_to_ready_when_no_in_flight(
     monkeypatch, tmp_path,
 ):
+    install_fake_gh_repositories(monkeypatch, "r1")
     ready = {"number": 3, "title": "ready", "body": ""}
     monkeypatch.setattr(
         claim, "pick_resumable_delivery",
@@ -2061,6 +2064,7 @@ def test_pick_next_delivery_returns_none_when_all_scans_empty(
     """All four scans empty; the fourth is Issue #1745's deferred
     `ai-awaiting-merge` re-check (see test_resume_pr for its behavior
     against the GitHub fake)."""
+    install_fake_gh_repositories(monkeypatch, "r1")
     monkeypatch.setattr(
         claim, "pick_resumable_delivery",
         lambda repo, slot_dir, max_concurrency, **_kwargs: None,
@@ -2086,13 +2090,13 @@ def test_pick_next_issue_returns_first_ready_source(monkeypatch):
 
     def pick(repo, active_milestone=None, **_kwargs):
         calls.append(repo)
-        return issue if repo == "xqliu/orbi-backlog" else None
+        return issue if repo == "owner.invalid/repo-backlog" else None
 
     monkeypatch.setattr(claim, "pick_issue", pick)
-    assert claim.pick_next_issue(["xqliu/orbi-backlog", "xqliu/orbi"]) == (
-        "xqliu/orbi-backlog", issue,
+    assert claim.pick_next_issue(["owner.invalid/repo-backlog", "owner.invalid/repo"]) == (
+        "owner.invalid/repo-backlog", issue,
     )
-    assert calls == ["xqliu/orbi-backlog"]
+    assert calls == ["owner.invalid/repo-backlog"]
 
 
 def test_pick_next_issue_falls_through_to_second_source(monkeypatch):
@@ -2101,18 +2105,18 @@ def test_pick_next_issue_falls_through_to_second_source(monkeypatch):
 
     def pick(repo, active_milestone=None, **_kwargs):
         calls.append(repo)
-        return issue if repo == "xqliu/orbi" else None
+        return issue if repo == "owner.invalid/repo" else None
 
     monkeypatch.setattr(claim, "pick_issue", pick)
-    assert claim.pick_next_issue(["xqliu/orbi-backlog", "xqliu/orbi"]) == (
-        "xqliu/orbi", issue,
+    assert claim.pick_next_issue(["owner.invalid/repo-backlog", "owner.invalid/repo"]) == (
+        "owner.invalid/repo", issue,
     )
-    assert calls == ["xqliu/orbi-backlog", "xqliu/orbi"]
+    assert calls == ["owner.invalid/repo-backlog", "owner.invalid/repo"]
 
 
 def test_pick_next_issue_returns_none_when_all_sources_empty(monkeypatch):
     monkeypatch.setattr(claim, "pick_issue", lambda repo, active_milestone=None, **_kwargs: None)
-    assert claim.pick_next_issue(["xqliu/orbi-backlog", "xqliu/orbi"]) is None
+    assert claim.pick_next_issue(["owner.invalid/repo-backlog", "owner.invalid/repo"]) is None
 
 
 def test_freeze_base_fetches_remote_and_returns_exact_sha(monkeypatch, tmp_path):
@@ -2885,19 +2889,19 @@ def test_resume_run_id_returns_none_without_candidates(tmp_path):
 def test_resume_run_id_matches_by_issue_and_repo_name_across_a_rename(
     tmp_path,
 ):
-    """The repo was renamed (slug `xqliu-orbi` -> `orbi-build-orbi`):
-    the old worktree is found by issue number + repo NAME (the stable
-    identity) and the SAME run continues — no second run/branch/
-    worktree (Issue #219)."""
-    old = tmp_path / ".worktrees" / "orbi-xqliu-orbi-issue-42-aaaa1111"
+    """The repo owner was renamed (slug `owner.invalid-repo` ->
+    `renamed.invalid-repo`): the old worktree is found by issue number +
+    repo NAME (the stable identity) and the SAME run continues — no second
+    run/branch/worktree (Issue #219)."""
+    old = tmp_path / ".worktrees" / "orbi-owner.invalid-repo-issue-42-aaaa1111"
     old.mkdir(parents=True)
-    run_state.write_run_state(RunContext(run_id="aaaa1111", issue=42, branch="orbi/xqliu-orbi-issue-42", worktree=old, source_repo="xqliu/orbi"))
+    run_state.write_run_state(RunContext(run_id="aaaa1111", issue=42, branch="orbi/owner.invalid-repo-issue-42", worktree=old, source_repo="owner.invalid/repo"))
     assert runner.resume_run_id(
-        tmp_path, "orbi-build/orbi", 42,
+        tmp_path, "renamed.invalid/repo", 42,
     ) == "aaaa1111"
     # A different repo name never matches, even with the same issue.
     assert runner.resume_run_id(
-        tmp_path, "orbi-build/other", 42,
+        tmp_path, "renamed.invalid/other", 42,
     ) is None
 
 
@@ -3058,10 +3062,10 @@ def test_worktree_path_lives_inside_repo_worktrees_and_includes_run_id():
 
 def test_worktree_path_keeps_source_repo_in_name_to_avoid_same_number_collision():
     repo_dir = Path("/srv/orbi/orbi")
-    pilot = runner.worktree_path(repo_dir, "xqliu/orbi", 14, "run1")
-    ceo = runner.worktree_path(repo_dir, "xqliu/orbi-backlog", 14, "run1")
-    assert pilot == repo_dir / ".worktrees" / "orbi-xqliu-orbi-issue-14-run1"
-    assert ceo == repo_dir / ".worktrees" / "orbi-xqliu-orbi-backlog-issue-14-run1"
+    pilot = runner.worktree_path(repo_dir, "owner.invalid/repo", 14, "run1")
+    ceo = runner.worktree_path(repo_dir, "owner.invalid/repo-backlog", 14, "run1")
+    assert pilot == repo_dir / ".worktrees" / "orbi-owner.invalid-repo-issue-14-run1"
+    assert ceo == repo_dir / ".worktrees" / "orbi-owner.invalid-repo-backlog-issue-14-run1"
     assert pilot != ceo
 
 
@@ -3451,7 +3455,7 @@ def test_external_takeover_pr_fails_fast_on_a_malformed_view(
     with pytest.raises(RuntimeError, match="did not return an object"):
         runner.external_takeover_pr(
             tmp_path, "<!-- orbi:external-pr:592 -->",
-            "xqliu/orbi", "main",
+            "owner.invalid/repo", "main",
         )
 
 
@@ -3460,7 +3464,7 @@ def test_external_takeover_pr_resolves_the_marked_pr(monkeypatch, tmp_path):
     open and against the configured base, the takeover proceeds."""
     _fake_takeover_view(monkeypatch, {
         "state": "OPEN",
-        "url": "https://github.com/xqliu/orbi/pull/592",
+        "url": "https://github.com/owner.invalid/repo/pull/592",
         "baseRefName": "main",
         "headRefName": "fix/outer",
         "headRefOid": "e592a11",
@@ -3468,24 +3472,24 @@ def test_external_takeover_pr_resolves_the_marked_pr(monkeypatch, tmp_path):
     pr = runner.external_takeover_pr(
         tmp_path,
         "body text\n<!-- orbi:external-pr:592 -->\n",
-        "xqliu/orbi", "main",
+        "owner.invalid/repo", "main",
     )
     assert pr is not None
     assert pr["headRefName"] == "fix/outer"
-    assert pr["url"] == "https://github.com/xqliu/orbi/pull/592"
+    assert pr["url"] == "https://github.com/owner.invalid/repo/pull/592"
 
 
 def test_external_takeover_pr_ignores_a_closed_pr(monkeypatch, tmp_path):
     """The external PR is merged/closed already: no takeover — the claim
     proceeds as a fresh internal delivery."""
     _fake_takeover_view(monkeypatch, {
-        "state": "CLOSED", "url": "https://github.com/xqliu/orbi/pull/592",
+        "state": "CLOSED", "url": "https://github.com/owner.invalid/repo/pull/592",
         "baseRefName": "main", "headRefName": "fix/outer",
         "headRefOid": "e592a11",
     })
     assert runner.external_takeover_pr(
         tmp_path, "<!-- orbi:external-pr:592 -->",
-        "xqliu/orbi", "main",
+        "owner.invalid/repo", "main",
     ) is None
 
 
@@ -3495,13 +3499,13 @@ def test_external_takeover_pr_ignores_a_pr_against_another_base(
     """The delivery loop only merges the configured protected base: a
     PR against another branch is not a takeover."""
     _fake_takeover_view(monkeypatch, {
-        "state": "OPEN", "url": "https://github.com/xqliu/orbi/pull/592",
+        "state": "OPEN", "url": "https://github.com/owner.invalid/repo/pull/592",
         "baseRefName": "develop", "headRefName": "fix/outer",
         "headRefOid": "e592a11",
     })
     assert runner.external_takeover_pr(
         tmp_path, "<!-- orbi:external-pr:592 -->",
-        "xqliu/orbi", "main",
+        "owner.invalid/repo", "main",
     ) is None
 
 
@@ -3514,10 +3518,10 @@ def test_external_takeover_pr_returns_none_without_a_marker(monkeypatch,
         ),
     )
     assert runner.external_takeover_pr(
-        tmp_path, "an ordinary issue body", "xqliu/orbi", "main",
+        tmp_path, "an ordinary issue body", "owner.invalid/repo", "main",
     ) is None
     assert runner.external_takeover_pr(
-        tmp_path, None, "xqliu/orbi", "main",
+        tmp_path, None, "owner.invalid/repo", "main",
     ) is None
 
 
@@ -3537,17 +3541,17 @@ def test_opened_pr_comment_round_trips_the_external_flag():
     body = runner.opened_pr_comment_body(
         "a1b2c3d4",
         _run_fields(),
-        "https://github.com/xqliu/orbi/pull/592", external=True, language_code="en",
+        "https://github.com/owner.invalid/repo/pull/592", external=True, language_code="en",
     )
     scene = run_state.parse_pr_comment(body)
-    assert scene.pr_url == "https://github.com/xqliu/orbi/pull/592"
+    assert scene.pr_url == "https://github.com/owner.invalid/repo/pull/592"
     assert scene.run_id == "a1b2c3d4"
     assert bool(scene.external) is True
 
     own = run_state.parse_pr_comment(runner.opened_pr_comment_body(
         "a1b2c3d4",
         _run_fields(),
-        "https://github.com/xqliu/orbi/pull/40", language_code="en",
+        "https://github.com/owner.invalid/repo/pull/40", language_code="en",
     ))
     assert bool(own.external) is False
 
@@ -7082,17 +7086,17 @@ def test_a_stopped_run_is_neither_resumed_nor_reclaimed(monkeypatch, tmp_path):
     upgrade carries the queue label too, so stopping it removes both — and
     with neither label left, neither the in-flight scan nor the ready scan
     can see it again, whatever the repository's dispatch label is."""
-    fake = FakeGh("xqliu/orbi")
+    fake = FakeGh("owner.invalid/repo")
     fake.add_issue(18, title="task", body="", labels=())
     monkeypatch.setattr(seam, "run_command", fake)
     # A local worktree alone no longer proves the run should continue.
     _local_run_worktree(tmp_path, 18, "abcd0018")
 
     assert claim.pick_in_progress_issue(
-        "xqliu/orbi", tmp_path / "slots", 1, repo_dir=tmp_path,
+        "owner.invalid/repo", tmp_path / "slots", 1, repo_dir=tmp_path,
     ) is None
-    assert claim.pick_issue("xqliu/orbi") is None
-    assert claim.pick_issue("xqliu/orbi", dispatch_label="ship") is None
+    assert claim.pick_issue("owner.invalid/repo") is None
+    assert claim.pick_issue("owner.invalid/repo", dispatch_label="ship") is None
 
 
 def test_claim_issue_is_one_whole_set_replacement(monkeypatch):

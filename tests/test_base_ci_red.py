@@ -29,7 +29,7 @@ import orbi.runner as runner
 from orbi import failure, failure_report, ticket_command
 from orbi.comment_kind import COMMENT_KIND_FAILURE, comment_kind_marker
 from orbi.progress import field_block, run_marker
-from tests.fakes.github import FakeGh
+from tests.fakes.github import FakeGh, install_fake_gh_repositories
 from seam import seam
 
 REPO = "acme/app"
@@ -1713,6 +1713,9 @@ def test_the_claim_tick_runs_the_base_ci_scan_before_the_resume_scan(
     from orbi import claim
 
     order: list[tuple[str, dict]] = []
+    # The claim tick's stopped-ticket and recovery sweeps read GitHub too;
+    # the in-memory world answers them (Issue #2253).
+    install_fake_gh_repositories(monkeypatch, "acme/app")
     # The seam fans the fakes out to every module that binds the name, so
     # the test patches no package module directly (the patch ratchet).
     for name in (

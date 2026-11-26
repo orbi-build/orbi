@@ -35,9 +35,16 @@ from orbi.delivery_labels import (
     PR_OPENED_LABEL,
 )
 from seam import seam
+from tests.fakes.github import install_absent_repo_policy
 
 LOGGER_NAME = "orbi.bootstrap"
 NOW = datetime(2026, 9, 12, 12, 0, 0, tzinfo=timezone.utc)
+
+
+@pytest.fixture(autouse=True)
+def _absent_repo_policy(monkeypatch):
+    """The policy read is incidental to the reclamation (Issue #2253)."""
+    install_absent_repo_policy(monkeypatch)
 
 
 def _git_repo(path: Path) -> Path:
