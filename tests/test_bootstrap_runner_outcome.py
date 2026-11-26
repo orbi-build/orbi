@@ -579,7 +579,8 @@ def test_process_issue_empty_commit_marks_blocked_without_crashing(
             "xqliu/orbi",
         )
     assert result.kind == "failed"
-    # Issue #2357: the terminal add is the last label write.
+    # Issue #2426: the terminal is ONE whole-set write ending on
+    # ai-blocked alone.
     assert edits[-1] == ["ai-blocked"]
     blocked = [body for body in comments if "Orbi: blocked" in body]
     assert len(blocked) == 1

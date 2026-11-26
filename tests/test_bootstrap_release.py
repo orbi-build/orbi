@@ -4975,13 +4975,13 @@ def test_release_process_env_fake_answers_the_real_tag_probe(tmp_path,
     assert release_closeout.release_tag_commit(tmp_path, "v0.3.0") == "abc123"
 
 
-def test_process_release_failed_merged_add_restores_the_in_progress_label(
+def test_process_release_failed_merged_write_keeps_the_in_progress_label(
     monkeypatch,
 ):
-    """Issue #2357 acceptance 2: when the release close-out's ai-merged add
-    fails, the labels it already removed are put back in the same tick —
-    the Issue carries ai-in-progress again and the synthetic ai-ready the
-    close-out passes (but the Issue never carried) is NOT invented. The
+    """Issues #2357, #2426: the release close-out's terminal is ONE
+    whole-set replacement, so a failed ai-merged write applies NOTHING —
+    the Issue keeps the claim's ai-in-progress and no label the close-out
+    only synthesized (the ai-ready it never carried) is invented. The
     existing failed-write recovery (the restart scan reruns the close-out)
     therefore keeps working."""
     state = make_release_process_env(monkeypatch, fail_merged_add=True)

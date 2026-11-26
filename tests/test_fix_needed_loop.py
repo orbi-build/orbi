@@ -969,7 +969,8 @@ def test_verify_resumed_pr_unrecoverable_failure_removes_leftover_fix_needed_lab
         )
     # The blocked patch clears every delivery-state label that is
     # present — here only `ai-fix-needed` (the delivery was awaiting the
-    # next review session) — removal first, terminal add last (#2357).
+    # next review session) — in ONE whole-set write ending on ai-blocked
+    # alone (Issues #2357, #2426).
     assert captured["edits"] == [["ai-blocked"]]
 
 
@@ -1090,8 +1091,8 @@ def test_block_scene_failure_states_why_not_auto_recoverable(
         issue, scene.SceneError("opened PR comment is missing run_id"),
         "owner/repo", comments, language_code="en",
     )
-    # Issue #2357: every removal is written before the terminal add, so
-    # the timeline ends on ai-blocked alone.
+    # Issue #2426: the terminal is ONE whole-set replacement, so the
+    # Issue ends on ai-blocked alone.
     assert edits == [["ai-blocked"]]
     assert len(posted) == 1
     body = posted[0]
