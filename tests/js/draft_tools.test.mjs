@@ -231,6 +231,42 @@ test("the schema accepts the attachments each Issue uses (Issue #2364)", () => {
   );
 });
 
+test("the schema accepts the labels an Issue matched (Issue #2445)", () => {
+  // Absent = no match; the names themselves are the ENGINE's rule, so the
+  // schema leaves them as strings and lets parse_answer judge them — its
+  // reason is what the model reads as the tool error.
+  assert.equal(validates(writeDraftTool, TWO_ISSUES), true);
+  assert.equal(
+    validates(writeDraftTool, {
+      reply: "x",
+      issues: [{ ...TWO_ISSUES.issues[0], labels: ["bug", "p0"] }],
+    }),
+    true,
+  );
+  assert.equal(
+    validates(writeDraftTool, {
+      reply: "x",
+      issues: [{ ...TWO_ISSUES.issues[0], labels: ["enhancement"] }],
+    }),
+    true,
+  );
+  // A label name is a non-empty string, never a number or an object.
+  assert.equal(
+    validates(writeDraftTool, {
+      reply: "x",
+      issues: [{ ...TWO_ISSUES.issues[0], labels: [1] }],
+    }),
+    false,
+  );
+  assert.equal(
+    validates(writeDraftTool, {
+      reply: "x",
+      issues: [{ ...TWO_ISSUES.issues[0], labels: [""] }],
+    }),
+    false,
+  );
+});
+
 test("the schema rejects a draft the engine cannot create", () => {
   // No Issue at all: a draft round must carry at least one.
   assert.equal(validates(writeDraftTool, { reply: "x", issues: [] }), false);

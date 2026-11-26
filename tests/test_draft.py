@@ -32,7 +32,8 @@ import orbi.question as question
 from orbi import provider_balance
 from orbi.config import RunnerConfig
 from orbi.delivery_labels import (
-    EPIC_LABEL, IN_PROGRESS_LABEL, NEEDS_DETAIL_LABEL, READY_LABEL,
+    BUG_LABEL, EPIC_LABEL, IN_PROGRESS_LABEL, NEEDS_DETAIL_LABEL, P0_LABEL,
+    READY_LABEL,
 )
 
 from tests.fakes import draft as draft_fakes
@@ -885,6 +886,136 @@ def test_a_marker_from_another_account_is_never_adopted(config, recorder, gh):
     )["created"]
     assert len(created) == 2
     assert len(gh.issues) == 4
+
+
+# --- 4b: the labels a draft matches from the request (Issue #2445) ------
+
+def test_each_created_issue_carries_the_labels_its_round_matched(
+    config, sessions, recorder, gh, monkeypatch, tmp_path,
+):
+    """The drafting session classifies each Issue itself; creation writes the
+    match in the SAME `gh issue create` that opens the Issue, so a defect
+    reaches the claim queue with `bug` already on it."""
+    draft_fakes.judge_passing(monkeypatch)
+    sessions.queue_draft(
+        {**issue("Checkout fails after the token expires"),
+         "labels": ["bug", "p0"]},
+        issue("Add tag filtering"),
+    )
+    code, out, err = run_round_cli(
+        config, {"message": "checkout is broken"}, tmp_path / "session",
+    )
+    assert code == 0, err
+    document = json.loads(out)
+    assert [entry.get("labels") for entry in document["issues"]] == [
+        ["bug", "p0"], None,
+    ]
+    code, out, err = run_create(
+        config, {"key": KEY, "issues": document["issues"]},
+    )
+    assert code == 0, err
+    urgent, plain = json.loads(out)["created"]
+    # The urgent defect carries both; the plain new feature carries neither.
+    assert gh.issues[urgent]["labels"] == [
+        BUG_LABEL, P0_LABEL, READY_LABEL,
+    ]
+    assert gh.issues[plain]["labels"] == [READY_LABEL]
+    creates = [
+        command for command in recorder.issues_commands()
+        if command[2] == "create"
+    ]
+    # The match travels in the ONE create command (gh takes --label
+    # repeatedly), never as a separate label write after it.
+    assert [
+        creates[0][index + 1]
+        for index, word in enumerate(creates[0]) if word == "--label"
+    ] == [BUG_LABEL, P0_LABEL]
+    assert "--label" not in creates[1]
+
+
+def test_a_label_a_draft_may_not_match_is_refused_before_anything_is_created(
+    config, recorder, gh,
+):
+    """Only `bug` and `p0` are opened to a draft: a name outside the pair
+    fails the creation with the engine's own reason and no Issue exists."""
+    code, out, err = run_create(config, {"key": KEY, "issues": [
+        {**issue("Tag a note"), "labels": ["enhancement"]},
+    ]})
+    assert code == 1
+    assert out == ""
+    failure = json.loads(err)
+    assert failure["code"] == "invalid_draft"
+    assert BUG_LABEL in failure["detail"]
+    assert P0_LABEL in failure["detail"]
+    assert "enhancement" in failure["detail"]
+    assert gh.issues == {}
+
+
+def test_the_fidelity_pass_keeps_the_label_match_the_drafter_made(
+    config, sessions, monkeypatch, tmp_path,
+):
+    """The pass revises wording only: a label match, or a label it invents,
+    never comes back from it (Issue #2445)."""
+    draft_fakes.judge_passing(monkeypatch)
+    sessions.fidelity.append(json.dumps({"issues": [
+        {"title": "Checkout fails after the token expires",
+         "body": TWO_ISSUES[0]["body"], "labels": ["enhancement"]},
+    ]}))
+    sessions.queue_draft({
+        **issue("Checkout fails after the token expires"), "labels": ["bug"],
+    })
+    code, out, err = run_round_cli(
+        config, {"message": "checkout is broken"}, tmp_path / "session",
+    )
+    assert code == 0, err
+    assert json.loads(out)["issues"][0]["labels"] == ["bug"]
+
+
+def test_a_rewrite_keeps_the_label_match_the_drafter_made(
+    config, sessions, monkeypatch, tmp_path,
+):
+    """A body the pre-work check bounced is rewritten once; the label match is
+    the drafter's classification, so the rewrite never drops it."""
+    draft_fakes.judge_sequence(
+        monkeypatch, [(False, ("single_outcome",)), (True, ())],
+    )
+    sessions.queue_draft({
+        **issue("Checkout fails after the token expires"),
+        "labels": ["bug", "p0"],
+    })
+    sessions.queue_draft(issue("Checkout fails after the token expires"))
+    code, out, err = run_round_cli(
+        config, {"message": "checkout is broken"}, tmp_path / "session",
+    )
+    assert code == 0, err
+    document = json.loads(out)
+    assert document["check"] == "passed"
+    assert document["issues"][0]["labels"] == ["bug", "p0"]
+
+
+def test_the_drafting_rules_match_only_bug_and_p0():
+    """The prompt states the closed set and the two matches, never a default:
+    an unclear request carries no p0 (Issue #2445)."""
+    prompt = draft.draft_system_prompt()
+    assert draft_prompt.MATCHED_LABELS_RULE in prompt
+    for name in ("\"bug\"", "\"p0\""):
+        assert name in draft_prompt.MATCHED_LABELS_RULE
+    assert "only these" in draft_prompt.MATCHED_LABELS_RULE
+    assert "never guess" in draft_prompt.MATCHED_LABELS_RULE
+    # The tool the model calls carries the same field, so it reads the rule
+    # even when the prompt is compacted.
+    assert "labels" in flattened(draft.DRAFT_EXTENSION)
+
+
+def test_the_fidelity_protocol_carries_the_labels_unchanged(
+    config, sessions, monkeypatch, tmp_path,
+):
+    draft_fakes.judge_passing(monkeypatch)
+    sessions.queue_draft({**issue("Tag a note"), "labels": ["bug"]})
+    run_round_cli(config, {"message": "notes"}, tmp_path / "session")
+    protocol = draft_prompt.FIDELITY_PROTOCOL
+    assert '"labels"' in protocol
+    assert "unchanged" in protocol
 
 
 # --- 5: adding detail to an existing Issue -------------------------------

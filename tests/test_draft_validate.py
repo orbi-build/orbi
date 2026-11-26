@@ -148,6 +148,53 @@ def test_attachment_numbers_are_the_engines_own_rule(monkeypatch, capsys):
     assert "attachments" in out
 
 
+def test_a_label_a_draft_may_not_match_is_rejected_with_the_engine_reason(
+    monkeypatch, capsys,
+):
+    """Issue #2445: a draft matches only the two labels the claim order
+    reads, so any other name is the engine's refusal, in its own words."""
+    matched = {
+        "kind": "draft", "reply": "x",
+        "issues": [{
+            "title": "Tag a note", "body": "## Outcome\n\nA user can tag.",
+            "labels": ["bug", "p0"],
+        }],
+    }
+    code, out = run_entry(monkeypatch, capsys, json.dumps(matched))
+    assert code == 0, out
+    invented = {
+        "kind": "draft", "reply": "x",
+        "issues": [{
+            "title": "Tag a note", "body": "## Outcome\n\nA user can tag.",
+            "labels": ["bug", "enhancement"],
+        }],
+    }
+    code, out = run_entry(monkeypatch, capsys, json.dumps(invented))
+    assert code == 1
+    assert out.strip() == parse_reason(invented)
+    assert "bug" in out and "p0" in out
+    assert "enhancement" in out
+
+
+def test_a_labels_value_that_is_not_a_list_of_names_is_rejected(
+    monkeypatch, capsys,
+):
+    """Issue #2445: `labels` is a list of names — never one comma-joined
+    string, and never a number or an empty name."""
+    for value in ("bug,p0", [1], [""]):
+        malformed = {
+            "kind": "draft", "reply": "x",
+            "issues": [{
+                "title": "Tag a note", "body": "## Outcome\n\nA user can tag.",
+                "labels": value,
+            }],
+        }
+        code, out = run_entry(monkeypatch, capsys, json.dumps(malformed))
+        assert code == 1, value
+        assert out.strip() == parse_reason(malformed)
+        assert "list of label names" in out
+
+
 def test_two_recommended_options_are_rejected_with_the_engine_reason(
     monkeypatch, capsys,
 ):
