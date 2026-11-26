@@ -69,6 +69,7 @@ import orbi.steering as steering
 import orbi.stopped_scans as stopped_scans
 import orbi.requeue as requeue
 import orbi.run_state as run_state
+import orbi.pr_head_refresh as pr_head_refresh
 import orbi.pr_head_sync as pr_head_sync
 import orbi.pr_verification as pr_verification
 import orbi.restart_scan as restart_scan
@@ -88,7 +89,7 @@ _MODULES = (
     merge_exec, waiting_checks,
     review_rounds, run_state, claim,
     resume_scan, restart_scan, review_wait,
-    pr_head_sync, pr_verification, resume_verification,
+    pr_head_sync, pr_head_refresh, pr_verification, resume_verification,
     delivery_push,
     repo_config, clarify, claim_race, comment_trust, requeue, question,
     split_apply,

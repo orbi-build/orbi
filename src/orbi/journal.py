@@ -366,6 +366,11 @@ JOURNAL_EVENTS: dict[str, str] = {
     # Merge gate.
     "merge_gate_ci_pending": "the merge gate found pending CI; the merge defers to the next tick",
     "merge_gate_mergeable_unknown": "GitHub mergeability is still UNKNOWN; the merge defers to the next tick",
+    "pr_head_lagging": "the PR head lags the delivery branch tip; the runner asks GitHub to re-read the branch (Issue #2440)",
+    "pr_head_refresh_requested": "GitHub was asked to update the pull request branch (PUT /pulls/<n>/update-branch, Issue #2440)",
+    "pr_head_refresh_failed": "the request to update the pull request branch failed; the attempt is spent and the next tick retries until the bound (Issue #2440)",
+    "pr_head_refresh_unrecorded": "the stale PR head could not be counted in the run state, so no refresh loop starts and the merge waits as before (Issue #2440)",
+    "pr_head_refresh_unreadable": "the remote delivery branch head could not be read; the merge waits as before (Issue #2440)",
     "merge_gate_behind_base": "the merge gate found the PR behind the base",
     "merge_gate_head_moved": "the PR head moved since the review",
     "merge_gate_not_mergeable": "the PR is not mergeable (conflict or failing checks)",

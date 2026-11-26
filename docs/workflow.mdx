@@ -311,6 +311,17 @@ Rules of the chain:
   in that same tick as soon as GitHub answers — at most about 15 s of slot
   time. A pending or failed rollup is never re-read, and a PR that stays
   `UNKNOWN` through every re-read still defers as above.
+  A PR whose view never picked up the delivery's own push is a different
+  wait (Issue #2440): when the merge gate's read stays `UNKNOWN` and the PR
+  head is not the branch tip on `origin`, the Runner asks GitHub to update
+  the pull request branch itself (`PUT /pulls/<n>/update-branch` with the
+  branch tip as `expected_head_sha`; `pr_head_lagging`,
+  `pr_head_refresh_requested`), so GitHub re-reads the branch and the
+  delivery continues on the refreshed head. The attempt is bounded to three
+  ticks (`PR_HEAD_REFRESH_TICKS`); past the bound the run stops
+  `ai-blocked` with a comment that names the cause (GitHub never refreshed
+  the PR) and the repair (a new commit on the branch, or the PR's "Update
+  branch" button) instead of polling forever.
 - Base advances are absorbed by a plain `git merge` of the latest
   `origin/<base>` on the task branch (conflicts resolved manually),
   followed by a full test rerun. No force push, no auto conflict

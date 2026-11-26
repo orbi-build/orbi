@@ -29,6 +29,7 @@ from pathlib import Path
 from orbi import answer as answer_domain
 from orbi import base_absorb
 from orbi import config as config_domain
+from orbi import pr_head_refresh
 from orbi import (
     failure_report, github, human_review, language, review_wait, run_state,
 )
@@ -155,8 +156,11 @@ def merge_gate(worktree: Path, pr: dict, base_branch: str,
     state — the gate raises `DeliveryDeferred` and the next tick re-reads.
     A CI-concluded UNKNOWN mergeability is re-read in-tick with
     `MERGEABLE_UNKNOWN_RETRY_DELAYS` (Issue #1736) and defers only when
-    every read stays UNKNOWN. A failed check or a not-mergeable PR prevents
-    the merge. Then merge with `--match-head-commit` so only that
+    every read stays UNKNOWN; a PR whose recorded head never picked up this
+    delivery's push is handed to `orbi.pr_head_refresh`, which asks GitHub to
+    re-read the branch and stops the run past its bound (Issue #2440). A
+    failed check or a not-mergeable PR prevents the merge. Then merge with
+    `--match-head-commit` so only that
     exact head can land, using the merge method the repository's own GitHub
     settings allow (Issue #1480: `gh api repos/<repo>` — merge commit, else
     squash, else rebase, else `--merge` with a `merge_method_unknown`
@@ -300,6 +304,18 @@ def merge_gate(worktree: Path, pr: dict, base_branch: str,
         )
     mergeable = state.get("mergeable")
     if mergeable == "UNKNOWN":
+        # Issue #2440: GitHub derives mergeability from the PR's head ref,
+        # so a view that never picked up this delivery's push answers
+        # UNKNOWN on every tick — the loop that held a delivery for 8.5
+        # hours. The helper makes GitHub re-read the branch and stops the
+        # run when the head stays stale past its bound; a PR head equal to
+        # the branch tip is waited on exactly as before.
+        pr_head_refresh.refresh_lagging_head(
+            worktree,
+            repo=source_repo or pr.get("_source_repo", ""),
+            pr_number=pr["number"], branch=pr["head_ref"],
+            pr_head=state.get("headRefOid"),
+        )
         event(
             "merge_gate_mergeable_unknown", pr=pr["number"],
         )
