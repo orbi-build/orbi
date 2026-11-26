@@ -271,9 +271,17 @@ branch、base、head、精确 URL 校验全部保留，#45/#89 的防串 PR 语�
   会在评审 session 启动前由 Runner 直接吸收并推送（Issue #2423）：不会在
   这个过期 head 上启动 session，不计数评审轮，不发失败评论，下一 tick 评审
   新的 head。base 已经修好的红检查因此不再让交付结束——用
-  `ai-fix-needed` 重新排队就会带上这个修复。已经包含 base 的 head，或
-  GitHub 报告为冲突的 head，仍走上面的路径：评审在红 head 上运行，冲突的
-  head 在 session 内吸收。
+  `ai-fix-needed` 重新排队就会带上这个修复。
+- 已经包含 base、且某个失败的检查在该 base 提交上也失败的 head，会在评审
+  session 启动前就被暂停为
+  [`base_ci_red`](#交付因基础分支已红而暂停base_ci_red)
+  （Issue #2442）：使用与合并门相同的判定，比较的是 head 当时真正包含的
+  base 提交（而不只是开轮时冻结的 SHA），因此只会开一个修复 Issue、交付被
+  暂停，并在 base 转绿后自行恢复——不会对「在 base 修好前无法合并」的 PR
+  白跑一轮评审。base 上对应的检查尚未得出结论时不算绿：该 tick 不写记录、
+  不启动 session，下一 tick 再看。其余红 head——base 在所有失败检查上都绿，
+  或 head 并不包含 base（冲突）——仍走上面的路径：评审在红 head 上运行，
+  冲突的 head 在 session 内吸收。
 - 吸收契约（Issue #877，Runner 机器校验）：一轮评审开始时 head 已落后
   `origin/<base>` 或 PR 有冲突时，该轮结束必须满足二者之一——分支包含
   `origin/<base>`（`git merge-base --is-ancestor` 为真），或 verdict 为
@@ -734,11 +742,14 @@ Action（Actions workflow 权限拒绝，Issue #1651）——完整的命令 std
 
 **v0.7.15 起可用，包括 `/orbi fix-base`。**
 
-PR 已完成评审，但它失败的那个 check 在配置的基础分支上本来也
-失败 —— PR 无法让它变绿，评审轮次也修不了。此时交付以 `ai-blocked` 暂停，
+PR 失败的那个 check 在配置的基础分支上本来也失败 —— PR 无法让它变
+绿，评审轮次也修不了。评审 tick 会在启动 session **之前**先问这个问题
+（Issue #2442），合并门在 PR 就绪后再问一次，两处用的是同一套判定。
+此时交付以 `ai-blocked` 暂停，
 `reason_code` 为 `base_ci_red`（`action_code` 为 `fix_ticket`，
 `retry_safe` 为 false：单纯重新入队仍会撞上同样红的基础分支），并留下
-**一条**评论：先说用户已经拿到的结果（PR 已就绪），再说明为何暂停，然后
+**一条**评论：先说用户已经拿到的结果（PR 已就绪，或在评审 session 尚未
+启动就停下时说这个 PR 不是原因），再说明为何暂停，然后
 列出**每一个**失败的 base check 及其 run 链接和最初的错误行，再列出 Orbi
 自己开出的修复 Issue，最后给出留给读者的那种修法。基础分支取自配置，绝不
 写死 `main`；非子进程失败不会输出空的证据区块。

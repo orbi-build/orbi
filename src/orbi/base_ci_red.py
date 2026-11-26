@@ -261,6 +261,23 @@ def _error_lines(run: dict) -> tuple[str, ...]:
     return ()
 
 
+def newest_runs(runs: list[dict]) -> dict[str, dict]:
+    """One CURRENT run per check name: the FIRST occurrence wins.
+
+    A RE-RUN of a check adds a second run under the same name, and the
+    check-runs endpoint lists a commit's runs newest first (descending
+    `started_at`/`id`, verified against the live endpoint), so the FIRST
+    occurrence is the current verdict. Reading an older one would keep an
+    old failure alive after the maintainer re-ran the check to green and
+    the delivery would never resume. The review tick's base verdict and
+    the recovery scan share it here (Issue #2442).
+    """
+    by_name: dict[str, dict] = {}
+    for run in runs:
+        by_name.setdefault(str(run.get("name")), run)
+    return by_name
+
+
 def failing_checks(repo: str, failed_names: list[str],
                    base_commit: str) -> list[FailingCheck]:
     """Every failed check on `base_commit` among `failed_names`.
@@ -288,6 +305,39 @@ def failing_checks(repo: str, failed_names: list[str],
             errors=_error_lines(run),
         ))
     return checks
+
+
+def current_base_verdict(repo: str, failed_names: list[str],
+                         base_commit: str) -> tuple[list[str], list[str]]:
+    """`(red here and now, still running)` among `failed_names`, ONE read.
+
+    The review tick's question is what the base says NOW (Issue #2442), and
+    the recovery scan that resumes the pause reads exactly that: the NEWEST
+    run of a name (`newest_runs`). A name whose newest run concluded red is
+    red; one whose newest run has not concluded is `pending` — NOT green, so
+    the tick defers instead of pausing or reviewing on inconclusive
+    evidence; one whose newest run passed, or that the base never ran, is
+    neither, so it cannot explain the PR's failure and the review runs as
+    today. Reading the older failed run of a re-run check instead would
+    pause a delivery on a base that is green, which the scan then resumes
+    into the same pause forever.
+
+    The names are handed to `detect` (the ONE detection) by the caller:
+    this decides WHICH names the base answers for, never whether the base
+    is red — that stays `failing_checks`.
+    """
+    by_name = newest_runs(commit_check_runs(repo, base_commit))
+    red: list[str] = []
+    pending: list[str] = []
+    for name in failed_names:
+        run = by_name.get(name)
+        if run is None:
+            continue
+        if run.get("status") != "completed":
+            pending.append(name)
+        elif run.get("conclusion") not in PASSING_CONCLUSIONS:
+            red.append(name)
+    return red, pending
 
 
 def detect(repo: str, failed_names: list[str], base_commit: str | None,
@@ -401,7 +451,8 @@ def comment_body(record: BaseCIRed, checks: list[FailingCheck], *,
                  issue_number: int | None = None,
                  issue_title: str | None = None,
                  status_url: str | None = None,
-                 fix_issues: list[str] | None = None) -> str:
+                 fix_issues: list[str] | None = None,
+                 reviewed: bool = True) -> str:
     """The ONE readable base-branch-red comment.
 
     Order is the user's: what they already have (a ready PR), why it
@@ -420,7 +471,11 @@ def comment_body(record: BaseCIRed, checks: list[FailingCheck], *,
     """
     parts = [
         failure.render(failure_record),
-        language.text(language_code, "base_ci_red.ready", pr=record.pr),
+        language.text(
+            language_code,
+            "base_ci_red.ready" if reviewed else "base_ci_red.ready_unreviewed",
+            pr=record.pr,
+        ),
     ]
     parts.extend(user_summary.summary_lines(
         status_url=status_url, issue=issue_number, title=issue_title,
