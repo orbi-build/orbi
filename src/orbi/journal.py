@@ -402,6 +402,7 @@ JOURNAL_EVENTS: dict[str, str] = {
     "worktree_retained": "a terminally failed delivery's worktree was kept for inspection (Issue #2175)",
     "worktree_cleanup_failed": "a task worktree cleanup failed",
     "worktree_recreated": "a resumed delivery's missing worktree was rebuilt from the remote branch",
+    "leftover_worktree_reclaimed": "a re-queued Issue's leftover worktree and unpushed branch were removed for a fresh claim (Issue #2441)",
     "worktree_reclaimed": "released task worktrees were reclaimed in bulk",
     "worktree_reclaim_failed": "a worktree reclamation step failed (bypass; the pass continues)",
     "branches_reclaimed": "merged-PR remote delivery branches were deleted in bulk",

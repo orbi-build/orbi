@@ -29,6 +29,7 @@ from orbi.journal import (
     run_command,
     run_git_network_command,
 )
+from orbi.worktree_retention import reclaim_leftover_worktree
 
 LOGGER = logging.getLogger("orbi.gitops")
 
@@ -195,9 +196,9 @@ def create_worktree(repo_dir: Path, source_repo: str, number: int,
     is created from the frozen base.
 
     A local branch that already exists only in the orphan scene (no remote
-    counterpart, handled by `existing_branch=False`) is reused as-is rather
-    than re-created with `-b`: git exits 255 on an existing branch, which
-    used to burn the re-claimed Issue into terminal `ai-blocked`.
+    counterpart) is reused as-is rather than re-created with `-b`, which
+    git exits 255 on; only a leftover worktree still holding it is
+    reclaimed and the branch re-created from the base (Issue #2441).
     """
     if existing is not None and existing.is_dir():
         return existing
@@ -260,13 +261,15 @@ def create_worktree(repo_dir: Path, source_repo: str, number: int,
         local = run_command(
             ["git", "branch", "--list", branch], cwd=repo_dir,
         )
-        if local.strip():
+        # A leftover worktree holding the branch (a re-queued Issue, never
+        # pushed, Issue #2441) is removed: the fresh claim starts at base.
+        if not local.strip() or reclaim_leftover_worktree(repo_dir, branch):
             run_command([
-                "git", "worktree", "add", str(path), branch,
+                "git", "worktree", "add", "-b", branch, str(path), base_sha,
             ], cwd=repo_dir)
         else:
             run_command([
-                "git", "worktree", "add", "-b", branch, str(path), base_sha,
+                "git", "worktree", "add", str(path), branch,
             ], cwd=repo_dir)
     return path
 

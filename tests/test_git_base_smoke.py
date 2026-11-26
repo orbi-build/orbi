@@ -761,6 +761,81 @@ def test_the_next_run_continues_from_the_branch_a_rejected_push_left(
     git(clone, "merge-base", "--is-ancestor", session, landed)
 
 
+def test_create_worktree_reclaims_a_leftover_worktree_without_a_remote_branch(
+        clone,
+):
+    """Issue #2441: a re-queued Issue whose previous run left its worktree
+    (and its unpushed stable branch) behind — no remote branch, no PR — is
+    claimed on a FRESH worktree from the frozen base instead of dying with
+    `fatal: '<branch>' is already used by worktree`."""
+    branch = "orbi/owner-repo-issue-3"
+    base_sha = git(clone, "rev-parse", "origin/main")
+    leftover = runner.create_worktree(clone, "owner/repo", 3, "342c52f5",
+                                      base_sha)
+    commit_file(leftover, "stale.txt", "unpushed leftover work")
+    assert git(
+        clone, "ls-remote", "--heads", "origin", f"refs/heads/{branch}",
+    ) == ""
+
+    fresh = runner.create_worktree(clone, "owner/repo", 3, "ee75648d",
+                                   base_sha)
+
+    assert fresh == runner.worktree_path(clone, "owner/repo", 3, "ee75648d")
+    assert git(fresh, "branch", "--show-current") == branch
+    assert git(fresh, "rev-parse", "HEAD") == base_sha
+    # The leftover scene and its unpushed commit are gone; the fresh
+    # worktree starts from the current base.
+    assert not leftover.exists()
+    assert not (fresh / "stale.txt").exists()
+
+
+def test_create_worktree_reclaims_every_leftover_holding_the_branch(clone):
+    """Issue #2441: more than one leftover worktree can hold the same
+    delivery branch — continuing on the PR branch registers a second one
+    with `--force` — and git refuses to delete a branch any of them still
+    holds. A fresh claim removes all of them before re-creating the branch
+    from the frozen base."""
+    branch = "orbi/owner-repo-issue-3"
+    base_sha = git(clone, "rev-parse", "origin/main")
+    first = runner.create_worktree(clone, "owner/repo", 3, "342c52f5",
+                                   base_sha)
+    second = clone / ".worktrees" / "orbi-owner-repo-issue-3-01a21929"
+    git(clone, "worktree", "add", "--force", str(second), branch)
+
+    fresh = runner.create_worktree(clone, "owner/repo", 3, "ee75648d",
+                                   base_sha)
+
+    assert not first.exists()
+    assert not second.exists()
+    holders = git(clone, "worktree", "list", "--porcelain")
+    assert holders.count(f"branch refs/heads/{branch}") == 1
+    assert git(fresh, "branch", "--show-current") == branch
+    assert git(fresh, "rev-parse", "HEAD") == base_sha
+
+
+def test_create_worktree_keeps_continuing_on_a_pr_branch_with_a_leftover(
+        clone,
+):
+    """Issue #2441 acceptance 2: a leftover worktree whose branch has an
+    open PR keeps today's continue-on-the-PR behavior — the branch is
+    checked out again (`--force`) and the leftover scene is not removed."""
+    branch = "orbi/owner-repo-issue-3"
+    base_sha = git(clone, "rev-parse", "origin/main")
+    leftover = runner.create_worktree(clone, "owner/repo", 3, "342c52f5",
+                                      base_sha)
+    git(clone, "push", "origin", f"{base_sha}:refs/heads/{branch}")
+
+    continued = runner.create_worktree(
+        clone, "owner/repo", 3, "ee75648d", base_sha, existing_branch=True,
+    )
+
+    assert continued != leftover
+    assert git(continued, "branch", "--show-current") == branch
+    assert git(continued, "rev-parse", "HEAD") == base_sha
+    assert leftover.is_dir()
+    assert git(leftover, "branch", "--show-current") == branch
+
+
 def test_a_push_failure_that_is_not_a_rejection_is_re_raised(
         clone, monkeypatch,
 ):

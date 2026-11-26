@@ -651,6 +651,7 @@ journalctl --user -u orbi@1.service -u orbi@2.service | grep e07383c2
 | `worktree_cleanup_failed` | 一个任务 worktree 清理失败 |
 | `worktree_recreated` | 恢复交付时缺失的 worktree 已从远端分支重建 |
 | `worktree_reclaimed` | 批量回收了已释放的任务 worktree |
+| `leftover_worktree_reclaimed` | 重新排队的 Issue 遗留的 worktree 与未推送分支已移除，以便从当前 base 重新开始（Issue #2441） |
 | `worktree_reclaim_failed` | worktree 回收的一步失败（旁路；扫描继续） |
 | `branches_reclaimed` | 批量删除了已合并 PR 的远端交付分支 |
 | `branch_reclaim_failed` | 远端分支回收的一步失败（旁路；扫描继续） |

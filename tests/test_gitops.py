@@ -183,6 +183,9 @@ def test_create_worktree_reuses_a_local_orphan_branch(monkeypatch, tmp_path):
     )
     assert commands == [
         ["git", "branch", "--list", "orbi/o-r-issue-4"],
+        # Issue #2441: the local branch is checked for a leftover worktree
+        # still holding it before it is reused.
+        ["git", "worktree", "list", "--porcelain"],
         ["git", "worktree", "add", str(path), "orbi/o-r-issue-4"],
     ]
 

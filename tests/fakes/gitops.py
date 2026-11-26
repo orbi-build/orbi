@@ -16,6 +16,11 @@ Real git semantics the fake preserves:
   an unknown object — the exact distinction `is_ancestor` relies on;
 - ``git worktree add -b`` on an existing branch exits 255 (the
   Issue #662 orphan-branch reuse contract);
+- ``git worktree add <path> <branch>`` (no `--force`) on a branch
+  already checked out in another worktree exits 128 (the Issue #2441
+  leftover scene), while `--force` allows it (the open-PR continuation);
+- ``git worktree remove --force <path>`` drops the registration and
+  the directory, ``git branch -D <name>`` deletes the local branch;
 - ``git cat-file -e`` answers the object-existence probe with a status
   (exit 128 for a commit outside the DAG), and ``git merge <commit>``
   grows a merge commit carrying both heads (Issue #2273);
@@ -26,6 +31,7 @@ Real git semantics the fake preserves:
 """
 from __future__ import annotations
 
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -113,7 +119,18 @@ class FakeGit:
     def _branch_dispatch(self, args: list[str], cwd) -> str:
         if args and args[0] == "--force":
             return self._branch(args, cwd)
+        if args and args[0] == "-D":
+            return self._branch_delete(args, cwd)
         return self._branch_list(args, cwd)
+
+    def _branch_delete(self, args: list[str], cwd) -> str:
+        if len(args) != 2:
+            self._unsupported(["git", "branch", *args])
+        name = args[1]
+        if name not in self.local:
+            self._fail(1, f"error: branch '{name}' not found")
+        del self.local[name]
+        return ""
 
     def _branch(self, args: list[str], cwd) -> str:
         if len(args) != 3 or args[0] != "--force":
@@ -279,6 +296,8 @@ class FakeGit:
             if args[1:] == ["--porcelain"]:
                 return self._worktree_list()
             self._unsupported(["git", "worktree", *args])
+        if args[:2] == ["remove", "--force"]:
+            return self._worktree_remove(args[2:])
         if args[:1] != ["add"] or len(args) < 3:
             self._unsupported(["git", "worktree", *args])
         if "-b" in args:
@@ -322,7 +341,31 @@ class FakeGit:
         path, branch = rest
         if branch not in self.local:
             self._fail(128, f"fatal: invalid reference: {branch}")
+        holding = self._worktree_holding(branch)
+        if holding is not None and not force:
+            self._fail(
+                128,
+                f"fatal: '{branch}' is already used by worktree at "
+                f"'{holding}'",
+            )
         self._register(path, branch, self.local[branch])
+        return ""
+
+    def _worktree_holding(self, branch: str) -> str | None:
+        return next(
+            (path for path, state in self.worktrees.items()
+             if state["branch"] == branch),
+            None,
+        )
+
+    def _worktree_remove(self, args: list[str]) -> str:
+        if len(args) != 1:
+            self._unsupported(["git", "worktree", "remove", "--force", *args])
+        path = _key(args[0])
+        if path not in self.worktrees:
+            self._fail(128, f"fatal: '{args[0]}' is not a working tree")
+        del self.worktrees[path]
+        shutil.rmtree(path, ignore_errors=True)
         return ""
 
     def _start_point(self, start: str) -> str:
