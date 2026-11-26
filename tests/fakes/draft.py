@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import re
 import subprocess
 import urllib.error
 import urllib.request
@@ -243,6 +244,56 @@ def fidelity_removes_unmentioned_lines(monkeypatch, sessions) -> None:
         return json.dumps({"issues": issues})
 
     monkeypatch.setattr(seam, "run_fidelity_session", strip)
+
+
+# --- one heading language for the whole draft (Issue #2433) --------------
+
+# The two sections the fidelity pass adds, and how the pass names them: in
+# the person's language once its rules say so, copied from the English
+# section names in the rules when they do not (the defect of Issue #2433).
+ADDED_SECTIONS = (
+    {"en": ("Not included (suggestions)", "- Also export the note."),
+     "zh": ("未包含（建议）", "- 另外导出备注。")},
+    {"en": ("Assumptions", "- The smallest reading of the request."),
+     "zh": ("假设", "- 采用最小的读法。")},
+)
+CJK_RE = re.compile(r"[\u4e00-\u9fff]")
+
+
+def request_language(request: str) -> str:
+    """The language the person wrote in: Chinese text means `zh`."""
+    return "zh" if CJK_RE.search(request) else "en"
+
+
+def fidelity_moves_an_item_to_the_suggestions_section(monkeypatch,
+                                                      sessions) -> None:
+    """A fidelity pass that moves an item to the sections it adds.
+
+    It writes those headings in the person's language only when the rules it
+    was handed mention headings at all, and otherwise copies the English
+    section names out of them — the way the real pass did before Issue #2433,
+    when `Not included (suggestions)` was the only name it had.
+    """
+
+    def revise(config, repo, *, session_root, system_prompt, context, run_id,
+               attached=None):
+        payload = _record_fidelity(
+            sessions, session_root=session_root,
+            system_prompt=system_prompt, context=context,
+        )
+        language = request_language(payload["request"])
+        told = "heading" in system_prompt.lower()
+        entry = {**payload["issues"][0]}
+        sections = [
+            section[language if told else "en"] for section in ADDED_SECTIONS
+        ]
+        entry["body"] = "\n\n".join((
+            entry["body"],
+            *(f"## {heading}\n\n{item}" for heading, item in sections),
+        ))
+        return json.dumps({"issues": [entry]})
+
+    monkeypatch.setattr(seam, "run_fidelity_session", revise)
 
 
 def install_gh(monkeypatch, gh: FakeGh) -> GhRecorder:
