@@ -7,7 +7,7 @@ directory reads at its default path, ``.claude-plugin/icon.svg`` (Issue
 on the user's own ``gh`` CLI. These tests pin the shape the claude.com plugin
 directory, the Agent Plugins 1.0 root manifest (Issue #1404), the Cursor
 marketplace manifest (Issue #1437) and the repository's contract require,
-and they carry eighteen counter-proofs (six for the claude.com and Agent
+and they carry twenty counter-proofs (six for the claude.com and Agent
 Plugins manifests: a fixture copy with ``hooks/``, one without
 ``homepage``, one missing the ``author.url`` ref, one with
 ``skills/x/logo.svg``, one with a ``logo`` key in the root manifest, and
@@ -18,10 +18,12 @@ one without the ``cursor-marketplace`` ref, one without the top-level
 one without the top-level
 ``homepage``, one without the top-level ``author.url``, one without the
 top-level ``description``, and one with mismatched top-level
-``keywords``; three for the write-ai-ready-issue skill (Issues #1816,
-#1819): one whose added-constraint rule is deleted, one whose
-``SKILL.md`` loses the relative-change rule, and one whose ``SKILL.md``
-loses the evidence requirement for a line citation) so a future change
+``keywords``; five for the write-ai-ready-issue skill (Issues #1816,
+#1819, #2433): one whose added-constraint rule is deleted, one whose
+``SKILL.md`` loses the relative-change rule, one whose ``SKILL.md``
+loses the evidence requirement for a line citation, and two whose
+heading-language rule (Issue #2433) is removed, one from the fidelity pass
+and one from ``SKILL.md``) so a future change
 cannot silently turn the assertions into no-ops.
 
 The checks are pure file reads: no ``orbi`` import, no network, no ``gh``.
@@ -1129,6 +1131,68 @@ def test_fidelity_pass_keep_rule_is_scoped_to_the_removals():
 
 def test_skill_writes_preserve_and_append_as_a_relative_change():
     check_skill_writes_preserve_and_append_as_a_relative_change()
+
+
+# --- One heading language for the whole draft (Issue #2433) ------------------
+
+# The fidelity pass rewrites the body after the drafter, and its rules named
+# the two sections it adds in English: a Chinese draft came back with the
+# drafter's Chinese headings plus `## Not included (suggestions)` /
+# `## Assumptions`. One sentence states the rule in both files, verbatim, so
+# whichever step writes the body follows the same language.
+HEADING_LANGUAGE_RULE = (
+    "A section heading is written in the person's language, the same "
+    "language as the body around it: one body never mixes a heading in one "
+    "language with a heading in another. The English section names "
+    "(`Not included (suggestions)`, `Assumptions` and the rest) name a "
+    "section; they are never the heading text to copy into a body written "
+    "in another language."
+)
+
+
+def check_heading_language_rule(plugin_dir: Path = PLUGIN_DIR) -> None:
+    """Issue #2433: the skill and its fidelity pass state one heading-language
+    rule, so the pass cannot mix English headings into a body written in
+    another language."""
+    for rel in (SKILL_REL, FIDELITY_PASS_REL):
+        flat = " ".join(read_plugin_file(plugin_dir, rel).split())
+        assert HEADING_LANGUAGE_RULE in flat, (
+            f"{rel}: the heading-language rule is missing, so a Chinese draft "
+            "can come back with `Not included (suggestions)` / "
+            "`Assumptions` (Issue #2433)"
+        )
+
+
+def test_skill_and_fidelity_pass_keep_one_heading_language():
+    check_heading_language_rule()
+
+
+def test_fixture_fidelity_pass_without_the_heading_language_rule_fails(
+    tmp_path,
+):
+    """Counter-proof: drop the rule from the fidelity pass and the check
+    fails, so the assertion cannot become a no-op."""
+    plugin_dir = write_skill_fixture(tmp_path, pass_text=(
+        read_plugin_file(PLUGIN_DIR, FIDELITY_PASS_REL).replace(
+            "never mixes a heading in one language with a heading in "
+            "another", "may mix languages",
+        )
+    ))
+    with pytest.raises(AssertionError):
+        check_heading_language_rule(plugin_dir)
+
+
+def test_fixture_skill_without_the_heading_language_rule_fails(tmp_path):
+    """Counter-proof for the other file: the skill alone carrying the rule is
+    not enough to keep the two steps in one language."""
+    plugin_dir = write_skill_fixture(tmp_path, skill_text=(
+        read_plugin_file(PLUGIN_DIR, SKILL_REL).replace(
+            "never mixes a heading in one language with a heading in "
+            "another", "may mix languages",
+        )
+    ))
+    with pytest.raises(AssertionError):
+        check_heading_language_rule(plugin_dir)
 
 
 # --- A line citation needs visible evidence (Issue #1819) --------------------

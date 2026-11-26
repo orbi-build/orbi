@@ -42,11 +42,29 @@ SINGLE_OUTCOME_RULE = (
     "may therefore hold one Issue or many."
 )
 
+# One rule holds for the whole draft, whichever step writes the body
+# (Issue #2433): every section heading is in the person's language. The
+# drafter got it from "write in the person's language" alone, while the
+# fidelity pass that rewrites the body afterwards named the two sections it
+# adds in English -- a Chinese draft came back with Chinese headings and
+# `## Not included (suggestions)` / `## Assumptions`. The same sentence is
+# stated to both sessions, and in the shipped skill and its fidelity rules,
+# so the later step cannot override the earlier one.
+HEADING_LANGUAGE_RULE = (
+    "A section heading is written in the person's language, the same "
+    "language as the body around it: one body never mixes a heading in one "
+    "language with a heading in another. The English section names "
+    "(`Not included (suggestions)`, `Assumptions` and the rest) name a "
+    "section; they are never the heading text to copy into a body written "
+    "in another language."
+)
+
 # The drafting rules are the engine's own (Issues #2041, #2147).
 DRAFTING_RULES = (
     "Rules for every draft:\n"
     "- Write in the person's language: the Issue titles, the Issue bodies, "
     "your reply and your questions.\n"
+    "- " + HEADING_LANGUAGE_RULE + "\n"
     "- A request that explicitly asks for NO code change (\"just review it "
     "and tell me\", \"only explain\", \"don't touch the code\") takes the "
     "no-repository-change route: call " + REPLY_TOOL + " and return a reply "
@@ -108,7 +126,8 @@ FIDELITY_PROTOCOL = (
     "never a diff and never a comment. Keep the same Issues the input has, "
     "and keep each Issue's \"attachments\" numbers unchanged: this pass "
     "removes what the person did not ask for, it never drops an outcome or "
-    "a file the Issue uses."
+    "a file the Issue uses.\n"
+    + HEADING_LANGUAGE_RULE
 )
 
 REWRITE_INSTRUCTION = (

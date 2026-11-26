@@ -662,6 +662,111 @@ def test_the_fidelity_pass_uses_the_shipped_rules(config, sessions,
     )
 
 
+# --- one heading language for the whole draft (Issue #2433) -------------
+
+# The fidelity pass rewrites the body after the drafter, and its rules named
+# the two sections it adds in English, so a Chinese draft came out carrying
+# Chinese headings plus `## Not included (suggestions)` / `## Assumptions`.
+# One rule holds for the whole draft, whichever step writes the body. The
+# fixture hands the pass a stub rules file, so the sentence that reaches it
+# here is the engine's own protocol sentence — every deployment gets it, even
+# one whose rules file predates it.
+CJK_REQUEST = "照截图给备注加一个函数"
+CHINESE_DRAFT = {
+    "title": "给备注加一个函数",
+    "body": "## 观察到的结果\n\n用户能在备注上看到一个函数。\n\n"
+            "## 验收条件\n\n- 备注上出现这个函数。",
+}
+ENGLISH_DRAFT = issue("Add a function to a note")
+# Every English section name of the draft's full form: a body written in
+# another language carries none of them as a heading.
+ENGLISH_SECTIONS = (
+    "Request", "Current state", "User outcome", "Preconditions",
+    "Acceptance", "Evidence", "Not included (suggestions)", "Out of scope",
+    "Assumptions", "Decisions",
+)
+
+
+def headings_of(body: str) -> list[str]:
+    """The heading text of every heading line, without its # marks."""
+    return [
+        line.lstrip("#").strip()
+        for line in body.splitlines() if line.lstrip().startswith("#")
+    ]
+
+
+def draft_and_create(config, sessions, gh, monkeypatch, tmp_path, request,
+                     drafted):
+    """Draft one request through the round and create its Issue.
+
+    Returns the round's document (its reply, its check) and the body as
+    created on GitHub.
+    """
+    draft_fakes.judge_passing(monkeypatch)
+    draft_fakes.fidelity_moves_an_item_to_the_suggestions_section(
+        monkeypatch, sessions,
+    )
+    sessions.queue_draft(drafted)
+    code, out, err = run_round_cli(
+        config, {"message": request}, tmp_path / "session",
+    )
+    assert code == 0, err
+    round_document = json.loads(out)
+    code, out, err = run_create(
+        config, {"key": KEY, "issues": round_document["issues"]},
+    )
+    assert code == 0, err
+    return round_document, gh.issues[json.loads(out)["created"][0]]["body"]
+
+
+def test_a_chinese_draft_carries_no_english_section_heading(
+    config, sessions, gh, monkeypatch, tmp_path,
+):
+    """The pass used to write `## Not included (suggestions)` and
+    `## Assumptions` into a body whose other headings are Chinese."""
+    draft_document, body = draft_and_create(
+        config, sessions, gh, monkeypatch, tmp_path, CJK_REQUEST,
+        CHINESE_DRAFT,
+    )
+    # The pre-work check judges the text, never the template headings, so
+    # the Chinese draft passes it as it stands (acceptance 2).
+    assert draft_document["check"] == "passed"
+    assert draft_document["reply"]
+    assert headings_of(body)
+    for heading in headings_of(body):
+        assert not heading.startswith(ENGLISH_SECTIONS), heading
+    assert "未包含（建议）" in body
+    assert "假设" in body
+
+
+def test_an_english_draft_keeps_its_english_section_headings(
+    config, sessions, gh, monkeypatch, tmp_path,
+):
+    """The same flow in English is unchanged."""
+    _, body = draft_and_create(
+        config, sessions, gh, monkeypatch, tmp_path,
+        "Add a function to a note", ENGLISH_DRAFT,
+    )
+    assert "## Not included (suggestions)" in body
+    assert "## Assumptions" in body
+
+
+def test_the_heading_language_rule_reaches_both_sessions(
+    config, sessions, monkeypatch, tmp_path,
+):
+    """One rule, and the engine states it to the drafter AND to the pass, so
+    the later step cannot override the earlier one."""
+    draft_fakes.judge_passing(monkeypatch)
+    sessions.queue_draft(issue("Tag a note"))
+    code, _, err = run_round_cli(
+        config, {"message": "notes"}, tmp_path / "session",
+    )
+    assert code == 0, err
+    rule = draft_prompt.HEADING_LANGUAGE_RULE
+    assert rule in sessions.calls[0].system_prompt
+    assert rule in sessions.fidelity_calls[0].system_prompt
+
+
 # --- 9: failures ---------------------------------------------------------
 
 def test_a_failed_round_prints_code_step_detail(config, sessions, tmp_path):

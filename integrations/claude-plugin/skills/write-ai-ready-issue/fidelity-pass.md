@@ -56,5 +56,11 @@ Apply these rules in order:
    `Preconditions`, `Evidence`, `Out of scope`, `Assumptions`,
    `Decisions` and the section order are not changed,
    except for the removals rule 3 makes.
+7. **Every heading is in the draft's own language.** A section heading is
+   written in the person's language, the same language as the body around it:
+   one body never mixes a heading in one language with a heading in another.
+   The English section names (`Not included (suggestions)`, `Assumptions`
+   and the rest) name a section; they are never the heading text to copy into
+   a body written in another language.
 
 When the draft already satisfies every rule above, return it unchanged.
