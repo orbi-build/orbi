@@ -125,15 +125,22 @@ def _line_clock_seconds(line: str) -> int | None:
     )
 
 # Volatile tokens stripped before fingerprinting: 8-40 hex runs (run ids,
-# SHAs), ISO-ish timestamps, and duration shapes ("30m", "6s", "1h5m",
-# "200ms" — the format_duration output the model_wait / idle-recovery
-# failures embed; the duration drifts by one poll interval for the same
-# pit). Only errors whose normalized text is IDENTICAL share a
+# SHAs), ISO-ish timestamps, duration shapes ("30m", "6s", "1h5m",
+# "200ms" — the format_duration output the model_wait /
+# idle-recovery failures embed; the duration drifts by one poll interval for
+# the same pit), and the address a connection was attempted to: GitHub
+# answers the same outage from a different IP between two rounds, and a host
+# from a different port (`dial tcp 140.82.121.6:443: i/o timeout` vs
+# `dial tcp 140.82.112.5:443: i/o timeout`), which is the same pit too
+# (Issue #2443). Only errors whose normalized text is IDENTICAL share a
 # fingerprint — the conservative "same pit" rule.
 VOLATILE_TOKEN_RE = re.compile(
     r"\b[0-9a-f]{8,40}\b"
     r"|\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}"
-    r"|\b(?:\d+(?:ms|[smh]))+(?![0-9a-z])",
+    r"|\b(?:\d+(?:ms|[smh]))+(?![0-9a-z])"
+    r"|\b\d{1,3}(?:\.\d{1,3}){3}(?::\d+)?\b"
+    r"|\[[0-9a-fA-F:]+\](?::\d+)?"
+    r"|\bport \d+\b",
 )
 
 # Fail-fast validation errors a HUMAN must fix in the config:

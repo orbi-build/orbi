@@ -6,9 +6,9 @@ filter reads, and the in-flight delivery scene the stop handler reports.
 It also owns the ONE subprocess seam of Article 3.4: ``run_command`` and
 its bounded git network retry.
 
-This module imports nothing from the `orbi` package — it is the lowest
-leaf, so `github` / `gitops` / `progress` / the extracted modules can all
-share one seam and one logger without importing `runner`.
+This module is the lowest leaf: it imports only the pure wording table
+`transient_failure`, so `github` / `gitops` / `progress` / the extracted
+modules share one seam and one logger without importing `runner`.
 """
 from __future__ import annotations
 
@@ -22,6 +22,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from orbi import transient_failure
 
 if TYPE_CHECKING:
     # Annotation-only: this module stays the runtime leaf (no `orbi`
@@ -518,10 +519,10 @@ def event(kind: str, scene: str | None = None, /, *,
 
 # Git localises its messages, and so does the C library behind strings like
 # "Connection timed out". Every text check Orbi makes on a Git failure
-# (`GIT_TRANSIENT_ERROR_MARKERS` below, the release push-rejection markers,
-# the git part of `failure._GITHUB_TRANSIENT_RE`) matches the C-locale
-# wording, so without this a Chinese-locale host would silently stop
-# recognising the same errors (Issue #1758). `LANGUAGE` outranks `LC_ALL` in
+# (`transient_failure`, the release push-rejection markers) matches the
+# C-locale wording, so without this a Chinese-locale host would silently
+# stop recognising the same errors (Issue #1758). `LANGUAGE` outranks
+# `LC_ALL` in
 # gettext, so it is cleared for the child too. This is the message locale of
 # Git only: Orbi's own comment language still follows `language.py`; every
 # Git call goes through this seam (`run_git_network_command` included).
@@ -613,16 +614,10 @@ def run_command(command: list[str], *, cwd: Path | None = None,
 GIT_NETWORK_MAX_ATTEMPTS = 3
 GIT_NETWORK_TIMEOUT_SECONDS = 30
 GIT_NETWORK_BACKOFF_SECONDS = 1
-GIT_TRANSIENT_ERROR_MARKERS = (
-    "connection timed out",
-    "operation timed out",
-    "connection reset",
-    "connection refused",
-    "temporary failure in name resolution",
-    "network is unreachable",
-    "network unreachable",
-    # A transient GitHub SSH auth failure (a missing key reports the same
-    # text, but it keeps failing after the bounded retries and is re-raised).
+# Git-only retry triggers, NOT transient network wordings: a failed SSH
+# handshake (a missing key reports the same text, keeps failing after the
+# bounded retries and is re-raised).
+_GIT_SSH_RETRY_MARKERS = (
     "could not read from remote repository",
     "permission denied (publickey)",
 )
@@ -631,13 +626,19 @@ GIT_TRANSIENT_ERROR_MARKERS = (
 def _is_retryable_git_network_failure(
     command: list[str], exc: subprocess.CalledProcessError,
 ) -> bool:
-    """Return whether a Git fetch/push failed with a known transient error."""
+    """Return whether a Git fetch/push failed with a transient error.
+
+    The wordings are the ONE definition `transient_failure` shares with the
+    `gh` retry and the classification (Issue #2443).
+    """
     if len(command) < 2 or command[:1] != ["git"]:
         return False
     if command[1] not in {"fetch", "push"}:
         return False
     stderr = (exc.stderr or "").lower()
-    return any(marker in stderr for marker in GIT_TRANSIENT_ERROR_MARKERS)
+    return transient_failure.is_transient(
+        stderr, timeout_source=True,
+    ) or any(marker in stderr for marker in _GIT_SSH_RETRY_MARKERS)
 
 
 def _is_git_network_command(command: list[str]) -> bool:

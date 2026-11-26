@@ -224,6 +224,27 @@ def test_failure_fingerprint_normalizes_drifting_durations():
     )
 
 
+def test_failure_fingerprint_ignores_the_ip_address_and_the_port():
+    """Issue #2443: GitHub reports the same outage from a different address
+    (and a host from a different port) between two rounds; the fingerprint
+    must not restart the streak on it."""
+    assert runner_health.failure_fingerprint(RuntimeError(
+        "gh api repos/o/r failed: dial tcp 140.82.121.6:443: i/o timeout",
+    )) == runner_health.failure_fingerprint(RuntimeError(
+        "gh api repos/o/r failed: dial tcp 140.82.112.5:443: i/o timeout",
+    ))
+    assert runner_health.failure_fingerprint(RuntimeError(
+        "ssh: connect to host github.com port 22: Connection timed out",
+    )) == runner_health.failure_fingerprint(RuntimeError(
+        "ssh: connect to host github.com port 2222: Connection timed out",
+    ))
+    assert runner_health.failure_fingerprint(RuntimeError(
+        "dial [2606:4700::6810:85e5]:443: i/o timeout",
+    )) == runner_health.failure_fingerprint(RuntimeError(
+        "dial [2606:4700::6810:85e4]:443: i/o timeout",
+    ))
+
+
 # ---------------------------------------------------------------------------
 # State file (the lightweight file in the existing state dir)
 # ---------------------------------------------------------------------------

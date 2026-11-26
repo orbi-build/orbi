@@ -26,7 +26,9 @@ import json
 import re
 import subprocess
 
-from orbi import gh_response, language, provider_balance, user_summary
+from orbi import (
+    gh_response, language, provider_balance, transient_failure, user_summary,
+)
 # Issue #2351: the stop wording moved to its own module (this one is at its
 # size-ratchet ceiling); it is re-exported here for its existing callers.
 from orbi.comment_kind import parse_versioned_block
@@ -274,23 +276,9 @@ _WORKFLOW_PERMISSION_RE = re.compile(
 # one canonical explanation feeds the comment, the progress scene and the
 # short milestone; only the last sentence differs by whether a PR exists.
 _WORKFLOW_PERMISSION_CAUSE_KEY = "failure.workflow_cause"
-# The remaining text-only transient markers: network-level failures and
-# GitHub's own server sentences. This set names no timeout (that is
-# `subprocess.TimeoutExpired`, or `_TEXT_TIMEOUT_RE` for a source with no
-# status and no type); a status-less gh transport failure is the one
-# exception that reads the wording (Issue #1768).
-_GITHUB_TRANSIENT_RE = re.compile(
-    r"http 5\d\d|http 429|rate limit|"
-    r"something went wrong while executing your query|"
-    r"internal server error|connection reset|connection refused|"
-    r"temporary failure in name resolution|network is unreachable",
-    re.IGNORECASE,
-)
-# A non-GitHub subprocess — a Pi session, a Git fetch/push — reports a
-# timeout in its own words and gives neither a status nor a timeout type:
-# there the wording is all that exists (the same text-only carve-out the
-# provider failure reasons keep, Issue #1465/#1760).
-_TEXT_TIMEOUT_RE = re.compile(r"timed out|timeout", re.IGNORECASE)
+# The transient GitHub / network wordings are the ONE definition in
+# `transient_failure` (Issue #2443): the `gh` retry reads the same set, so
+# a wording cannot be retried by one decision and missed by another.
 
 
 def _timeout_is_text_only(error: BaseException | None) -> bool:
@@ -421,9 +409,13 @@ def classify(detail: str, *, outcome: str = "blocked",
         reason_code = provider_balance.REASON_CODE
     elif _CREDENTIAL_MISSING_RE.search(detail):
         reason_code = "credential_missing"
-    elif _timeout_is_text_only(error) and _TEXT_TIMEOUT_RE.search(detail):
-        reason_code = "github_transient"
-    elif _GITHUB_TRANSIENT_RE.search(detail):
+    elif gh_response.status_of(error) is None and transient_failure.is_transient(
+            detail, timeout_source=_timeout_is_text_only(error)):
+        # No response status was received, so the wording is the signal that
+        # is left: GitHub's own server sentence, a transport failure or a
+        # command's timeout. The ONE definition `transient_failure` owns it,
+        # shared with the `gh` retry (Issue #2443) — a response status always
+        # wins, so a 403, a 404 and a credential are never transient.
         reason_code = "github_transient"
     elif _PROVIDER_QUOTA_RE.search(detail):
         reason_code = "provider_quota"

@@ -18,18 +18,12 @@ from __future__ import annotations
 import re
 import subprocess
 
+from orbi import transient_failure
+
 # gh's documented exit code for "requires authentication".
 GITHUB_AUTH_EXIT_CODE = 4
 INCLUDE_FLAG = "--include"
 
-# gh subcommands other than `gh api` print no response status line, so
-# their server-side failures keep GitHub's own sentences. Read only when
-# the request carried NO status at all: a response status always wins.
-_GH_SERVER_FAILURE_RE = re.compile(
-    r"http 5\d\d|http 429|rate limit|"
-    r"something went wrong while executing your query|internal server error",
-    re.IGNORECASE,
-)
 _STATUS_LINE_RE = re.compile(r"HTTP/\d+(?:\.\d+)? (\d{3})\b")
 # RFC 9110 header field name followed by ":". Deliberately strict: a block
 # only counts when every line up to the blank line is a header, so body
@@ -167,17 +161,20 @@ def failed_request(
 def transient_command(failure: GitHubRequestFailed) -> bool:
     """Whether a failed gh command is worth retrying.
 
-    The response status decides whenever gh printed one — a permission
-    failure is never retried. A `gh` subcommand other than `gh api`
-    prints no response headers, so it keeps GitHub's own server sentences
-    (Issue #738); a retried mutation stays guarded by the caller's
+    The response status decides whenever gh printed one — a response
+    status always wins, so a permission failure is never retried. A `gh`
+    subcommand other than `gh api` prints no response headers, and a
+    transport failure (a DNS refusal, a connection reset, a timeout)
+    never reaches a response at all: both keep the ONE definition of a
+    transient GitHub or network failure (`transient_failure`, Issue
+    #2443). A retried mutation stays guarded by the caller's
     `already_applied` check.
     """
     if failure.status is not None or failure.authentication_required:
         return transient(failure)
     detail = " ".join(
         str(part or "") for part in (failure.stderr, failure.stdout))
-    return _GH_SERVER_FAILURE_RE.search(detail) is not None
+    return transient_failure.is_transient(detail, timeout_source=True)
 
 
 def status_of(exc: BaseException | None) -> int | None:
