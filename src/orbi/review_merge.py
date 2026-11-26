@@ -63,6 +63,7 @@ from orbi.github import (
 )
 from orbi.github_feedback import check_summaries, pr_delivery_rollup
 from orbi import base_ci_red, language, question, user_summary, waiting_checks
+from orbi import review_base_ci_red
 from orbi.delivery_comment import merged_pr_comment_body  # noqa: F401
 from orbi.gitops import (
     is_ancestor,
@@ -276,11 +277,13 @@ def _round_preflight_phase(work: _Round) -> bool:
     fails fast. A recorded pass whose head and Issue-body hash still match
     authorizes this tick to merge without a session (Issue #1626), the
     absorb arm needs GitHub's CONFLICTING read (Issue #877), a red,
-    behind-only head is absorbed before any session (Issue #2423), and a
-    remote head this worktree's own session pushed is adopted into the push
-    history so the merge record never counts it as external (Issue #833).
-    True means the tick ends here: a red, behind-only head was absorbed, or
-    its merge conflicted (no session, no round).
+    behind-only head is absorbed before any session (Issue #2423), a red head
+    whose failing check also fails on the base it contains stops as
+    `base_ci_red` before any session (Issue #2442), and a remote head this
+    worktree's own session pushed is adopted into the push history so the
+    merge record never counts it as external (Issue #833).
+    True means the tick ends here: a red, behind-only head was absorbed, its
+    merge conflicted, or the base is red / still running (no session).
     """
     worktree, branch = work.worktree, work.branch
     config, scene = work.config, work.scene
@@ -330,6 +333,10 @@ def _round_preflight_phase(work: _Round) -> bool:
             return True
         work.absorbed_head, work.absorb_required = (
             absorbed.head, absorbed.conflicting)
+        if absorbed.head is None and review_base_ci_red.stop_before_session(
+                pr, work.base_branch, source_repo=source_repo,
+                failed=absorbed.failed, base_tip=absorbed.base_tip):
+            return True
     if (not scene.parsed.external
             and read_pushed_head(worktree) != pr["head_oid"]
             and pr["head_oid"] == run_command(
