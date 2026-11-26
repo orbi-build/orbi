@@ -29,6 +29,7 @@ from orbi.journal import (
     run_command,
     run_git_network_command,
 )
+from orbi.worktree_retention import reclaim_leftover_worktree
 
 LOGGER = logging.getLogger("orbi.gitops")
 
@@ -260,13 +261,15 @@ def create_worktree(repo_dir: Path, source_repo: str, number: int,
         local = run_command(
             ["git", "branch", "--list", branch], cwd=repo_dir,
         )
-        if local.strip():
+        # A leftover worktree holding the branch (a re-queued Issue, never
+        # pushed, Issue #2441) is removed: the fresh claim starts at base.
+        if not local.strip() or reclaim_leftover_worktree(repo_dir, branch):
             run_command([
-                "git", "worktree", "add", str(path), branch,
+                "git", "worktree", "add", "-b", branch, str(path), base_sha,
             ], cwd=repo_dir)
         else:
             run_command([
-                "git", "worktree", "add", "-b", branch, str(path), base_sha,
+                "git", "worktree", "add", str(path), branch,
             ], cwd=repo_dir)
     return path
 

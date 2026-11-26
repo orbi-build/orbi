@@ -117,6 +117,34 @@ def test_create_worktree_reuses_a_local_orphan_branch(fake_git):
     )
 
 
+def test_create_worktree_reclaims_a_leftover_worktree_for_the_branch(
+    fake_git,
+):
+    """Issue #2441: a re-queued Issue's leftover worktree still holds the
+    stable branch (never pushed, no PR). The fresh claim removes that
+    scene and its unpushed local branch, then starts from the frozen
+    base — never the exit-128 "already used by worktree"."""
+    branch = gitops.task_branch("owner/repo", 7)
+    leftover = gitops.create_worktree(
+        fake_git.repo_dir, "owner/repo", 7, "342c52f5", fake_git.base_sha,
+    )
+    unpushed = fake_git.commit([fake_git.base_sha])
+    fake_git.local[branch] = unpushed
+    fake_git.worktrees[str(leftover)]["head"] = unpushed
+
+    path = gitops.create_worktree(
+        fake_git.repo_dir, "owner/repo", 7, "ee75648d", fake_git.base_sha,
+    )
+
+    assert path != leftover
+    assert not leftover.exists()
+    assert fake_git.local[branch] == fake_git.base_sha
+    assert fake_git.worktrees[str(path)]["head"] == fake_git.base_sha
+    assert ["git", "worktree", "remove", "--force", str(leftover)] \
+        in fake_git.calls
+    assert ["git", "branch", "-D", branch] in fake_git.calls
+
+
 def test_create_worktree_returns_the_existing_verified_path(fake_git):
     existing = fake_git.repo_dir / "resumed-worktree"
     existing.mkdir()
@@ -415,6 +443,36 @@ def test_fake_git_fails_fast_on_unknown_refs(fake_git, tmp_path):
     with pytest.raises(subprocess.CalledProcessError) as excinfo:
         fake_git(["git", "reset", "--hard", "not-a-commit"], cwd=tmp_path)
     assert "ambiguous argument" in excinfo.value.stderr
+
+
+def test_fake_git_fails_fast_on_the_reclaim_commands(fake_git):
+    """The fake's Issue #2441 contract: a malformed or unknown reclaim
+    command fails like real git instead of silently changing state, and a
+    non-forced re-checkout of a held branch is git's exit 128."""
+    with pytest.raises(subprocess.CalledProcessError) as excinfo:
+        fake_git(["git", "branch", "-D"])
+    assert "unsupported command" in excinfo.value.stderr
+    with pytest.raises(subprocess.CalledProcessError) as excinfo:
+        fake_git(["git", "branch", "-D", "absent"])
+    assert excinfo.value.returncode == 1
+    assert "not found" in excinfo.value.stderr
+    with pytest.raises(subprocess.CalledProcessError) as excinfo:
+        fake_git(["git", "worktree", "remove", "--force"])
+    assert "unsupported command" in excinfo.value.stderr
+    with pytest.raises(subprocess.CalledProcessError) as excinfo:
+        fake_git(["git", "worktree", "remove", "--force", "/no/worktree"])
+    assert excinfo.value.returncode == 128
+    assert "not a working tree" in excinfo.value.stderr
+    branch = gitops.task_branch("owner/repo", 7)
+    path = gitops.create_worktree(
+        fake_git.repo_dir, "owner/repo", 7, "338f3484", fake_git.base_sha,
+    )
+    with pytest.raises(subprocess.CalledProcessError) as excinfo:
+        fake_git([
+            "git", "worktree", "add", str(path.parent / "second"), branch,
+        ])
+    assert excinfo.value.returncode == 128
+    assert "is already used by worktree" in excinfo.value.stderr
 
 
 def test_fake_git_fails_fast_on_reset_outside_a_worktree(fake_git,

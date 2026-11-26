@@ -60,6 +60,7 @@ import orbi.release_notes as release_notes
 import orbi.review_ci_status as review_ci_status
 import orbi.review_merge as review_merge
 import orbi.waiting_checks as waiting_checks
+import orbi.worktree_retention as worktree_retention
 import orbi.review_rounds as review_rounds
 import orbi.pi_session as pi_session
 import orbi.issue_images as issue_images
@@ -99,7 +100,7 @@ _MODULES = (
     base_absorb, base_ci_red, base_ci_fix, cli_commands, cli_doctor,
     check_permission,
     split_command, amend_command, acceptance_section, clarify_stop,
-    answer, merge_blocked, steering, stopped_scans,
+    answer, merge_blocked, steering, stopped_scans, worktree_retention,
 )
 
 

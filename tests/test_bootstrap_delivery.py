@@ -2224,6 +2224,9 @@ def test_create_worktree_reuses_orphan_local_branch_never_exits_255(
     ) == path
     assert calls == [
         (["git", "branch", "--list", "orbi/owner-repo-issue-3"], {"cwd": tmp_path}),
+        # Issue #2441: an existing local branch is checked against the
+        # registered worktrees before it is reused.
+        (["git", "worktree", "list", "--porcelain"], {"cwd": tmp_path}),
         (["git", "worktree", "add", str(path), "orbi/owner-repo-issue-3"],
          {"cwd": tmp_path}),
     ]

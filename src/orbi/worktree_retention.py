@@ -14,6 +14,11 @@ Two host-only settings and the terminal cleanup they control (Issue #2175):
   job, so a retained scene of an Issue left open in `ai-blocked` is never
   reclaimed automatically.
 
+The claim-time half of the lifecycle lives here too: a re-queued
+Issue whose previous attempt left its task worktree behind (the stable
+branch still checked out, never pushed, no PR) is reclaimed before the
+fresh worktree is created (Issue #2441).
+
 The module is a sibling of `runner` (CONSTITUTION Article 3): it owns one
 domain, imports the `journal` seam and never imports `runner`.
 """
@@ -81,6 +86,43 @@ def load_keep_failed_worktrees(data: dict) -> bool:
             f"(got {type(value).__name__} {value!r})"
         )
     return value
+
+
+def reclaim_leftover_worktree(repo_dir: Path, branch: str) -> bool:
+    """Remove the leftover worktree still holding *branch* (Issue #2441).
+
+    A re-queued Issue whose previous run left its task worktree behind
+    (the stable branch checked out, never pushed, no PR) is a FRESH
+    claim: the delivery must start on a worktree from the current base,
+    while `git worktree add` refuses a branch checked out elsewhere. The
+    stale scene and its unpushed local branch are removed so the caller
+    can create the branch from the frozen base. Returns True when a
+    leftover was removed, False when the branch is not checked out.
+
+    The open-PR/remote-branch scene never reaches this helper (the caller
+    continues on that branch); a failure removing the leftover raises, so
+    the claim fails with the real command error.
+    """
+    listing = run_command(
+        ["git", "worktree", "list", "--porcelain"], cwd=repo_dir,
+    )
+    wanted = f"branch refs/heads/{branch}"
+    for block in listing.split("\n\n"):
+        lines = block.splitlines()
+        if wanted not in lines:
+            continue
+        leftover = Path(lines[0].removeprefix("worktree "))
+        run_command(
+            ["git", "worktree", "remove", "--force", str(leftover)],
+            cwd=repo_dir,
+        )
+        run_command(["git", "branch", "-D", branch], cwd=repo_dir)
+        event(
+            "leftover_worktree_reclaimed", branch=branch,
+            worktree=str(leftover),
+        )
+        return True
+    return False
 
 
 def cleanup_task_worktree(ctx: RunContext, repo_dir: Path, *,

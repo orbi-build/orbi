@@ -586,6 +586,60 @@ def test_e2e_claim_reuses_orphan_local_branch(
     assert "command_failed" not in caplog.text
 
 
+def test_e2e_claim_reclaims_a_leftover_worktree_without_a_remote_branch(
+    clone, tmp_path, monkeypatch, caplog,
+):
+    """Issue #2441: the previous run of the Issue left its task worktree
+    checked out on the stable branch (one unpushed local commit, never
+    pushed, no PR) and the person re-queued the Issue. The claim must
+    succeed on a FRESH worktree from the current base instead of dying
+    with `fatal: '<branch>' is already used by worktree`."""
+    branch = f"orbi/{REPO.replace('/', '-')}-issue-{ISSUE_NUMBER}"
+    base = git(clone, "rev-parse", "HEAD")
+    leftover = clone / ".worktrees" / f"orbi-owner-repo-issue-{ISSUE_NUMBER}-342c52f5"
+    leftover.parent.mkdir(parents=True, exist_ok=True)
+    git(clone, "worktree", "add", "-b", branch, str(leftover), base)
+    (leftover / "stale.txt").write_text("unpushed leftover\n",
+                                        encoding="utf-8")
+    git(leftover, "add", "stale.txt")
+    git(leftover, "commit", "-m", "unpushed leftover work")
+    # Local-only: no remote branch (no PR) and no session state — the
+    # re-queued claim has nothing to resume.
+    assert git(
+        clone, "ls-remote", "--heads", "origin", f"refs/heads/{branch}",
+    ) == ""
+    comments: list[str] = []
+    labels: dict[int, list[str]] = {ISSUE_NUMBER: ["ai-ready"]}
+    caplog.set_level("INFO")
+    install_fake_pi(monkeypatch, tmp_path, FAKE_PI_DELIVERS)
+    install_fake_gh(monkeypatch, comments, labels)
+
+    result = runner.process_issue(
+        issue(), config_for(clone, tmp_path, REPO), REPO,
+    )
+
+    # The claim succeeded and delivered on a fresh worktree; the
+    # leftover scene is the only worktree that was removed.
+    assert result.url == PR_URL
+    worktrees = list((clone / ".worktrees").glob(
+        f"orbi-owner-repo-issue-{ISSUE_NUMBER}-*",
+    ))
+    assert len(worktrees) == 1
+    worktree = worktrees[0]
+    assert worktree.is_dir()
+    assert git(worktree, "branch", "--show-current") == branch
+    assert git(worktree, "show", "HEAD:work.txt") == "delivered"
+    # The fresh worktree started from the current base: the leftover's
+    # unpushed commit is not part of the delivery.
+    git(worktree, "merge-base", "--is-ancestor", base, "HEAD")
+    assert not (worktree / "stale.txt").exists()
+    # The leftover scene no longer exists.
+    assert not leftover.exists()
+    assert "already used by worktree" not in caplog.text
+    assert "ai-blocked" not in labels[ISSUE_NUMBER]
+    assert "ai-pr-opened" in labels[ISSUE_NUMBER]
+
+
 def test_fake_gh_handler_answers_the_unreached_transitions(
     tmp_path, monkeypatch,
 ):
