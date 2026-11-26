@@ -1,0 +1,173 @@
+---
+title: "插件与集成"
+description: "怎么在 Claude Code、Cursor 里装 Orbi 插件，怎么在 Paseo 里装社区插件 paseo-orbi?"
+---
+
+Orbi 自己的插件能装进 Claude Code 和 Cursor，社区插件 paseo-orbi 能在 Paseo 里显示 Orbi 部署。
+
+| 插件 | 谁维护 | 做什么 |
+|---|---|---|
+| [Claude Code 里的 Orbi 插件](#claude-code) | Orbi | 写出 agent 能交付的 GitHub Issue、交给 Orbi、查看交付状态 |
+| [Cursor 里的 Orbi 插件](#cursor) | Orbi | 同一套技能，由 Cursor 加载 |
+| [paseo-orbi](#paseo-orbi) | TrebuchetDynamics（社区） | 在 [Paseo](https://github.com/getpaseo/paseo) 里显示本机的 Orbi 部署，默认只读 |
+
+下面每一步都在 2026-11-27 于 Linux 上实际跑过，版本是 Claude Code 2.1.331、Cursor CLI 2026.11.22、Paseo 0.17.5，paseo-orbi 为提交 `92cfa58`。
+
+## Orbi 插件
+
+Claude Code 和 Cursor 用的是本仓库里同一个目录 [`integrations/claude-plugin`](https://github.com/orbi-build/orbi/tree/main/integrations/claude-plugin)，里面有：
+
+| 类型 | 名字 | 需要 Orbi 吗 |
+|---|---|---|
+| 技能 | `write-ai-ready-issue`：把当前任务写成一张含背景、验收标准、不做范围的 Issue | 不需要 |
+| 技能 | `suggest-ai-ready-issues`：读仓库，最多提三张值得交付的 Issue | 不需要 |
+| 命令 | `/orbi:ship`：先跑上面的技能，你确认后创建带 `ai-ready` 标签的 Issue | 需要 |
+| 命令 | `/orbi:status`：列出这个仓库里 Orbi 正在交付的 Issue 和对应的 PR | 需要 |
+
+「需要 Orbi」指这个仓库由 Orbi Cloud 或自己部署的 Orbi 交付（仓库里有 `ai-ready` 标签）。两个技能在任何仓库都能用。在 Claude Code 里，插件用你已登录的 `gh` 命令行，可以先跑 `gh auth status` 确认。
+
+两个编辑器加载的是同一个目录，取一次就够：
+
+```bash
+git clone --depth 1 https://github.com/orbi-build/orbi ~/orbi-plugin-src
+```
+
+以后更新跑 `git -C ~/orbi-plugin-src pull`。
+
+### Claude Code
+
+1. 带着这个目录启动 Claude Code。`--plugin-dir` 只对当次会话有效，所以每次都这样启动：
+
+   ```bash
+   claude --plugin-dir ~/orbi-plugin-src/integrations/claude-plugin
+   ```
+
+2. 确认装好了：问它「orbi 插件给了你哪些技能和命令？」，Claude Code 会列出 `orbi:ship`、`orbi:status`、`orbi:suggest-ai-ready-issues`、`orbi:write-ai-ready-issue` 四项。
+
+如果 `/orbi:ship` 说这个仓库不由 Orbi 交付，就是仓库里没有 `ai-ready` 标签。技能照样会写出 Issue 文本；想让 Orbi 交付，先[把仓库接到 Orbi](/zh/quickstart)。
+
+### Cursor
+
+放在 `~/.cursor/plugins/local/` 下的插件，Cursor 编辑器和 Cursor CLI 都会加载（见 [Cursor 插件文档](https://cursor.com/docs/plugins)）。Orbi 插件目前还没上架 Cursor Marketplace。
+
+1. 把插件目录复制到 Cursor 的本地插件目录：
+
+   ```bash
+   mkdir -p ~/.cursor/plugins/local
+   cp -r ~/orbi-plugin-src/integrations/claude-plugin ~/.cursor/plugins/local/orbi
+   ```
+
+2. 重启 Cursor，或者运行 **Developer: Reload Window**。
+3. 确认装好了。在 Cursor CLI（`cursor-agent`）里问「哪些技能来自 orbi 插件」，会列出 `write-ai-ready-issue` 和 `suggest-ai-ready-issues`。编辑器里，按 Cursor 文档的说法，插件内容出现在 **Customize** 里，技能可以在对话里用 `/技能名` 调用。
+
+我们实测时，Cursor CLI 加载了两个技能，但没有列出 `/orbi:ship` 和 `/orbi:status` 两个命令；Cursor 编辑器还没核过。需要这两个命令就用 Claude Code。
+
+拉取更新后，把目录里的内容覆盖到已装的那份上：
+
+```bash
+cp -r ~/orbi-plugin-src/integrations/claude-plugin/. ~/.cursor/plugins/local/orbi/
+```
+
+## paseo-orbi
+
+[paseo-orbi](https://github.com/TrebuchetDynamics/paseo-orbi) 是 TrebuchetDynamics 做的社区插件，本身也是用 Orbi 交付出来的。在 [Paseo](https://github.com/getpaseo/paseo) 里，它为你在这台机器上授权的每个 Orbi 部署显示：哪些 Issue 正在做、每次运行发生了什么、为什么停下。除非你按部署单独授权启动、停止、重启，它都是只读的。插件相关的问题请到[它的仓库](https://github.com/TrebuchetDynamics/paseo-orbi/issues)提。
+
+<Warning>
+paseo-orbi 目前只支持 Orbi 引擎 **v0.7.48**（外加两个更早的 v0.7.41 版本）。它拿引擎源码里一组固定文件和钉死的指纹比对，更新的引擎（v0.7.49 及以后）会被判为 `unsupported_source_profile`、不显示部署，等插件作者加适配。支持的版本见插件的 [operator guide](https://github.com/TrebuchetDynamics/paseo-orbi/blob/main/docs/operator-guide.md#setup)。插件支持新版本后，这一页会更新。
+</Warning>
+
+![paseo-orbi 的 Work 页：一个由自托管 Orbi v0.7.48 交付的仓库，一张 Issue 在 Implementing，一张待交付](/images/ecosystem/paseo-orbi-work.jpg)
+
+### 需要准备
+
+- 带 systemd 用户会话的 Linux。插件读取 Orbi 部署的用户单元和 journal。插件作者的基线环境是 Linux，iOS 和 Android 端还没验证。
+- 一个自己部署的 Orbi（[安装器路径](/zh/getting-started)），引擎源码在 `v0.7.48`。用安装器部署的，引擎源码就是 `deploy_home`。在 `orbi.toml` 里写 `engine_source_track = "tag:v0.7.48"` 钉住版本，下一轮定时运行会把源码切到这个版本，之后 `git -C <deploy_home> describe --tags` 输出 `v0.7.48`。
+- 部署的 `orbi.toml` 里写了 `repo_dir`、`deploy_home`、`source_repos`，`max_concurrency` 在 1 到 5 之间；`unit_name` 可选（见[配置](/zh/configuration)）。`orbi.toml` 里的相对路径按这个文件所在目录解析。
+- 运行 Paseo 的那个用户已登录 `gh` 命令行。插件用它读 Issue、评论、PR 和检查结果，从不往 GitHub 写。
+- Paseo 命令行（`npm install -g @getpaseo/cli`，需要 Node.js）。下面的步骤用它的守护进程。Paseo 桌面应用会自己起守护进程，怎么把 `PASEO_ORBI_CONFIG` 传给它，我们还没核过。
+
+### 安装与配置
+
+1. 在 Paseo 配置里打开插件总开关和守护进程自带的网页端：
+
+   ```bash
+   paseo daemon config set pluginsEnabled true
+   paseo daemon config set features.webUi.enabled true
+   ```
+
+   插件不在沙箱里运行，拥有你这个用户的全部权限。打开前先看过插件代码。
+
+2. 写一个授权文件，例如 `/srv/orbi/paseo-orbi.json`。所有路径都要写绝对路径，不能有软链接，也不能用 `~`：
+
+   ```json
+   {
+     "schema": 1,
+     "deployments": [{
+       "id": "my-repo",
+       "label": "My repo",
+       "repo": "owner/repository",
+       "configPath": "/srv/orbi/orbi.toml",
+       "engineSourcePath": "/srv/orbi",
+       "repoDir": "/srv/work/repository",
+       "deployHome": "/srv/orbi",
+       "trustedPublisherLogins": ["your-github-login"],
+       "adapter": "orbi-0.7.48-release"
+     }]
+   }
+   ```
+
+   | 字段 | 填什么 |
+   |---|---|
+   | `configPath` | 这个部署的 `orbi.toml` |
+   | `engineSourcePath` | Orbi 引擎源码目录，版本在 `v0.7.48` |
+   | `repoDir`、`deployHome` | 必须和 `orbi.toml` 里的 `repo_dir`、`deploy_home` 完全一致 |
+   | `repo` | `source_repos` 里的某一个 |
+   | `trustedPublisherLogins` | Orbi 发评论用的 GitHub 账号。自己部署的 Orbi 就是部署机器上 `gh` 登录的那个账号 |
+   | `adapter` | `orbi-0.7.48-release` |
+
+   不写 `controls` 就保持只读。授权启动、停止、重启的写法见 [operator guide](https://github.com/TrebuchetDynamics/paseo-orbi/blob/main/docs/operator-guide.md#service-controls-operator-grant-default-off)。
+
+3. 带着指向这个文件的 `PASEO_ORBI_CONFIG` 启动 Paseo 守护进程。这个变量必须在守护进程启动时就在它自己的环境里，事后在别的终端里 export 没用：
+
+   ```bash
+   PASEO_ORBI_CONFIG=/srv/orbi/paseo-orbi.json paseo daemon run
+   ```
+
+   `paseo daemon run` 会一直占着前台，后面的步骤在另一个终端里做。
+
+   想在 **Services** 页列出 Orbi 的用户单元，再加 `PASEO_ORBI_HOST_INVENTORY=1`。它会列出这台机器上所有名字以 `orbi` 开头的用户单元。
+
+4. 安装插件：
+
+   ```bash
+   paseo plugin add git:TrebuchetDynamics/paseo-orbi
+   ```
+
+   这会装仓库当前的 `main`；加 `--ref <提交>` 可以钉住某个版本。
+
+   改了授权文件后，跑 `paseo plugin reload paseo-orbi`。改的是 `PASEO_ORBI_CONFIG` 这个变量本身，就要重启守护进程。
+
+5. 打开 `http://localhost:6767/`，在侧栏选 **Orbi**。
+
+### 确认装好了
+
+- `paseo plugin ls` 显示 `paseo-orbi` 为 `running`。这只说明插件加载了，接着看 **Work** 页。
+- **Work** 页显示 `Repository: <标签> (owner/repository)`，下面是这个仓库的 Issue 和标签。
+- **Runs** 页列出这个部署；选中后显示当前这次运行：Issue、运行编号、阶段、分支、最近一次会话活动。
+
+![paseo-orbi 的 Runs 页：2 号 Issue 当前这次运行的阶段、分支、推送的提交和会话活动](/images/ecosystem/paseo-orbi-runs.jpg)
+
+### 常见卡点
+
+| 看到什么 | 原因 | 怎么办 |
+|---|---|---|
+| 仓库列表上方出现 `unsupported_source_profile` | `engineSourcePath` 不是 v0.7.48 引擎 | 把部署钉到 `tag:v0.7.48`，或等插件支持你的版本 |
+| 侧栏没有 **Orbi** | 插件总开关没开，或插件不是 `running` | 跑 `paseo daemon config get pluginsEnabled`；看 `paseo plugin logs paseo-orbi` |
+| 「Repositories aren't linked」 | 守护进程启动时没有 `PASEO_ORBI_CONFIG` | 带着这个变量重启守护进程。**Refresh** 不会重新读配置 |
+| 部署显示 `invalid_config` | 路径是相对路径、含软链接，或和 `orbi.toml` 对不上 | 用和 `repo_dir`、`deploy_home` 完全一致的绝对真实路径，再跑 `paseo plugin reload paseo-orbi` |
+| Issue 页报 `auth_denied` | 守护进程那个用户的 `gh` 读不到这个仓库 | 用那个用户跑 `gh auth status` 修好权限，再点 **Refresh** |
+| **Services** 显示「Service check off」 | 主机单元清单默认关闭 | 带 `PASEO_ORBI_HOST_INVENTORY=1` 启动守护进程 |
+
+![配置里有一个部署跑的是新版引擎时的 Work 页：显示 unsupported_source_profile，下面的 v0.7.48 部署照常显示](/images/ecosystem/paseo-orbi-unsupported.jpg)
+
+每个修复码、插件实际执行的读取操作、以及它从不做的事，都写在插件自己的 [operator guide](https://github.com/TrebuchetDynamics/paseo-orbi/blob/main/docs/operator-guide.md) 里。

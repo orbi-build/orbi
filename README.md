@@ -16,6 +16,8 @@ Orbi is an open-source **software dark factory**: a software delivery system for
 
 **Ledger:** [merged PRs](https://github.com/orbi-build/orbi/pulls?q=is:merged) · [closed Issues](https://github.com/orbi-build/orbi/issues?q=is:closed) · [tagged releases](https://github.com/orbi-build/orbi/releases) — the repository is the record.
 
+**Community plugin:** [paseo-orbi](https://github.com/TrebuchetDynamics/paseo-orbi) by TrebuchetDynamics shows your local Orbi deployments inside [Paseo](https://github.com/getpaseo/paseo): which issues are in progress, what happened in each run, and why work stopped. It is read-only by default and currently supports Orbi engine v0.7.48. [Install the Orbi plugins and paseo-orbi](https://docs.orbi.build/ecosystem)
+
 Website [orbi.build](https://orbi.build/?ref=gh-readme-links) ｜ Documentation <https://docs.orbi.build/> ｜ [Discussions](https://github.com/orbi-build/orbi/discussions) ｜ Docker [GHCR](https://ghcr.io/orbi-build/orbi) · [Docker Hub](https://hub.docker.com/r/orbibuild/orbi)
 
 **Prefer to run it yourself?** Follow the Quick start below. Cloud founding members get 50% off for life (6 places); the discount is applied automatically at checkout, with no code to enter.
@@ -106,6 +108,7 @@ GitHub Issue (ai-ready)
 | Public contracts (interface inventory, status and progress formats) | [Public contracts](docs/public-contracts.mdx) |
 | Testing, coverage gates, and remote CI | [Testing](docs/testing.mdx) |
 | Contributing (Issue granularity, KISS/LEAN, PR flow) | [Contributing](docs/contributing.mdx) |
+| Plugins and integrations (Claude Code, Cursor, paseo-orbi) | [Plugins and integrations](docs/ecosystem.mdx) |
 | Chinese documentation | [docs/zh/](docs/zh/) |
 
 ## Development and contribution
