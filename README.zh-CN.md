@@ -16,6 +16,8 @@ Orbi 是一个开源的**软件暗工厂（software dark factory）**：面向 G
 
 **公开账本：** [已合并 PR](https://github.com/orbi-build/orbi/pulls?q=is:merged) · [已关闭 Issue](https://github.com/orbi-build/orbi/issues?q=is:closed) · [tagged release](https://github.com/orbi-build/orbi/releases) — 仓库就是记录。
 
+**社区插件：** TrebuchetDynamics 做的 [paseo-orbi](https://github.com/TrebuchetDynamics/paseo-orbi)，在 [Paseo](https://github.com/getpaseo/paseo) 里显示本机的 Orbi 部署：哪些 Issue 正在做、每次运行发生了什么、为什么停下。默认只读，目前只支持 Orbi 引擎 v0.7.48。[安装 Orbi 插件和 paseo-orbi](https://docs.orbi.build/zh/ecosystem)
+
 官网 <https://orbi.build> ｜ 文档 <https://docs.orbi.build/> ｜ [Discussions](https://github.com/orbi-build/orbi/discussions)
 
 **想自己部署？** 按下面的「快速开始」来。Cloud 创始会员永久 5 折（限 6 位），结账时自动打折，不用填优惠码。
@@ -127,6 +129,7 @@ GitHub Issue（ai-ready）
 | 公开契约（接口清单、状态与进度格式） | [Public contracts](docs/zh/public-contracts.mdx) |
 | 测试与覆盖率门禁、远程 CI | [Testing](docs/zh/testing.mdx) |
 | 贡献（Issue 粒度、KISS/LEAN、PR 流程） | [Contributing](docs/zh/contributing.mdx) |
+| 插件与集成（Claude Code、Cursor、paseo-orbi） | [插件与集成](docs/zh/ecosystem.mdx) |
 | 中文文档 | [docs/zh/](docs/zh/) |
 
 ## 开发与贡献

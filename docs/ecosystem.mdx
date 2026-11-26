@@ -1,0 +1,173 @@
+---
+title: "Plugins and integrations"
+description: "How do I install the Orbi plugin in Claude Code or Cursor, and the community paseo-orbi plugin for Paseo?"
+---
+
+Orbi has its own plugin for Claude Code and Cursor, and a community plugin, paseo-orbi, shows Orbi deployments inside Paseo.
+
+| Plugin | Who maintains it | What it does |
+|---|---|---|
+| [Orbi plugin for Claude Code](#claude-code) | Orbi | Drafts GitHub Issues an agent can deliver, hands them to Orbi, shows delivery status |
+| [Orbi plugin for Cursor](#cursor) | Orbi | The same skills, loaded by Cursor |
+| [paseo-orbi](#paseo-orbi) | TrebuchetDynamics (community) | Shows your local Orbi deployments inside [Paseo](https://github.com/getpaseo/paseo); read-only by default |
+
+The steps below were run on Linux on 2026-11-27 with Claude Code 2.1.331, Cursor CLI 2026.11.22, Paseo 0.17.5 and paseo-orbi at commit `92cfa58`.
+
+## The Orbi plugin
+
+The Claude Code and Cursor plugins are one folder in this repository, [`integrations/claude-plugin`](https://github.com/orbi-build/orbi/tree/main/integrations/claude-plugin). It contains:
+
+| Component | Name | Needs Orbi? |
+|---|---|---|
+| Skill | `write-ai-ready-issue`: turns the current task into an Issue with Background, Acceptance criteria and Out of scope | No |
+| Skill | `suggest-ai-ready-issues`: reads the repository and proposes at most three Issues worth delivering | No |
+| Command | `/orbi:ship`: runs the skill, then creates the Issue with the `ai-ready` label after you confirm | Yes |
+| Command | `/orbi:status`: lists this repository's Orbi delivery Issues and their pull requests | Yes |
+
+"Needs Orbi" means the repository is delivered by Orbi Cloud or a self-hosted Orbi (it has the `ai-ready` label). The skills work in any repository. In Claude Code the plugin uses your authenticated `gh` CLI; check it with `gh auth status`.
+
+Both editors load the same folder. Get it once:
+
+```bash
+git clone --depth 1 https://github.com/orbi-build/orbi ~/orbi-plugin-src
+```
+
+To update later, run `git -C ~/orbi-plugin-src pull`.
+
+### Claude Code
+
+1. Start Claude Code with the folder loaded. `--plugin-dir` loads it for that session only, so start each session this way:
+
+   ```bash
+   claude --plugin-dir ~/orbi-plugin-src/integrations/claude-plugin
+   ```
+
+2. Confirm it loaded: ask "which skills and commands do you have from the orbi plugin?". Claude Code lists `orbi:ship`, `orbi:status`, `orbi:suggest-ai-ready-issues` and `orbi:write-ai-ready-issue`.
+
+If `/orbi:ship` says the repository isn't delivered by Orbi, the repository has no `ai-ready` label. The skill still writes the Issue text; [connect the repository to Orbi](/quickstart) first if you want Orbi to deliver it.
+
+### Cursor
+
+Cursor loads plugins placed in `~/.cursor/plugins/local/`, in the editor and in the Cursor CLI ([Cursor plugin docs](https://cursor.com/docs/plugins)). The Orbi plugin is not in the Cursor Marketplace yet.
+
+1. Copy the plugin folder into Cursor's local plugin directory:
+
+   ```bash
+   mkdir -p ~/.cursor/plugins/local
+   cp -r ~/orbi-plugin-src/integrations/claude-plugin ~/.cursor/plugins/local/orbi
+   ```
+
+2. Restart Cursor, or run **Developer: Reload Window**.
+3. Confirm it loaded. In the Cursor CLI (`cursor-agent`), asking which skills come from the orbi plugin lists `write-ai-ready-issue` and `suggest-ai-ready-issues`. In the editor, Cursor's docs say plugin components appear under **Customize**, and skills can be called with `/skill-name` in chat.
+
+In our run the Cursor CLI loaded the two skills but did not list the `/orbi:ship` and `/orbi:status` commands. We have not checked the Cursor editor yet. If you need the commands, use Claude Code.
+
+After you pull an update, copy the folder's contents over the installed copy:
+
+```bash
+cp -r ~/orbi-plugin-src/integrations/claude-plugin/. ~/.cursor/plugins/local/orbi/
+```
+
+## paseo-orbi
+
+[paseo-orbi](https://github.com/TrebuchetDynamics/paseo-orbi) is a community plugin by TrebuchetDynamics, built and delivered with Orbi. Inside [Paseo](https://github.com/getpaseo/paseo) it shows, for each Orbi deployment you authorize on that machine, which Issues are in progress, what happened in each run, and why work stopped. It is read-only unless you grant Start, Stop and Restart per deployment. Questions about the plugin go to [its repository](https://github.com/TrebuchetDynamics/paseo-orbi/issues).
+
+<Warning>
+paseo-orbi currently supports Orbi engine **v0.7.48** (and two older v0.7.41 revisions). It checks a fixed set of engine source files against pinned fingerprints, and any newer engine (v0.7.49 and later) is rejected as `unsupported_source_profile` and not shown. The supported versions are listed in the plugin's [operator guide](https://github.com/TrebuchetDynamics/paseo-orbi/blob/main/docs/operator-guide.md#setup). This page will change when the plugin supports newer versions.
+</Warning>
+
+![paseo-orbi Work view: a repository delivered by a self-hosted Orbi v0.7.48, with one Issue in Implementing and one ready](/images/ecosystem/paseo-orbi-work.jpg)
+
+### What you need
+
+- Linux with a systemd user session. The plugin reads your Orbi deployment's user units and journal. Its author's baseline is Linux; the iOS and Android apps are not yet qualified.
+- A self-hosted Orbi deployment ([installer path](/getting-started)) whose engine checkout is at `v0.7.48`. For an installer deployment the engine checkout is `deploy_home`. Pin it with `engine_source_track = "tag:v0.7.48"` in `orbi.toml`; the next timer run moves the checkout to that tag. `git -C <deploy_home> describe --tags` then prints `v0.7.48`.
+- The deployment's `orbi.toml` sets `repo_dir`, `deploy_home`, `source_repos` and a `max_concurrency` of 1 to 5; `unit_name` is optional ([Configuration](/configuration)). Relative paths in `orbi.toml` resolve against the file's own directory.
+- An authenticated `gh` CLI for the user that runs Paseo. The plugin reads Issues, comments, pull requests and checks with it and never writes to GitHub.
+- The Paseo CLI (`npm install -g @getpaseo/cli`), which needs Node.js. The steps below use its daemon. The Paseo desktop app starts its own daemon, and we have not checked how to pass `PASEO_ORBI_CONFIG` to it.
+
+### Install and configure
+
+1. Turn on plugins, and the daemon's bundled web UI, in Paseo's configuration:
+
+   ```bash
+   paseo daemon config set pluginsEnabled true
+   paseo daemon config set features.webUi.enabled true
+   ```
+
+   Plugins run unsandboxed with your user's access. Read the plugin's code before you enable it.
+
+2. Write an authorization file, for example `/srv/orbi/paseo-orbi.json`. Every path must be absolute, with no symlinks or `~`:
+
+   ```json
+   {
+     "schema": 1,
+     "deployments": [{
+       "id": "my-repo",
+       "label": "My repo",
+       "repo": "owner/repository",
+       "configPath": "/srv/orbi/orbi.toml",
+       "engineSourcePath": "/srv/orbi",
+       "repoDir": "/srv/work/repository",
+       "deployHome": "/srv/orbi",
+       "trustedPublisherLogins": ["your-github-login"],
+       "adapter": "orbi-0.7.48-release"
+     }]
+   }
+   ```
+
+   | Field | Value |
+   |---|---|
+   | `configPath` | The deployment's `orbi.toml` |
+   | `engineSourcePath` | The Orbi engine checkout, at `v0.7.48` |
+   | `repoDir`, `deployHome` | Must equal `repo_dir` and `deploy_home` in `orbi.toml` |
+   | `repo` | One of `source_repos` |
+   | `trustedPublisherLogins` | The GitHub login Orbi posts its comments as. For a self-hosted Orbi, that is the account `gh` is signed in as on the deployment |
+   | `adapter` | `orbi-0.7.48-release` |
+
+   Leave out `controls` to keep the deployment read-only. Granting Start, Stop and Restart is described in the [operator guide](https://github.com/TrebuchetDynamics/paseo-orbi/blob/main/docs/operator-guide.md#service-controls-operator-grant-default-off).
+
+3. Start the Paseo daemon with `PASEO_ORBI_CONFIG` set to that file. The variable must be in the daemon's own environment when it starts; exporting it in another shell later does nothing:
+
+   ```bash
+   PASEO_ORBI_CONFIG=/srv/orbi/paseo-orbi.json paseo daemon run
+   ```
+
+   `paseo daemon run` stays in the foreground. Run the next steps in another terminal.
+
+   To also list Orbi's user units on the **Services** screen, add `PASEO_ORBI_HOST_INVENTORY=1`. It lists every user unit whose name starts with `orbi` on that machine.
+
+4. Install the plugin:
+
+   ```bash
+   paseo plugin add git:TrebuchetDynamics/paseo-orbi
+   ```
+
+   This installs the repository's current `main`. Add `--ref <commit>` to pin a revision.
+
+   After you edit the authorization file, run `paseo plugin reload paseo-orbi`. If you change `PASEO_ORBI_CONFIG` itself, restart the daemon.
+
+5. Open `http://localhost:6767/` and select **Orbi** in the sidebar.
+
+### Check that it works
+
+- `paseo plugin ls` shows `paseo-orbi` as `running`. That only means the plugin loaded; check **Work** next.
+- **Work** shows `Repository: <label> (owner/repository)` and the repository's Issue rows with their labels.
+- **Runs** lists the deployment; selecting it shows the current run: Issue, run ID, stage, branch and the last session activity.
+
+![paseo-orbi Runs view showing the current run of Issue #2: lifecycle, reported stage, branch, pushed SHA and session activity](/images/ecosystem/paseo-orbi-runs.jpg)
+
+### Common problems
+
+| What you see | Cause | Fix |
+|---|---|---|
+| `unsupported_source_profile` above the repository list | `engineSourcePath` is not at engine v0.7.48 | Pin the deployment to `tag:v0.7.48`, or wait for the plugin to support your version |
+| No **Orbi** entry in the sidebar | Plugins are off, or the plugin is not `running` | Run `paseo daemon config get pluginsEnabled`; read `paseo plugin logs paseo-orbi` |
+| "Repositories aren't linked" | The daemon started without `PASEO_ORBI_CONFIG` | Restart the daemon with the variable in its environment. **Refresh** does not reload configuration |
+| A deployment shows `invalid_config` | A path is relative, contains a symlink, or doesn't match `orbi.toml` | Use absolute real paths that match `repo_dir` and `deploy_home` exactly, then run `paseo plugin reload paseo-orbi` |
+| `auth_denied` on Issues | The daemon user's `gh` can't read the repository | Run `gh auth status` as that user and fix access, then **Refresh** |
+| **Services** says "Service check off" | Host inventory is opt-in | Start the daemon with `PASEO_ORBI_HOST_INVENTORY=1` |
+
+![The Work view when one configured deployment runs a newer engine: unsupported_source_profile, with the v0.7.48 deployment still listed below](/images/ecosystem/paseo-orbi-unsupported.jpg)
+
+The plugin's own [operator guide](https://github.com/TrebuchetDynamics/paseo-orbi/blob/main/docs/operator-guide.md) covers every repair code, the exact reads it performs and what it never does.
