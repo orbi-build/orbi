@@ -29,7 +29,7 @@ from pathlib import Path
 from orbi.delivery_scene import RunContext
 from orbi.journal import LOGGER, event, run_command
 
-WORKTREE_RETAIN_HOURS = 72
+WORKTREE_RETAIN_HOURS = 168
 # ON by default: a failed attempt's evidence stays on disk unless the
 # host opts out (a disk-tight host sets `keep_failed_worktrees = false`).
 KEEP_FAILED_WORKTREES = True
@@ -38,9 +38,10 @@ KEEP_FAILED_WORKTREES = True
 def load_worktree_retain_hours(data: dict) -> float:
     """Load and validate the optional `worktree_retain_hours` (Issue #760).
 
-    Omitted -> `WORKTREE_RETAIN_HOURS` (default 72 hours): a closed
-    Issue's scene stays inspectable for three days before the tick-start
-    reclamation removes it. Present -> must be a finite positive number
+    Omitted -> `WORKTREE_RETAIN_HOURS` (default 168 hours, Issue #2447):
+    one rule — seven days after its Issue closes, whatever labels the
+    Issue carries, the scene is removed by the tick-start reclamation.
+    Present -> must be a finite positive number
     (int or float); booleans, zero, negative, NaN/infinity and
     non-numeric values fail fast at config load with the field name and
     the concrete reason.
