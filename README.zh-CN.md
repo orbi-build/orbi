@@ -4,6 +4,8 @@
 
 **给 GitHub Issue 打个标签，拿回一个审过、已合并的 PR。什么时候发版，由你决定。**
 
+[![Orbi deliveries](https://orbi.build/proof/orbi-build/orbi/badge.svg)](https://orbi.build/zh/proof/orbi-build/orbi?ref=badge-orbi)
+
 [试用 Orbi Cloud：14 天免费试用](https://orbi.build/zh/?ref=gh-readme) · 不用自己的服务器，不用绑定信用卡
 
 [![观看 95 秒短片](https://img.youtube.com/vi/zvPnE2whb08/maxresdefault.jpg)](https://youtu.be/zvPnE2whb08)
