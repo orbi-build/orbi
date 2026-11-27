@@ -23,6 +23,7 @@ import orbi.failure_report as failure_report
 import orbi.runner as runner
 import orbi.review_merge as review_merge
 import orbi.gitops as gitops
+from tests.fakes.github import command_flags, command_is
 from tests.fakes.gitops import remote_head_answer
 import orbi.journal as journal
 from seam import seam
@@ -476,6 +477,51 @@ def _blocked_review_body(monkeypatch, tmp_path, code, **env):
     # Issue #2426: the terminal is ONE whole-set write on ai-blocked alone.
     assert edits[-1] == ["ai-blocked"]
     return comments[0][1]["body"]
+
+
+# --- Issue #2462: one tick with real git and in-memory GitHub ---------------
+
+
+def install_claim_time_config_seam(monkeypatch, fake, on_claim) -> dict:
+    """Install one tick's seam fake: real git, `fake` (a `FakeGh`) for GitHub.
+
+    The fake lives here, in the excluded fakes package, because the patch
+    ratchet counts a new seam patch per test (Issue #789) — the scene is
+    scaffolding, the test asserts the behavior. `on_claim` runs exactly once,
+    on the claim's first ready scan: after the tick started and before the
+    Issue is claimed, the window Issue #2462 closes. `gh pr create` is
+    completed here because the in-memory fake has no git of its own: the head
+    sha is read from the real worktree, so `verify_pr` compares it against
+    the real HEAD. The returned dict carries `rewritten` (the hook fired) and
+    `creates` (the `gh pr create` argv list).
+    """
+    real_run = runner.run_command
+    state = {"rewritten": False, "creates": []}
+
+    def fake_run(command, **kwargs):
+        if (
+            not state["rewritten"]
+            and command_is(command, "gh", "issue", "list")
+            and "label:ai-ready" in " ".join(command)
+        ):
+            state["rewritten"] = True
+            on_claim()
+        if command[0] == "git":
+            return real_run(command, **kwargs)
+        if command_is(command, "gh", "pr", "create"):
+            state["creates"].append(list(command))
+            flags = command_flags(command)
+            head = real_run(["git", "rev-parse", "HEAD"], cwd=kwargs["cwd"])
+            number = len(fake.prs) + 1
+            fake.add_pr(
+                number, head=flags["--head"][0], base=flags["--base"][0],
+                oid=head, title=flags["--title"][0], body=flags["--body"][0],
+            )
+            return f"https://github.com/{fake.repo}/pull/{number}"
+        return fake(command, **kwargs)
+
+    monkeypatch.setattr(seam, "run_command", fake_run)
+    return state
 
 
 # --- Issue #186: deliver_pr — the Runner owns the deterministic closeout ----

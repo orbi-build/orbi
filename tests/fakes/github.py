@@ -63,6 +63,31 @@ _PLAN_LIMIT_403 = (
 _PERMALINK_ID_RE = re.compile(r"#issuecomment-(\d+)$")
 
 
+def command_is(command: list[str], *words: str) -> bool:
+    """True when the argv's leading words are exactly `words`.
+
+    The fakes own the argv contract (Issue #789): a test that dispatches a
+    seam fake on `gh <verb> <sub>` names the words here instead of pinning
+    a `command[:N] ==` slice in the test corpus.
+    """
+    return len(command) >= len(words) and all(
+        command[index] == word for index, word in enumerate(words)
+    )
+
+
+def command_flags(command: list[str]) -> dict[str, list[str]]:
+    """Split one argv into its `--flag value` pairs, in order."""
+    flags: dict[str, list[str]] = {}
+    index = 0
+    while index < len(command):
+        if command[index].startswith("--"):
+            flags.setdefault(command[index], []).append(command[index + 1])
+            index += 2
+        else:
+            index += 1
+    return flags
+
+
 def _permalink_id(comment: dict) -> int | None:
     """The REST id in one comment's permalink, or None."""
     url = comment.get("url")

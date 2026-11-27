@@ -2171,6 +2171,20 @@ def main(argv: list[str] | None = None) -> int:
             # (the non-blocking probe is the only None path). Release is
             # idempotent, so the idle path above may release first.
             claim_lock.release()
+        # The base branch is read at CLAIM time, never from the tick's
+        # start snapshot: picking can take minutes on a busy queue and an
+        # operator changes `base_branch` in the deployment's orbi.toml
+        # without restarting the runner (Issue #2462). Only the base-branch
+        # inputs are re-read, so every process-scoped field (paths, slot
+        # dir, concurrency, Milestone) stays this tick's. An Issue claimed
+        # after the change is delivered on the new base; a delivery whose
+        # PR is already open is unchanged — it still stops with
+        # `base_branch_changed` (#2458).
+        fresh = _load_valid_config(config.config_path)
+        if fresh is None:
+            return 1
+        config = replace(config, base_branch=fresh.base_branch,
+                         repositories=fresh.repositories)
         # Resolve the repository-level policy ONCE for the whole
         # delivery. The effective base branch/milestone must drive the
         # resume verification, the claim and the review/merge loop, and a
