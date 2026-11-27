@@ -356,3 +356,43 @@ def test_a_reopened_issue_resumes_instead_of_opening_an_empty_pr(
     assert _pull_request_calls(gh) == []
     assert _closed_comments(gh.comments) == []
     assert "the next tick resumes the same run" in caplog.text
+
+
+def test_a_reopened_issue_never_turns_an_interrupted_commit_into_a_pr(
+    monkeypatch, tmp_path, caplog, delivery_repo,
+):
+    """A stop whose Issue reads OPEN again never opens a PR.
+
+    The poll saw CLOSED and stopped the session mid-work; the closeout's own
+    read sees OPEN (reopened). The commit the session happened to make is
+    pushed (the branch keeps the work) but it is NOT a finished delivery, so
+    no PR is opened for a human to merge: the run is recoverable and the next
+    tick resumes the same run.
+    """
+    caplog.set_level("INFO")
+    origin, clone = delivery_repo
+    gh = FakeGitHub(final_state="OPEN")
+    monkeypatch.setattr(seam, "run_command", gh.run_command)
+    monkeypatch.setattr(seam, "new_run_id", lambda: RUN_ID)
+    finished = tmp_path / "pi-finished"
+    fake_pi = make_committing_fake_pi(
+        tmp_path / "fake-pi", finished=finished,
+    )
+
+    result = runner.process_issue(
+        {"number": ISSUE, "title": "Deliver", "body": "Body"},
+        _config(
+            clone, pi_executable=str(fake_pi), steering_poll_seconds=0.5,
+        ),
+        SOURCE_REPO,
+    )
+
+    assert result == ("failed", None)
+    assert gh.poll_states == ["OPEN", "CLOSED"]
+    assert not finished.exists()
+    # The committed work stays on the pushed branch for the resumed run.
+    assert git(origin, "show", f"{BRANCH}:delivered.txt") == "delivered"
+    # ...but it is not a delivery: no PR, no closed-mid-delivery comment.
+    assert _pull_request_calls(gh) == []
+    assert _closed_comments(gh.comments) == []
+    assert "the next tick resumes the same run" in caplog.text

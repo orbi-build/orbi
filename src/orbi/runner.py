@@ -1094,12 +1094,13 @@ def deliver_pr(ctx: RunContext, base_branch: str, base_sha: str, *,
     session's steering poll then stops the session itself (Issue #2468) and
     reaches this closeout with `issue_closed_stop=True` — an INTERRUPTED
     delivery, not a finished one, so the commit-boundary guards below do not
-    apply (uncommitted edits or no commit past the base are what stopping
-    where it was leaves) and only the committed HEAD is pushed. The Issue
-    state is read directly after the push and before the PR creation; a
-    CLOSED Issue returns None — the pushed branch keeps the work, the closed
-    Issue gets one explanatory comment, and no PR is opened (nothing dangles
-    behind a closed Issue).
+    apply and only the committed HEAD is pushed. The Issue state is read
+    directly after the push and before the PR creation; a CLOSED Issue
+    returns None — the pushed branch keeps the work, the Issue gets one
+    explanatory comment, and no PR is opened. An Issue that reads OPEN again
+    (reopened) is never turned into a PR either: the interrupted session's
+    commit is not a finished delivery, so the run fails as recoverable and
+    the next tick resumes it.
     """
     worktree = ctx.worktree
     branch: str = ctx.branch
@@ -1196,14 +1197,13 @@ def deliver_pr(ctx: RunContext, base_branch: str, base_sha: str, *,
             repo=source_repo,
         )
         return None
-    if not committed:
-        # Stopped by the closed-Issue poll, but the Issue reads OPEN again
-        # and nothing was committed: there is no delivery to open a PR from,
-        # so the next tick resumes the same run.
+    if issue_closed_stop:
+        # Stopped by the closed poll, but the Issue reads OPEN again
+        # (reopened): what the interrupted session committed is no delivery
+        # to open a PR from — the next tick resumes the same run.
         raise RecoverablePiFailure(
             "the Pi session was stopped because the Issue was closed, but "
-            f"the Issue reads {state} and the worktree carries no commit "
-            f"past the frozen base {base_sha}; the next tick resumes the "
+            f"the Issue reads {state} again; the next tick resumes the "
             "same run"
         )
     # Exactly one open PR of the branch: create it when absent (the PR
