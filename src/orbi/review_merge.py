@@ -37,7 +37,7 @@ from enum import Enum
 from pathlib import Path
 
 from orbi import answer as answer_domain
-from orbi import base_absorb
+from orbi import base_absorb, base_branch_change
 from orbi import config as config_domain
 from orbi import failure_report, merge_exec, pi_session, review_wait, run_state
 from orbi.blocked_comment import post_blocked_comment
@@ -1100,27 +1100,17 @@ def _run_review_round(
                 "must restore the trusted 'Orbi opened PR' "
                 "scene comment"
             ) from scene_exc
-        # The scene freezes the base the PR
-        # was opened against. The config may have moved on (or
-        # the comment is stale): reviewing or merging a PR
-        # frozen on another base against the configured one
-        # would run the freeze/merge gate on the wrong base,
-        # so fail fast before any git/Pi mutation instead of
-        # silently switching bases. A base-branch change is a
-        # human decision: the runner must not
-        # auto-retry a PR frozen on another base, so the
-        # handler below marks the Issue ai-blocked with the
-        # explicit reason and both base values named.
-        if scene.parsed.base_branch != config.base_branch:
-            raise UnrecoverableDeliveryError(
-                f"resume scene base_branch={scene.parsed.base_branch} "
-                f"differs from configured base_branch="
-                f"{config.base_branch}; the PR is frozen on a "
-                "different base and must not be reviewed or "
-                "merged against the configured one — a base "
-                "change is a human decision, so auto-retrying "
-                "would keep failing on the same mismatch"
-            )
+        # The scene freezes the base the PR was opened against. The config
+        # may have moved on (or the comment is stale): reviewing or merging
+        # a PR frozen on another base against the configured one would run
+        # the freeze/merge gate on the wrong base, so fail fast before any
+        # git/Pi mutation instead of silently switching bases. A base change
+        # is a human decision: the runner never auto-retries a PR frozen on
+        # another base. The check, its own `base_branch_changed` reason and
+        # its wording are ONE implementation shared with the resume
+        # verification (Issue #2458).
+        base_branch_change.require_scene_base(
+            scene.parsed.base_branch, config.base_branch)
         worktree = worktree_path(
             config.repo_dir, source_repo, number,
             scene.parsed.run_id,
@@ -1210,6 +1200,11 @@ def _run_review_round(
             if exc.action:
                 fix = exc.action.strip().rstrip(".。;")
                 action = text("review.blocked_human_action", fix=fix)
+        elif isinstance(exc, base_branch_change.SceneBaseBranchChanged):
+            # Issue #2458: both branches, the PR and the two ways out, in the
+            # run's language — the same pair the resume path reports.
+            action, reason = base_branch_change.wording(
+                exc, language_code, pr_url=pr_url)
         else:
             reason = text("review.blocked_failed_reason", detail=detail)
         if not action and failure_report.is_unrecoverable_failure(exc):

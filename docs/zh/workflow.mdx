@@ -643,6 +643,7 @@ review 与 ops session），因此自定义 prompt 模板同样会收到：会�
 | `review_budget_exhausted` | 有界 review/fix 预算用尽 | `decide` | false |
 | `human_decision_required` | 只有人能决策的外部前置条件 | `decide` | false |
 | `base_branch_missing` | 配置的 base branch 在仓库中不存在 | `fix_ticket` | false |
+| `base_branch_changed` | 仓库的基础分支在 PR 打开之后被改动了，PR 停留在 Orbi 已不再配置的那个 base 上（Issue #2458）；评论会点名两个分支和该 PR，并给出两种改法——把 base 改回来以继续这个 PR，或者关闭该 PR，让这个 Issue 按新的 base 重新交付 | `decide` | false |
 | `base_ci_red` | PR 失败的 check 在配置的基础分支上本来也失败 | `fix_ticket` | false |
 | `checks_permission_missing` | App 安装尚未批准 `statuses: read`，导致 PR 的 check 读取被拒绝（HTTP 403 `Resource not accessible by integration`） | `check_credentials` | false |
 | `credential_missing` | GitHub/provider 凭据缺失或被拒绝 | `check_credentials` | false |

@@ -19,7 +19,9 @@ from pathlib import Path
 import pytest
 
 import orbi.gitops as gitops
+import orbi.base_branch_change as base_branch_change
 import orbi.claim as claim
+import orbi.failure as failure
 import orbi.failure_report as failure_report
 import orbi.comment_trust as comment_trust
 import orbi.runner as runner
@@ -3916,6 +3918,68 @@ def test_verify_resumed_pr_fails_fast_when_scene_base_differs(
         AssertionError, match="must not run on a base mismatch",
     ):
         fake_verify_pr()
+
+
+def _labelled_line(body: str, label: str) -> str:
+    """The comment line the reader sees under one rendered field label."""
+    return next(line for line in body.splitlines() if line.startswith(label))
+
+
+@pytest.mark.parametrize(
+    ("language_code", "cause_fragments", "action_fragments"),
+    [
+        (
+            "en",
+            ("base branch changed", "develop", "main"),
+            ("set the base branch back", "close PR", "ai-fix-needed",
+             "ai-ready"),
+        ),
+        (
+            "zh",
+            ("基础分支", "develop", "main"),
+            ("把基础分支改回", "关闭 PR", "ai-fix-needed", "ai-ready"),
+        ),
+    ],
+)
+def test_verify_resumed_pr_base_mismatch_reports_its_own_reason_and_repair(
+    monkeypatch, tmp_path, bind_run_id, language_code, cause_fragments,
+    action_fragments,
+):
+    """Issue #2458: a scene frozen on another base stops with the SPECIFIC
+    reason code `base_branch_changed` (not `human_decision_required`), and
+    the comment names both branches and the PR and gives the two ways out,
+    in the run's message language."""
+    captured, _ = make_resume_failure_fake(monkeypatch)
+    bind_run_id(FAKE_RUN_ID)
+    with pytest.raises(base_branch_change.SceneBaseBranchChanged):
+        resume_verification.verify_resumed_pr(
+            make_resume_scene(base_branch="develop"), make_resume_issue(),
+            make_resume_config(tmp_path, message_language=language_code),
+            "owner/repo",
+        )
+    body = captured["comments"][0][1]["body"]
+    # Acceptance 1: the machine-readable record names the real reason.
+    record = failure.parse(body)
+    assert record is not None
+    assert record.reason_code == "base_branch_changed"
+    assert record.reason_code != "human_decision_required"
+    assert record.outcome == "blocked"
+    assert record.retry_safe is False
+    # Acceptance 2: the visible Reason names both branches and the PR, and
+    # the Action gives the two ways out — in the run's language.
+    reason_line = _labelled_line(
+        body, language.text(language_code, "failure.reason_label"))
+    action_line = _labelled_line(
+        body, language.text(language_code, "failure.action_label"))
+    assert FAKE_PR_URL in reason_line
+    for fragment in cause_fragments:
+        assert fragment in reason_line
+    for fragment in action_fragments:
+        assert fragment in action_line
+    # The internal English detail stays evidence, never the visible reason.
+    if language_code == "zh":
+        assert "differs from configured" not in reason_line
+        assert "differs from configured" in body
 
 
 def test_verify_resumed_pr_reraises_when_failure_reporting_fails(

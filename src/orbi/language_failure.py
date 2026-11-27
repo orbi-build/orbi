@@ -240,6 +240,33 @@ FAILURE_MESSAGES: dict[str, tuple[str, str]] = {
         "然后去掉 \u0060ai-blocked\u0060、重新加上 \u0060ai-ready\u0060，"
         "下一轮会从分支当前的状态继续。整个过程没有强推，也没有覆盖任何提交。",
     ),
+    # Issue #2458: the repository's base branch changed while the PR was in
+    # review, so the PR is frozen on a base Orbi is no longer configured
+    # with. The cause names BOTH branches and the PR (the reader must know
+    # which one is which); the action gives the two ways out — put the base
+    # back and continue this PR, or close the PR and let Orbi redo the Issue
+    # from the new base — and composes the ONE unblock step (Issue #1724)
+    # instead of restating it.
+    "failure.base_branch_changed_cause": (
+        "The repository's base branch changed after PR {pr_url} was opened: "
+        "the PR is on `{scene_base_branch}`, while Orbi is now "
+        "configured with `{configured_base_branch}`.",
+        "这个仓库的基础分支在 PR {pr_url} 打开之后被改动了：该 PR 的目标"
+        "分支是 `{scene_base_branch}`，而 Orbi 现在配置的是 "
+        "`{configured_base_branch}`。",
+    ),
+    "failure.base_branch_changed_action": (
+        "{cause} Either set the base branch back to `{scene_base_branch}"
+        "` (the base this PR was opened against) and {unblock_step} to "
+        "continue PR {pr_url}; or close PR {pr_url} so Orbi redoes this Issue "
+        "from `{configured_base_branch}` (then remove "
+        "`ai-blocked` and add `ai-ready`).",
+        "{cause}两种改法选一种：把基础分支改回这个 PR 打开时的 "
+        "`{scene_base_branch}`，然后{unblock_step}，继续 PR "
+        "{pr_url}；或者关闭 PR {pr_url}，让 Orbi 按 "
+        "`{configured_base_branch}` 重新交付这个 Issue（先移除 "
+        "`ai-blocked`、再添加 `ai-ready`）。",
+    ),
     # Issue #2278: the model provider refused a request because the
     # account has no balance (HTTP 402, `insufficient_balance_error`).
     # The cause is the provider account, not the code, and the repair is a

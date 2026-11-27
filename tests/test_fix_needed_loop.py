@@ -683,6 +683,17 @@ def test_delivery_step_base_branch_mismatch_marks_blocked_with_reason(
     # The blocked comment states why automatic recovery is impossible.
     assert "cannot be recovered automatically" in body
     assert "delivery_review_failed" in caplog.text
+    # Issue #2458: the review round records the SAME specific reason as the
+    # resume path, and its Action gives the two ways out.
+    record = failure.parse(body)
+    assert record is not None
+    assert record.reason_code == "base_branch_changed"
+    action_line = next(
+        line for line in body.splitlines()
+        if line.startswith(language.text("en", "failure.action_label"))
+    )
+    assert "set the base branch back to `develop`" in action_line
+    assert "close PR" in action_line
 
 
 # --------------------------------------------------------- verify_resumed_pr
