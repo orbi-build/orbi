@@ -1,0 +1,24 @@
+{
+  "reply": "This repository has only a README so far, so I need to know which first version to build.",
+  "questions": [
+    {
+      "question": "Which first version should Orbi build from the README?",
+      "header": "First version",
+      "options": [
+        {
+          "label": "A CLI that records expenses",
+          "description": "One command adds an expense and another prints the month's total from a local file."
+        },
+        {
+          "label": "A page that lists expenses",
+          "description": "One static page reads the expenses file and shows the entries newest first."
+        },
+        {
+          "label": "A bot that records expenses",
+          "description": "One chat message records an expense and a reply totals the day."
+        }
+      ]
+    }
+  ],
+  "issues": []
+}

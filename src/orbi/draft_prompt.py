@@ -59,6 +59,22 @@ HEADING_LANGUAGE_RULE = (
     "in another language."
 )
 
+# Issue #2472: a first request that names no change at all ("21", "hello",
+# "test") gets ONE question of real tasks read from the repository, none of
+# them marked as the default. A marked option is the engine's own answer
+# (Issue #2198), so a default here would start a change nobody asked for.
+NO_CHANGE_QUESTION_RULE = (
+    "A request that names no change at all (a bare number, a greeting, a "
+    "single word such as \"21\", \"hello\" or \"test\") is answered with "
+    "exactly ONE question and never a draft: after reading the repository, "
+    "give the question 2 to 4 options, each a task this repository needs "
+    "(the label is the task in a few words, the description is one sentence "
+    "naming what changes), and never mark one as the recommended default, "
+    "so the question comes back to the person to pick. In a repository with "
+    "no code yet, offer tasks that build a first version, and take them "
+    "from the README when it describes what to build."
+)
+
 # The one thing a draft may classify, and the closed set of names it may
 # classify with (Issue #2445). The set itself lives in the label table
 # (`draft_document.matched_labels`, which the parser enforces); the prompt
@@ -117,6 +133,7 @@ DRAFTING_RULES = (
     "marker is never translated: it is the engine's, not the person's. "
     "Never add an \"Other\" option and never say the person chose the "
     "recommended option: the person always answers in their own words.\n"
+    "- " + NO_CHANGE_QUESTION_RULE + "\n"
     "- Every other disagreement — which library, font or place to use, "
     "what to leave out, how to word a deliverable version of a change "
     "request that cannot be done as asked — is a decision: take the most "
