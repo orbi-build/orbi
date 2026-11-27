@@ -1,0 +1,11 @@
+{
+  "name": "orbi",
+  "description": "The Orbi plugin for Claude Code: write GitHub Issues an autonomous agent can deliver, hand them to Orbi, and follow each delivery.",
+  "owner": { "name": "Orbi" },
+  "plugins": [
+    {
+      "name": "orbi",
+      "source": "./integrations/claude-plugin"
+    }
+  ]
+}

@@ -18,9 +18,18 @@ turns the answer into ready-to-deliver Issues.
 
 ## Install
 
+Claude Code installs this plugin from the Orbi repository in two commands:
+
+```bash
+claude plugin marketplace add orbi-build/orbi
+claude plugin install orbi@orbi
+```
+
+That loads both skills and the `/orbi:ship` and `/orbi:status` commands.
+
 The `write-ai-ready-issue` skill has one install line per harness:
 
-- **Claude Code** — the plugin, or `.claude/skills/write-ai-ready-issue/`.
+- **Claude Code** — the plugin above, or `.claude/skills/write-ai-ready-issue/`.
 - **Codex** — `.agents/skills/write-ai-ready-issue/`.
 - **Pi** — `--skill <path to the skill folder>`.
 
