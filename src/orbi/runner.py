@@ -105,6 +105,7 @@ from orbi.progress import (
     validate_run_id,
 )
 from orbi.run_fields import RunFields
+from orbi.closed_issue_stop import stop_comment_key
 from orbi.delivery_comment import (
     opened_pr_comment_body,
     pr_attribution_footer,
@@ -1097,10 +1098,12 @@ def deliver_pr(ctx: RunContext, base_branch: str, base_sha: str, *,
     apply, only the committed HEAD is pushed and no base merge runs. The
     Issue state is read directly after the push and before the PR creation;
     a CLOSED Issue returns None — the pushed branch keeps the work, the
-    Issue gets one explanatory comment, and no PR is opened. An Issue that
-    reads OPEN again (reopened) is never turned into a PR either: the
-    interrupted session's commit is not a finished delivery, so the run
-    fails as recoverable and the next tick resumes it.
+    Issue gets one explanatory comment, and no PR is opened. A stop that
+    committed nothing pushed no branch, so its comment says nothing was kept
+    and names none (Issue #2475). An Issue that reads OPEN again (reopened)
+    is never turned into a PR either: the interrupted session's commit is
+    not a finished delivery, so the run fails as recoverable and the next
+    tick resumes it.
     """
     worktree = ctx.worktree
     branch: str = ctx.branch
@@ -1184,14 +1187,11 @@ def deliver_pr(ctx: RunContext, base_branch: str, base_sha: str, *,
     if state not in ("OPEN", "CLOSED"):
         raise ValueError("issue view state must be OPEN or CLOSED")
     if state == "CLOSED":
-        comment_issue(
-            issue, repo=source_repo,
-            body=(f"{run_marker(run_id)}\n"
-                  + language.text(
-                      language_code, "runner.issue_closed",
-                      branch=branch, run_id=run_id,
-                  )),
+        body = f"{run_marker(run_id)}\n" + language.text(
+            language_code, stop_comment_key(committed),
+            branch=branch, run_id=run_id,
         )
+        comment_issue(issue, repo=source_repo, body=body)
         event(
             "delivery_issue_closed", branch=branch, issue=issue,
             repo=source_repo,
