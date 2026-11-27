@@ -1062,6 +1062,7 @@ def deliver_pr(ctx: RunContext, base_branch: str, base_sha: str, *,
                issue_title: str, repo_dir: Path, language_code: str,
                attribution_footer: bool = True,
                attribution_link: str = "https://github.com/orbi-build/orbi",
+               issue_closed_stop: bool = False,
                ) -> str | None:
     """The Runner completes the deterministic delivery closeout.
 
@@ -1089,14 +1090,16 @@ def deliver_pr(ctx: RunContext, base_branch: str, base_sha: str, *,
        verified by `verify_pr` with `require_latest_base=False` (this
        function just fetched and merged the base itself).
 
-    A human may close the Issue while the delivery is in
-    flight (labels/state only affect the next scan, so the in-flight
-    session correctly keeps running). The Issue state is read directly
-    right before the PR creation; a CLOSED Issue returns None — the
-    pushed branch keeps the work, the closed Issue gets one explanatory
-    comment, and no PR is opened (nothing dangles behind a closed
-    Issue). Returns the PR URL, or None when the delivery stopped
-    because the Issue was closed.
+    A human may close the Issue while the delivery is in flight: the
+    session's steering poll then stops the session itself (Issue #2468) and
+    reaches this closeout with `issue_closed_stop=True` — an INTERRUPTED
+    delivery, not a finished one, so the commit-boundary guards below do not
+    apply (uncommitted edits or no commit past the base are what stopping
+    where it was leaves) and only the committed HEAD is pushed. The Issue
+    state is read directly after the push and before the PR creation; a
+    CLOSED Issue returns None — the pushed branch keeps the work, the closed
+    Issue gets one explanatory comment, and no PR is opened (nothing dangles
+    behind a closed Issue).
     """
     worktree = ctx.worktree
     branch: str = ctx.branch
@@ -1113,59 +1116,63 @@ def deliver_pr(ctx: RunContext, base_branch: str, base_sha: str, *,
     # Commit boundary: the Agent's delivery is the
     # committed worktree state.
     local_head, dirty = _agent_delivery_boundary(worktree)
-    if dirty:
-        event(
-            "delivery_uncommitted_changes", level=logging.ERROR,
-            branch=branch, status=" ".join(dirty.splitlines()),
+    if issue_closed_stop:
+        # A session the closed-Issue poll stopped (Issue #2468) is not a
+        # delivery to verify: whatever it committed is pushed, nothing is.
+        committed = local_head != base_sha
+    else:
+        if dirty:
+            event(
+                "delivery_uncommitted_changes", level=logging.ERROR,
+                branch=branch, status=" ".join(dirty.splitlines()),
+            )
+            raise RecoverablePiFailure(
+                f"the agent left uncommitted changes in the worktree "
+                f"({dirty.strip()}); the runner never commits uncommitted "
+                "changes or expands the agent's commit boundary"
+            )
+        # Commit boundary: an empty commit advances HEAD past the frozen
+        # base without changing a file, and a HEAD still on the base is
+        # no delivery either — both stop here (Issue #1581).
+        run_state.delivery_commit_guard(
+            worktree, local_head=local_head, base_sha=base_sha, branch=branch,
         )
-        raise RecoverablePiFailure(
-            f"the agent left uncommitted changes in the worktree "
-            f"({dirty.strip()}); the runner never commits uncommitted "
-            "changes or expands the agent's commit boundary"
+        committed = True
+    if committed:
+        # The delivery branch may already carry pushed commits this
+        # worktree does not hold — a restarted (steered) session, a branch
+        # advanced on GitHub, an earlier run of the Issue. Absorb them
+        # BEFORE the push, so the plain push below is a fast-forward instead
+        # of a rejection that left the Issue ai-blocked (Issue #2273).
+        delivery_push.absorb_pushed_commits(
+            worktree, branch, repo_dir=repo_dir,
         )
-    # Commit boundary: an empty commit advances HEAD past the frozen
-    # base without changing a file, and a HEAD still on the base is no
-    # delivery either — both stop here (Issue #1581).
-    run_state.delivery_commit_guard(
-        worktree, local_head=local_head, base_sha=base_sha, branch=branch,
-    )
-    # The delivery branch may already carry pushed commits this worktree
-    # does not hold — a restarted (steered) session, a branch advanced on
-    # GitHub, an earlier run of the Issue. Absorb them BEFORE the push, so
-    # the plain push below is a fast-forward instead of a rejection that
-    # left the Issue ai-blocked (Issue #2273).
-    delivery_push.absorb_pushed_commits(
-        worktree, branch, repo_dir=repo_dir,
-    )
-    delivery_push.absorb_advanced_base(
-        worktree, base_branch, branch, repo_dir=repo_dir,
-    )
-    # Plain push of the task branch (never a force push), then verify
-    # the remote head: the PR must be created from exactly this head.
-    # The head is re-read after the absorb step: a successful base
-    # merge advanced it to the merge commit. The head is resolved from
-    # the remote itself (ls-remote, refspec independent): the pushed
-    # branch has no local remote-tracking ref in a checkout whose fetch
-    # refspec does not cover it, e.g. a `--single-branch` clone
-    # (Issue #898).
-    local_head = run_command(["git", "rev-parse", "HEAD"], cwd=worktree)
-    # A rejection here means the branch moved outside this run; the leaf's
-    # typed failure names that in plain words (Issue #2273).
-    delivery_push.push_delivery_branch(worktree, branch)
-    remote_head = gitops.remote_branch_head(branch, cwd=worktree)
-    if remote_head != local_head:
-        event(
-            "remote_head_mismatch", level=logging.ERROR,
-            expected=local_head, actual=remote_head, branch=branch,
+        delivery_push.absorb_advanced_base(
+            worktree, base_branch, branch, repo_dir=repo_dir,
         )
-        raise RuntimeError(
-            f"remote head {remote_head} does not match the local head "
-            f"{local_head} after push origin {branch}"
-        )
-    # This delivery's first engine-pushed head (Issue #833): the merge
-    # record's external_commits subtracts exactly the heads the Runner
-    # pushed, and this is the first of them.
-    run_state.record_pushed_head(worktree, local_head)
+        # Plain push of the task branch (never a force push), then verify the
+        # remote head: the PR must be created from exactly this head, re-read
+        # after the absorb (a base merge advanced it). The remote is the
+        # authority (ls-remote, refspec independent: the pushed branch has no
+        # local remote-tracking ref in a `--single-branch` clone, Issue #898).
+        local_head = run_command(["git", "rev-parse", "HEAD"], cwd=worktree)
+        # A rejection here means the branch moved outside this run; the
+        # leaf's typed failure names that in plain words (Issue #2273).
+        delivery_push.push_delivery_branch(worktree, branch)
+        remote_head = gitops.remote_branch_head(branch, cwd=worktree)
+        if remote_head != local_head:
+            event(
+                "remote_head_mismatch", level=logging.ERROR,
+                expected=local_head, actual=remote_head, branch=branch,
+            )
+            raise RuntimeError(
+                f"remote head {remote_head} does not match the local head "
+                f"{local_head} after push origin {branch}"
+            )
+        # This delivery's first engine-pushed head (Issue #833): the merge
+        # record's external_commits subtracts exactly the heads the Runner
+        # pushed, and this is the first of them.
+        run_state.record_pushed_head(worktree, local_head)
     # The closed-Issue guard runs AFTER the push (the work
     # stays on the branch for the human) and BEFORE the PR creation.
     # `gh issue view` is a direct, strongly consistent read — the same
@@ -1189,6 +1196,16 @@ def deliver_pr(ctx: RunContext, base_branch: str, base_sha: str, *,
             repo=source_repo,
         )
         return None
+    if not committed:
+        # Stopped by the closed-Issue poll, but the Issue reads OPEN again
+        # and nothing was committed: there is no delivery to open a PR from,
+        # so the next tick resumes the same run.
+        raise RecoverablePiFailure(
+            "the Pi session was stopped because the Issue was closed, but "
+            f"the Issue reads {state} and the worktree carries no commit "
+            f"past the frozen base {base_sha}; the next tick resumes the "
+            "same run"
+        )
     # Exactly one open PR of the branch: create it when absent (the PR
     # body contract is the Runner's obligation now) and
     # verify it with the full PR contract (exactly one open PR, base,

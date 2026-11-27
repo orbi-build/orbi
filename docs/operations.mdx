@@ -1307,10 +1307,15 @@ and the PR opens on the agent's head — the existing review session
 absorbs the base in-session), absorbs the commits the delivery branch
 already carries on the remote the same way (a restarted session's push, a
 branch advanced on GitHub — never a force push, Issue #2273), then pushes
-the task branch and creates the PR. Before creating the PR the Runner reads the source Issue's state
-directly: an Issue a human closed while the delivery was in flight stops
-the closeout — the pushed branch keeps the work, the closed Issue gets
-one explanatory comment, and no PR is opened (Issue #746). The per-tick
+the task branch and creates the PR. Before creating the PR the Runner reads
+the source Issue's state directly: an Issue a human closed while the
+delivery was in flight stops the closeout — the pushed branch keeps the
+work, the closed Issue gets one explanatory comment, and no PR is opened
+(Issue #746). The session itself already stops earlier: the steering poll
+reads the same state and terminates the session at that poll (Issue #2468),
+so the closeout then pushes only the committed work of the interrupted
+session and the direct read covers an Issue closed in the last seconds
+after the session ended. The per-tick
 orphan-PR sweep in [Workflow](/workflow) covers the reverse order (the
 Issue closed after the PR was opened) and reports the PR for a human
 decision.

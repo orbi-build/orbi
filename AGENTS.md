@@ -33,8 +33,11 @@ contradiction in place for the next delivery to rediscover.
   on the task branch` — the ticket looks failed when the work was in fact done
   by the wrong actor (orbi-website#231, 2026-09-19). Want it done by hand
   instead? Remove `ai-ready` before it is claimed. For an already claimed
-  Issue, close it: the running session is not interrupted, but Orbi opens no
-  PR for it (Issue #2309: the claim removes the queue label,
+  Issue, close it: the steering poll reads the Issue state with the same read
+  that collects corrections, so the session stops at that poll instead of
+  running to its own end (Issue #2468); Orbi then pushes what it committed,
+  opens no PR and comments on the Issue (Issue #2309: the claim removes the
+  queue label,
   so `ai-ready` no longer marks a live run). Removing `ai-in-progress` does
   not stop a running session; it only keeps an interrupted run from being
   resumed. See "Stopping a delivery" in `docs/workflow.mdx`.

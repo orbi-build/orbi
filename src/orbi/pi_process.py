@@ -42,29 +42,16 @@ from orbi.pi_activity import (
 # not call itself stay imported on purpose: `runner`, `pi_session` and the
 # tests read them from here, exactly as before the split.
 from orbi.pi_idle import (
-    PI_IDLE_RECOVERY_CYCLES,
-    PI_IDLE_WARN_SECONDS,
-    PI_IDLE_WAIT_MAX_SECONDS,
+    PI_IDLE_RECOVERY_CYCLES, PI_IDLE_WARN_SECONDS, PI_IDLE_WAIT_MAX_SECONDS,
     IdleRecoveryTracker,
 )
 from orbi.pi_recovery import (
-    STOP_CHILD_GRACE_SECONDS,
-    shutdown_child,
-    slots_idle,
-    upstream_alive,
+    STOP_CHILD_GRACE_SECONDS, shutdown_child, slots_idle, upstream_alive,
 )
 from orbi.pi_stream_log import (
-    _classify_startup_exit,
-    _decode_chunks,
-    _drain_stream,
-    _is_rate_limited,
-    _log_activity,
-    _log_heartbeat,
-    _log_run_failed,
-    _log_startup,
-    _log_startup_failed,
-    _startup_failed_reason,
-    log_provider_config_loaded,
+    _classify_startup_exit, _decode_chunks, _drain_stream, _is_rate_limited,
+    _log_activity, _log_heartbeat, _log_run_failed, _log_startup,
+    _log_startup_failed, _startup_failed_reason, log_provider_config_loaded,
 )
 
 
@@ -174,6 +161,16 @@ class SteeringRequested(RuntimeError):
         self.request = request
         self.round = round
         self.killed_phase = phase
+
+
+class DeliveryIssueClosed(RuntimeError):
+    """Internal control flow: the steering poll found the Issue CLOSED.
+
+    Issue #2468: a closed Issue is not a delivery to finish, so the session
+    stops at the poll instead of running to the end. The exit path terminates
+    and reaps Pi, and the closeout pushes what the session already committed
+    and reports the existing `issue_closed` stop. Never a failure.
+    """
 
 
 # Provider rate-limit retry: a Pi session killed by a
@@ -706,11 +703,9 @@ def _stream_pi_once(
     activity = watcher.poll()
     timed_out = False
     model_wait_dead = False
-    # Startup milestones already reported: each flips once
-    # per session file (a resumed run creates a NEW file, and its
-    # first request/response are the new session's — the watcher
-    # resets the flags on the switch, so the lines fire again for the
-    # new session, exactly once each).
+    # Startup milestones already reported: each flips once per session
+    # file (a resumed run creates a NEW file, and the watcher resets the
+    # flags on the switch, so the lines fire again, once each).
     startup_seen = (False, False, False)
     # Swallowed-model-request probe state: the monotonic
     # moment the /slots probe first reported every slot idle while Pi was
@@ -722,20 +717,17 @@ def _stream_pi_once(
     probe_first_idle: float | None = None
     steering_checked_at = time.monotonic()
     model_wait_swallowed = False
-    # model_wait transitions: one line when the state is
-    # entered and one when it is left; unchanged polls are heartbeats
-    # that carry the state, so a slow model never looks idle and no
-    # warning is ever escalated from a slow response.
+    # model_wait transitions: one line entered, one left; unchanged polls
+    # are heartbeats that carry the state, so a slow model never looks idle
+    # and no warning is ever escalated from a slow response.
     last_model_wait = activity["model_wait"]
     # Idle warning state: at most one `pi_idle` warning per
     # stall; the first new session event after it logs `pi_resumed`.
     idle_warned = False
-    # Idle-stall recovery state (the strategy
-    # class): the escalation (window bookkeeping, TERM →
-    # KILL → session-kill, the timeout evidence chain) lives in the
-    # tracker — the loop mirrors the warning machine's transitions to
-    # it and reads the state back for the progress comment and the
-    # session-kill decision.
+    # Idle-stall recovery state: the escalation (window bookkeeping,
+    # TERM → KILL → session-kill, the timeout evidence chain) lives in the
+    # tracker — the loop mirrors the warning machine's transitions to it
+    # and reads the state back for the progress comment and the kill.
     idle_recovery = IdleRecoveryTracker(
         idle_warn_seconds, run_id=run_id, issue_ref=issue_ref, role=role,
     )
@@ -764,6 +756,11 @@ def _stream_pi_once(
                 steering_checked_at = time.monotonic()
                 try:
                     request = steering_check()
+                except DeliveryIssueClosed:
+                    # The Issue was closed mid-delivery (Issue #2468): the
+                    # session ends here, not at its own end of work.
+                    process.terminate()
+                    raise
                 except Exception as exc:
                     # An unreadable correction is the attachment stop (#2390).
                     if getattr(exc, "failure_record", None) is not None:
@@ -982,9 +979,8 @@ def _stream_pi_once(
                         model_wait_swallowed = True
                         break
                 else:
-                    # A slot is processing (False) or the probe is
-                    # inconclusive (None): no swallow evidence — reset
-                    # the idle window so it must be sustained again.
+                    # A slot is processing or the probe is inconclusive:
+                    # no swallow evidence, the window must sustain again.
                     probe_first_idle = None
             # Hung-model-request detection: the model is expected to reply next
             # (model_wait) and the session file has been frozen for the

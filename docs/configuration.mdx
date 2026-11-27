@@ -79,7 +79,7 @@ See the [`delivery_steered`, `steering_limit_reached`, `steering_poll_failed`, a
 
 | Key | Type | Default | Allowed values | Meaning |
 |---|---|---|---|---|
-| `steering_enabled` | boolean | `true` | `true \| false` | Enables trusted Issue correction polling. See [Steering an active delivery](/workflow#steering-an-active-delivery). |
+| `steering_enabled` | boolean | `true` | `true \| false` | Enables trusted Issue correction polling; the same poll also stops the session of an Issue that was closed ([Stopping a delivery](/workflow#stopping-a-delivery), Issue #2468). See [Steering an active delivery](/workflow#steering-an-active-delivery). |
 | `steering_poll_seconds` | number | `60.0` | finite positive number | Interval between steering polls. Available in `.github/orbi.toml`; no additional floor is enforced. See [Steering an active delivery](/workflow#steering-an-active-delivery). |
 | `steering_max_rounds` | integer | `3` | non-negative integer | Maximum steering restarts per delivery. See [Steering an active delivery](/workflow#steering-an-active-delivery). |
 
