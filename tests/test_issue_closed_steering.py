@@ -396,3 +396,51 @@ def test_a_reopened_issue_never_turns_an_interrupted_commit_into_a_pr(
     assert _pull_request_calls(gh) == []
     assert _closed_comments(gh.comments) == []
     assert "the next tick resumes the same run" in caplog.text
+
+
+def _advance_main(origin: Path, clone: Path, file_name: str = "base.txt") -> None:
+    """Move origin/main from a second clone: the base moved mid-delivery."""
+    other = clone.parent / "main-advance"
+    subprocess.run(
+        ["git", "clone", str(origin), str(other)],
+        capture_output=True, text=True, check=True, timeout=60,
+    )
+    git(other, "config", "user.email", "main@test.local")
+    git(other, "config", "user.name", "Main")
+    (other / file_name).write_text("main moved\n", encoding="utf-8")
+    git(other, "commit", "-am", "main moves")
+    git(other, "push", "origin", "main")
+
+
+def test_a_stopped_session_pushes_its_commit_over_an_advanced_base(
+    monkeypatch, tmp_path, delivery_repo,
+):
+    """The interrupted worktree is expected to be dirty (Issue #2468).
+
+    A stopped session leaves its uncommitted edits behind, and the base can
+    move while it works. A base merge needs a clean tree, so the closeout of
+    a branch that opens no PR must not absorb the base: the committed work is
+    pushed and the Issue still gets its closed-mid-delivery comment.
+    """
+    origin, clone = delivery_repo
+    base_sha = git(clone, "rev-parse", "HEAD")
+    git(clone, "checkout", "-b", BRANCH, base_sha)
+    (clone / "delivered.txt").write_text("delivered\n", encoding="utf-8")
+    git(clone, "add", "delivered.txt")
+    git(clone, "commit", "-m", "deliver the change")
+    # The session's leftover edit, on a file the moved base also changes:
+    # `git merge origin/main` refuses this worktree.
+    (clone / "base.txt").write_text("leftover\n", encoding="utf-8")
+    _advance_main(origin, clone)
+    gh = FakeGitHub()
+    monkeypatch.setattr(seam, "run_command", gh.run_command)
+
+    assert runner.deliver_pr(
+        RunContext(RUN_ID, ISSUE, BRANCH, clone, SOURCE_REPO),
+        "main", base_sha, issue_title="Deliver", repo_dir=clone,
+        language_code="en", issue_closed_stop=True,
+    ) is None
+    # The work the session committed reached the pushed branch.
+    assert git(origin, "show", f"{BRANCH}:delivered.txt") == "delivered"
+    assert len(_closed_comments(gh.comments)) == 1
+    assert _pull_request_calls(gh) == []

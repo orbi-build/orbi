@@ -1094,13 +1094,13 @@ def deliver_pr(ctx: RunContext, base_branch: str, base_sha: str, *,
     session's steering poll then stops the session itself (Issue #2468) and
     reaches this closeout with `issue_closed_stop=True` — an INTERRUPTED
     delivery, not a finished one, so the commit-boundary guards below do not
-    apply and only the committed HEAD is pushed. The Issue state is read
-    directly after the push and before the PR creation; a CLOSED Issue
-    returns None — the pushed branch keeps the work, the Issue gets one
-    explanatory comment, and no PR is opened. An Issue that reads OPEN again
-    (reopened) is never turned into a PR either: the interrupted session's
-    commit is not a finished delivery, so the run fails as recoverable and
-    the next tick resumes it.
+    apply, only the committed HEAD is pushed and no base merge runs. The
+    Issue state is read directly after the push and before the PR creation;
+    a CLOSED Issue returns None — the pushed branch keeps the work, the
+    Issue gets one explanatory comment, and no PR is opened. An Issue that
+    reads OPEN again (reopened) is never turned into a PR either: the
+    interrupted session's commit is not a finished delivery, so the run
+    fails as recoverable and the next tick resumes it.
     """
     worktree = ctx.worktree
     branch: str = ctx.branch
@@ -1114,8 +1114,7 @@ def deliver_pr(ctx: RunContext, base_branch: str, base_sha: str, *,
         raise RuntimeError(
             f"Pi changed branch: expected={branch} actual={current_branch}"
         )
-    # Commit boundary: the Agent's delivery is the
-    # committed worktree state.
+    # Commit boundary: the Agent's delivery is the committed worktree state.
     local_head, dirty = _agent_delivery_boundary(worktree)
     if issue_closed_stop:
         # A session the closed-Issue poll stopped (Issue #2468) is not a
@@ -1140,22 +1139,24 @@ def deliver_pr(ctx: RunContext, base_branch: str, base_sha: str, *,
         )
         committed = True
     if committed:
-        # The delivery branch may already carry pushed commits this
-        # worktree does not hold — a restarted (steered) session, a branch
-        # advanced on GitHub, an earlier run of the Issue. Absorb them
-        # BEFORE the push, so the plain push below is a fast-forward instead
-        # of a rejection that left the Issue ai-blocked (Issue #2273).
+        # The delivery branch may already carry pushed commits this worktree
+        # does not hold — a restarted (steered) session, a branch advanced on
+        # GitHub, an earlier run. Absorb them BEFORE the push, so the plain
+        # push below is a fast-forward (Issue #2273).
         delivery_push.absorb_pushed_commits(
             worktree, branch, repo_dir=repo_dir,
         )
-        delivery_push.absorb_advanced_base(
-            worktree, base_branch, branch, repo_dir=repo_dir,
-        )
+        if not issue_closed_stop:
+            # A stopped session's worktree carries uncommitted edits and a
+            # base merge needs a clean tree; this branch opens no PR.
+            delivery_push.absorb_advanced_base(
+                worktree, base_branch, branch, repo_dir=repo_dir,
+            )
         # Plain push of the task branch (never a force push), then verify the
         # remote head: the PR must be created from exactly this head, re-read
         # after the absorb (a base merge advanced it). The remote is the
-        # authority (ls-remote, refspec independent: the pushed branch has no
-        # local remote-tracking ref in a `--single-branch` clone, Issue #898).
+        # authority (ls-remote, refspec independent: a `--single-branch`
+        # clone has no local remote-tracking ref, Issue #898).
         local_head = run_command(["git", "rev-parse", "HEAD"], cwd=worktree)
         # A rejection here means the branch moved outside this run; the
         # leaf's typed failure names that in plain words (Issue #2273).
@@ -1174,10 +1175,9 @@ def deliver_pr(ctx: RunContext, base_branch: str, base_sha: str, *,
         # record's external_commits subtracts exactly the heads the Runner
         # pushed, and this is the first of them.
         run_state.record_pushed_head(worktree, local_head)
-    # The closed-Issue guard runs AFTER the push (the work
-    # stays on the branch for the human) and BEFORE the PR creation.
-    # `gh issue view` is a direct, strongly consistent read — the same
-    # property `has_in_progress_label` relies on.
+    # The closed-Issue guard runs AFTER the push (the work stays on the
+    # branch for the human) and BEFORE the PR creation. `gh issue view` is a
+    # direct, strongly consistent read, as `has_in_progress_label` relies on.
     details = issue_view(issue, "state", repo=source_repo,
                          cwd=worktree, timeout=30)
     state = details.get("state") if isinstance(details, dict) else None
