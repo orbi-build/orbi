@@ -692,7 +692,7 @@ Round input and output:
 
 ```json
 {"message": "one sentence", "conversation": [{"role": "person", "text": "..."}], "draft": {"issues": []}, "attachments": [{"name": "screen.png", "src": "./screen.png"}]}
-{"reply": "what will change", "questions": [{"question": "What should the other person get?", "header": "Sharing", "options": [{"label": "A read-only link (Recommended)", "description": "Opens the list, cannot change it."}, {"label": "An editable link", "description": "Lets whoever holds it change the list."}]}], "issues": [{"title": "...", "body": "...", "after": 1, "attachments": [1, 2]}], "check": "passed", "warning": "..."}
+{"reply": "what will change", "questions": [{"question": "What should the other person get?", "header": "Sharing", "options": [{"label": "A read-only link (Recommended)", "description": "Opens the list, cannot change it."}, {"label": "An editable link", "description": "Lets whoever holds it change the list."}]}], "issues": [{"title": "...", "body": "...", "after": 1, "attachments": [1, 2], "labels": ["bug", "p0"]}], "check": "passed", "warning": "..."}
 ```
 
 `questions` carries at most three questions, in one round. A question is
@@ -712,7 +712,16 @@ person's own answer is always allowed. A question is always returned in the shap
 was accepted in, so a bare string comes back as `{"question": "..."}`.
 
 `after` is the 1-based number of an EARLIER Issue in the same draft that this one
-waits for, or is absent. `issues` is empty when the round only asks questions; a
+waits for, or is absent. `labels` is the match the drafting session made from the
+request, and it is a closed set: `bug` when the request describes behaviour that is
+supposed to work today and does not, `p0` only when the request says the problem is
+urgent or blocking (an outage, data loss, every delivery stopped). A plain new feature
+carries neither, the field is absent when nothing matched, and an urgency the request
+does not state is never `p0`. The claim order reads `p0` before `bug` before plain,
+so the match decides the pickup order. Any other name is refused — the answer is
+`invalid_draft` with the engine's own reason, which the draft tools hand back to the
+session, so the model corrects it there and no answer file is written (Issue #2445).
+`issues` is empty when the round only asks questions; a
 draft round carries at least one Issue. A request that explicitly asks for no code
 change ("just review it and tell me", "don't touch the code") ends with `issues`
 and `questions` both empty and the answer in `reply`: that reply-only round runs
@@ -726,11 +735,15 @@ or returned nothing: the draft is still returned.
 Creation input, and the created numbers on stdout:
 
 ```json
-{"key": "the caller's draft id", "issues": [{"title": "...", "body": "...", "after": 1, "attachments": [1]}], "header": "optional text above every body", "issue": 12, "attachments": [{"name": "screen.png", "src": "./screen.png"}]}
+{"key": "the caller's draft id", "issues": [{"title": "...", "body": "...", "after": 1, "attachments": [1], "labels": ["bug"]}], "header": "optional text above every body", "issue": 12, "attachments": [{"name": "screen.png", "src": "./screen.png"}]}
 {"created": [41, 42, 43]}
 ```
 
-`issue` is absent for new Issues, and set to add detail to an existing Issue: with one
+A new Issue's `labels` ride in the SAME create that opens it
+(`gh issue create --label ...`, one flag per name), and the dispatch label is
+added afterwards as before; the fidelity pass and the one rewrite of a body the
+pre-work check bounced keep the drafter's match. `issue` is absent for new
+Issues, and set to add detail to an existing Issue: with one
 drafted Issue its body is appended once and `ai-needs-detail` becomes the dispatch
 label; with several, that Issue becomes the parent of the drafted Issues (native
 sub-issues, `blockedBy` for `after`, dispatch label last, `ai-epic` on the parent).

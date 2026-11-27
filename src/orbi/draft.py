@@ -53,6 +53,7 @@ from orbi.draft_document import (
     DraftIssue,
     DraftRound,
     invalid_input,
+    keep_matched_labels,
     named_in_reply,
     parse_answer,
     parse_issues,
@@ -580,7 +581,7 @@ def fidelity_pass(
     return tuple(
         DraftIssue(
             title=entry.title, body=entry.body, after=drafted.after,
-            attachments=drafted.attachments,
+            attachments=drafted.attachments, labels=drafted.labels,
         )
         for entry, drafted in zip(revised, issues)
     ), None
@@ -762,7 +763,9 @@ def _apply_check(
         return issues, check, warning or f"rewrite_failed: {exc.code}", reply
     if answer.questions or not answer.issues:
         return issues, check, warning or "rewrite_failed: no_draft", reply
-    rewritten = answer.issues
+    # The label match is the drafter's classification, not wording, so a
+    # rewrite fixes the body and keeps it (Issue #2445).
+    rewritten = keep_matched_labels(answer.issues, issues)
     check, _failed = check_draft(
         config, repo, run_id=run_id, issues=rewritten,
     )
@@ -825,7 +828,8 @@ def _queue_positions(
     dependency. The Attachments section is written in the SAME create, below
     the draft marker (Issue #2364), restricted to the files the Issue uses:
     an upload of the draft's own files for a new ticket, or the links copied
-    from the original Issue's body for the '/orbi split' outcome.
+    from the original Issue's body for the '/orbi split' outcome. The labels
+    the draft matched travel with that same create (Issue #2445).
     """
     existing = _existing_positions(repo, key)
     numbers: dict[int, int] = {}
@@ -843,7 +847,8 @@ def _queue_positions(
                     _drafted_body(item, header), key=key, position=position,
                     section=attachments.section(source),
                 ),
-                milestone=milestone, step="create the drafted Issue",
+                labels=list(item.labels), milestone=milestone,
+                step="create the drafted Issue",
                 filed=source if isinstance(source, attachments.Filing) else None,
             )
             if isinstance(source, attachments.Filing):
