@@ -587,3 +587,56 @@ def make_hung_pi(tmp_path, *, child_sleep=10.0, ignore_sigterm=False,
         f"sys.exit({exit_code!r})\n"
     )
     return [sys.executable, "-c", script]
+
+
+def make_committing_fake_pi(path: Path, *, finished: Path,
+                            file_name: str = "delivered.txt",
+                            content: str = "delivered\n",
+                            commit: bool = True,
+                            stream_writes: int = 250,
+                            stream_interval: float = 0.02,
+                            sleep: float = 60.0) -> Path:
+    """Write an executable fake Pi that commits one file and then blocks.
+
+    Issue #2468: a delivery scene needs a session that really delivers (a
+    commit on the worktree's branch) and then KEEPS RUNNING, so the steering
+    poll's stop — not the session's own end of work — is what ends it. The
+    script writes a session record, commits `file_name` (`commit=False`
+    leaves it as uncommitted work instead — the interrupted session of a
+    stop before the delivery commit), streams one line per
+    `stream_interval` (the live pipe keeps the poll loop iterating instead
+    of waiting out `poll_interval`) and finally, only when nothing stopped
+    it, writes the `finished` marker and exits.
+
+    The command is the script itself: `RunnerConfig.pi_executable` points at
+    it, so the session runs the real `run_pi` -> `stream_pi` path with no
+    patch.
+    """
+    script = (
+        f"#!{sys.executable}\n"
+        "import json, os, subprocess, sys, time\n"
+        "from datetime import datetime, timezone\n"
+        "os.makedirs('.pi-session', exist_ok=True)\n"
+        "with open(os.path.join('.pi-session', 'session.jsonl'), 'a') as f:\n"
+        "    f.write(json.dumps({'type': 'session', 'id': 'sess-1',\n"
+        "        'timestamp': datetime.now(timezone.utc).isoformat(),\n"
+        "        'cwd': os.getcwd()}) + '\\n')\n"
+        f"with open({file_name!r}, 'w') as f:\n"
+        f"    f.write({content!r})\n"
+        + (
+            f"subprocess.run(['git', 'add', {file_name!r}], check=True)\n"
+            "subprocess.run(['git', 'commit', '-q', '-m',\n"
+            "    'deliver the change'], check=True)\n"
+            "print('committed', flush=True)\n"
+            if commit else "print('uncommitted', flush=True)\n"
+        ) +
+        f"for _ in range({stream_writes}):\n"
+        f"    time.sleep({stream_interval!r})\n"
+        "    print('working', flush=True)\n"
+        f"time.sleep({sleep!r})\n"
+        f"with open({str(finished)!r}, 'w') as f:\n"
+        "    f.write('finished')\n"
+    )
+    path.write_text(script, encoding="utf-8")
+    path.chmod(0o755)
+    return path

@@ -77,6 +77,7 @@ from orbi.pi_activity import activity_snapshot, sanitize
 from orbi.pi_command import ROLE_TICKET
 from orbi.pi_process import (
     ROLE_IMPLEMENT,
+    DeliveryIssueClosed,
     ModelWaitDeadError,
     RecoverablePiFailure,
 )
@@ -149,6 +150,10 @@ class _Attempt:
     publish: Callable[..., None] | None = None
     resume_ctx: str | None = None
     pr_opened: bool = False
+    # The steering poll found the Issue closed and stopped the session
+    # (Issue #2468): the closeout then pushes what it committed and reports
+    # the existing `issue_closed` stop, with no PR.
+    issue_closed_stop: bool = False
 
 
 def dispatch_implementation(issue: dict, source_repo: str,
@@ -545,15 +550,23 @@ def _run_session(attempt: _Attempt, *,
         )),
     )
     if facts.takeover_pr is None:
-        pi_session.run_pi(
-            attempt.issue, ctx, config,
-            resume_context=attempt.resume_ctx,
-            progress=LiveProgressThrottle(
-                ctx, publisher, title=title, role=ROLE_IMPLEMENT,
-                started=attempt.started, pr_url=None, review_round=0,
-                priority=attempt.priority,
-            ),
-        )
+        try:
+            pi_session.run_pi(
+                attempt.issue, ctx, config,
+                resume_context=attempt.resume_ctx,
+                progress=LiveProgressThrottle(
+                    ctx, publisher, title=title, role=ROLE_IMPLEMENT,
+                    started=attempt.started, pr_url=None, review_round=0,
+                    priority=attempt.priority,
+                ),
+            )
+        except DeliveryIssueClosed:
+            # The steering poll found the Issue closed and terminated the
+            # session where it was (Issue #2468). The plan milestone and the
+            # ops evidence path are moot: the closeout pushes the committed
+            # work and reports the existing `issue_closed` stop.
+            attempt.issue_closed_stop = True
+            return None
     publish(
         action=lambda: plan_milestone.publish(
             publisher, attempt.worktree),
@@ -591,6 +604,7 @@ def _closeout_implementation(attempt: _Attempt) -> IssueResult:
             language_code=language.of(config),
             attribution_footer=config.attribution_footer,
             attribution_link=config.attribution_link,
+            issue_closed_stop=attempt.issue_closed_stop,
         )
     )
     attempt.ctx = replace(attempt.ctx, pr=pr_url)

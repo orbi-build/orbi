@@ -41,10 +41,11 @@ def _config(tmp_path: Path, **kwargs):
         run_id="abc12345", **kwargs)
 
 
-def _snapshot(comments, body="body"):
-    """The widened per-poll payload the steering check reads (Issue #1094):
-    the same `gh issue view` that lists the comments also returns the body."""
-    snapshot = {"comments": comments}
+def _snapshot(comments, body="body", state="OPEN"):
+    """The per-poll payload the steering check reads (Issues #1094, #2468):
+    the same `gh issue view` that lists the comments also returns the body
+    and the Issue state."""
+    snapshot = {"comments": comments, "state": state}
     if body is not None:
         snapshot["body"] = body
     return snapshot

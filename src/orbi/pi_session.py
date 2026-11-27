@@ -43,6 +43,7 @@ from orbi.pi_command import (
 )
 from orbi.pi_process import (
     ROLE_IMPLEMENT,
+    DeliveryIssueClosed,
     PiWatchOptions,
     SteeringRequest,
     stream_pi,
@@ -541,13 +542,17 @@ def run_pi(issue: dict, ctx: RunContext, config: config_domain.RunnerConfig, *,
             )
         try:
             # Read the editor only when the snapshot shows a body edit.
+            # The same read carries the Issue state (Issue #2468).
             snapshot = issue_view(
-                int(issue["number"]), "comments,body",
+                int(issue["number"]), "comments,body,state",
                 repo=source_repo, timeout=30,
             )
             comments = snapshot.get("comments")
             if not isinstance(comments, list):
                 raise ValueError("issue comments must be a JSON array")
+            state = snapshot.get("state")
+            if state not in ("OPEN", "CLOSED"):
+                raise ValueError("issue view state must be OPEN or CLOSED")
         except Exception as exc:
             event(
                 "steering_poll_failed", level=logging.WARNING,
@@ -555,6 +560,13 @@ def run_pi(issue: dict, ctx: RunContext, config: config_domain.RunnerConfig, *,
                 reason=type(exc).__name__,
             )
             return None
+        if state == "CLOSED":
+            # A closed Issue is not a delivery to finish (Issue #2468): the
+            # session stops at this poll and the closeout pushes what it
+            # committed, comments and opens no PR.
+            raise DeliveryIssueClosed(
+                f"issue {source_repo}#{issue['number']} was closed"
+            )
         edit = poll_body_edit(
             snapshot, steering_body, number=int(issue["number"]), repo=source_repo,
         )

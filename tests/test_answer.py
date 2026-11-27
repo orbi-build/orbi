@@ -566,6 +566,7 @@ def test_a_steering_answer_updates_the_body_and_restarts_the_session_once(
         lambda *a, **k: {
             "comments": gh.issues[TICKET]["comments"],
             "body": gh.issues[TICKET]["body"],
+            "state": "OPEN",
         },
     )
     monkeypatch.setitem(
@@ -627,6 +628,7 @@ def test_a_run_marked_engine_comment_does_not_restart_the_session(
         lambda *a, **k: {
             "comments": gh.issues[TICKET]["comments"],
             "body": gh.issues[TICKET]["body"],
+            "state": "OPEN",
         },
     )
     monkeypatch.setitem(
@@ -899,6 +901,7 @@ def test_the_last_answer_wins_at_every_stage(monkeypatch, tmp_path):
         lambda *a, **k: {
             "comments": poll.issues[TICKET]["comments"],
             "body": poll.issues[TICKET]["body"],
+            "state": "OPEN",
         },
     )
     monkeypatch.setitem(

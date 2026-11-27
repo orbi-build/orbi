@@ -195,6 +195,10 @@ is reached, further corrections do not restart that delivery and the journal
 records `steering_limit_reached`. Let the current delivery finish, then put the
 revised scope in a follow-up delivery.
 
+The same poll reads the Issue's state, so closing the Issue ends the
+session at that poll instead of running it to the end
+([Stopping a delivery](#stopping-a-delivery), Issue #2468).
+
 The Runner applies the same trust rule to the comment author and the last
 editor of the Issue body. A correction can steer if GitHub reports `admin`
 or `write` for that login (`collaborators/{login}/permission`) or the login
@@ -504,14 +508,19 @@ merge failure, remains `ai-blocked`.
 ### Stopping a delivery
 
 - **Not claimed yet:** remove the queue label.
-- **Running now:** close the Issue. The running session is not interrupted;
-  when it finishes, Orbi pushes the work to the task branch, opens no PR and
-  comments on the Issue that the delivery stopped. If the PR is already open,
-  later ticks no longer pick the delivery up, so Orbi does not review or merge
-  it again and comments on the PR: merge it to keep the work, or close it. A
-  review round that is already running is not interrupted and can still
-  merge; to hold that merge, add `ai-blocked`, which the merge gate reads
-  right before merging. Removing a label does not stop a running session.
+- **Running now:** close the Issue. The session stops within one steering
+  poll (`steering_poll_seconds`, 60 seconds by default) instead of running to
+  its end: the poll that collects corrections also reads the Issue's state,
+  and a closed Issue terminates the session where it is (Issue #2468). Orbi
+  then pushes whatever the session had already committed to the task branch,
+  opens no PR and comments on the Issue that the delivery stopped (the run
+  ends `issue_closed`), so the slot is free for the next ticket. If the PR is
+  already open, later ticks no longer pick the delivery up, so Orbi does not
+  review or merge it again and comments on the PR: merge it to keep the work,
+  or close it. A review round that is already running is not interrupted and
+  can still merge; to hold that merge, add `ai-blocked`, which the merge gate
+  reads right before merging. Removing a label does not stop a running
+  session.
 - **Interrupted** (the Runner was killed and the next tick would resume it):
   an implement-phase run is found by `ai-in-progress` plus this deployment's
   own task worktree and run state file (Issue #2309). Remove
