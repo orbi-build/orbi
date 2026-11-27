@@ -1,0 +1,24 @@
+{
+  "reply": "This repository already does quite a lot, so I need one task from you before drafting: none of these is the one you meant.",
+  "questions": [
+    {
+      "question": "Which task should Orbi deliver first in this repository?",
+      "header": "Next task",
+      "options": [
+        {
+          "label": "Retry a failed GitHub read",
+          "description": "A GitHub read that fails on a transient error is retried instead of ending the delivery."
+        },
+        {
+          "label": "List the waiting Issues in orbi status",
+          "description": "orbi status names the ready Issues waiting for a claim, oldest first."
+        },
+        {
+          "label": "Name the failed check in the blocked comment",
+          "description": "The comment that ends a blocked run names the check that failed and the file to look at."
+        }
+      ]
+    }
+  ],
+  "issues": []
+}

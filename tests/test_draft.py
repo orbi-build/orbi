@@ -2006,6 +2006,78 @@ def test_the_reply_tool_description_carries_the_no_code_route():
         assert text in source, text
 
 
+# --- a request that names no change gets a question of repository tasks ---
+# (Issue #2472)
+
+# One rule in both texts the model reads: the drafting prompt and the
+# ask_user tool description. The plainest wording is the assertion, so a
+# reword is a test change.
+NO_CHANGE_ONE_QUESTION = "names no change at all"
+NO_CHANGE_REPOSITORY_TASKS = "each a task this repository needs"
+NO_CHANGE_NO_DEFAULT = "never mark one as the recommended default"
+
+# Two real model answers in the shape the rule asks for: one repository with
+# code, one that has only a README. Each is one question, three tasks, none
+# marked as the default.
+NO_CHANGE_FIXTURES = (
+    "no-change-request.en.json",
+    "no-change-request-empty-repo.en.json",
+)
+
+
+@pytest.mark.parametrize("name", NO_CHANGE_FIXTURES)
+def test_a_request_that_names_no_change_returns_one_question_of_tasks(
+    name, config, sessions, monkeypatch, tmp_path,
+):
+    """Issue #2472: "21" names no change, so the round returns the one
+    question with the 2 to 4 repository tasks it was offered, in order and
+    with their descriptions, and no option is taken: the person picks."""
+    draft_fakes.judge_passing(monkeypatch)
+    fixture = model_answer(name)
+    sessions.queue(fixture)
+    code, out, err = run_round_cli(
+        config, {"message": "21"}, tmp_path / "session",
+    )
+    assert code == 0, err
+    answer = json.loads(out)
+    assert answer["issues"] == []
+    assert [entry["question"] for entry in answer["questions"]] == [
+        fixture["questions"][0]["question"],
+    ]
+    assert answer["questions"] == fixture["questions"]
+    options = answer["questions"][0]["options"]
+    assert len(options) == 3
+    assert [option["label"] for option in options] == [
+        option["label"] for option in fixture["questions"][0]["options"]
+    ]
+    assert [option["description"] for option in options] == [
+        option["description"]
+        for option in fixture["questions"][0]["options"]
+    ]
+    # No option is the engine's to take, so the reply names none of them and
+    # no draft round ran (no fidelity pass, no pre-work check).
+    assert recommended_options(fixture) == []
+    assert answer["reply"] == fixture["reply"]
+    assert "check" not in answer
+    assert sessions.fidelity_calls == []
+
+
+def test_the_no_change_rule_reaches_the_prompt_and_the_ask_user_tool():
+    """The prompt and the tool never disagree (Issue #2472): both say a
+    request that names no change gets one question of tasks with no
+    recommended option."""
+    prompt = draft.draft_system_prompt()
+    source = flattened(draft.DRAFT_EXTENSION)
+    for text in (
+        NO_CHANGE_ONE_QUESTION, NO_CHANGE_REPOSITORY_TASKS,
+        NO_CHANGE_NO_DEFAULT,
+    ):
+        assert text in prompt, text
+        assert text in source, text
+    assert "README" in prompt
+    assert "README" in source
+
+
 def test_the_drafting_rules_write_assumptions_only_when_a_decision_was_taken():
     """Issue #2148: the prompt no longer asks for an Assumptions section in
     every Issue body, matching the skill's non-empty rule."""

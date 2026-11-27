@@ -328,6 +328,22 @@ def test_the_changed_answer_contract_is_documented():
     )
 
 
+def test_the_no_change_request_question_is_documented():
+    """Issue #2472: a request that names no change gets one question of
+    repository tasks with no recommended option, so the engine returns the
+    question instead of starting a change nobody asked for."""
+    text = public_contracts_text()
+    for marker in (
+        "names no change at all",
+        "exactly one question",
+        "tasks that repository needs",
+        "no option is marked",
+        "build a first version",
+        "README",
+    ):
+        assert marker in text, f"no-change question contract misses: {marker!r}"
+
+
 def test_the_command_receipt_contract_is_documented():
     text = public_contracts_text()
     for marker in RECEIPT_CONTRACT_MARKERS:

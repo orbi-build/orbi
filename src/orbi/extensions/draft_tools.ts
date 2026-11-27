@@ -321,7 +321,17 @@ export const askUserTool = {
 		"label ends with (Recommended), a marker that is never translated: " +
 		"the engine reads it. Never add an Other option, and never " +
 		"say the person chose the recommended option: the person always " +
-		"answers in their own words. Call this only " +
+		"answers in their own words. A request that names no change at all " +
+		"(a bare number, a greeting, a single word such as \"21\", \"hello\" " +
+		"or \"test\") is answered with exactly ONE question and never a " +
+		"draft: " +
+		"after reading the repository, give the question 2 to 4 options, " +
+		"each a task this repository needs (the label is the task in a few " +
+		"words, the description is one sentence naming what changes), and " +
+		"never mark one as the recommended default, so the question comes " +
+		"back to the person to pick. In a repository with no code yet, " +
+		"offer tasks that build a first version, and take them from the " +
+		"README when it describes what to build. Call this otherwise only " +
 		"when the request itself does not say what to build and no " +
 		"deliverable default can be written, and never in the same turn as " +
 		"write_draft or reply.",
