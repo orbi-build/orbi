@@ -7,7 +7,7 @@ directory reads at its default path, ``.claude-plugin/icon.svg`` (Issue
 on the user's own ``gh`` CLI. These tests pin the shape the claude.com plugin
 directory, the Agent Plugins 1.0 root manifest (Issue #1404), the Cursor
 marketplace manifest (Issue #1437) and the repository's contract require,
-and they carry twenty counter-proofs (six for the claude.com and Agent
+and they carry twenty-five counter-proofs (six for the claude.com and Agent
 Plugins manifests: a fixture copy with ``hooks/``, one without
 ``homepage``, one missing the ``author.url`` ref, one with
 ``skills/x/logo.svg``, one with a ``logo`` key in the root manifest, and
@@ -23,7 +23,11 @@ top-level ``description``, and one with mismatched top-level
 ``SKILL.md`` loses the relative-change rule, one whose ``SKILL.md``
 loses the evidence requirement for a line citation, and two whose
 heading-language rule (Issue #2433) is removed, one from the fidelity pass
-and one from ``SKILL.md``) so a future change
+and one from ``SKILL.md``; and five for the Claude Code marketplace
+manifest (Issue #2449): one without ``owner``, one whose marketplace name
+is not ``orbi``, one whose entry source lacks the leading ``./``, one whose
+source has no plugin manifest, and one that repeats the plugin version in
+the entry) so a future change
 cannot silently turn the assertions into no-ops.
 
 The checks are pure file reads: no ``orbi`` import, no network, no ``gh``.
@@ -660,6 +664,206 @@ def test_fixture_marketplace_keywords_mismatch_fails(tmp_path):
     path.write_text(json.dumps(data), encoding="utf-8")
     with pytest.raises(AssertionError):
         check_cursor_marketplace(repo_root)
+
+
+# --- Claude Code marketplace manifest (Issue #2449) ---------------------------
+# The plugin folder is integrations/claude-plugin, not the repository root, so
+# `claude plugin marketplace add orbi-build/orbi` only works with a marketplace
+# manifest at the repository root that lists it (code.claude.com/docs/en/
+# plugin-marketplaces: the file lives at .claude-plugin/marketplace.json and a
+# relative source resolves from the marketplace root, the directory that
+# contains .claude-plugin/).
+CLAUDE_MARKETPLACE_REL = Path(".claude-plugin") / "marketplace.json"
+CLAUDE_MARKETPLACE_NAME = "orbi"
+CLAUDE_PLUGIN_ENTRY = "orbi"
+# The install id is <entry name>@<marketplace name>; the repository name is
+# what the user types into `claude plugin marketplace add`.
+CLAUDE_INSTALL_COMMANDS = (
+    "claude plugin marketplace add orbi-build/orbi",
+    "claude plugin install orbi@orbi",
+)
+# Marketplace name rule (plugins/marketplace-reference.md#top-level-fields):
+# letters, digits, `.`, `_` and `-`, starting with a letter or digit, no `..`.
+CLAUDE_MARKETPLACE_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+
+
+def load_claude_marketplace(repo_root: Path = REPO_ROOT) -> dict:
+    path = repo_root / CLAUDE_MARKETPLACE_REL
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def check_claude_marketplace(repo_root: Path = REPO_ROOT) -> None:
+    """Pin the Claude Code marketplace manifest to the real plugin folder
+    (Issue #2449): the required top-level fields, the marketplace name
+    `orbi`, one entry named `orbi` whose relative source starts with `./` and
+    resolves to integrations/claude-plugin, that folder's plugin.json, and no
+    second version the entry could show instead of the manifest's."""
+    path = repo_root / CLAUDE_MARKETPLACE_REL
+    assert path.is_file(), (
+        f"Claude Code marketplace manifest missing: {CLAUDE_MARKETPLACE_REL}"
+    )
+    marketplace = load_claude_marketplace(repo_root)
+    assert isinstance(marketplace, dict), "marketplace.json must be an object"
+    name = marketplace.get("name")
+    assert isinstance(name, str) and name, "marketplace missing name"
+    assert CLAUDE_MARKETPLACE_NAME_RE.match(name) and ".." not in name, (
+        f"invalid marketplace name: {name!r}"
+    )
+    assert name == CLAUDE_MARKETPLACE_NAME, (
+        f"marketplace name must be {CLAUDE_MARKETPLACE_NAME!r} so the install "
+        f"id is {CLAUDE_PLUGIN_ENTRY}@{CLAUDE_MARKETPLACE_NAME}: {name!r}"
+    )
+    owner = marketplace.get("owner")
+    assert isinstance(owner, dict) and owner.get("name"), (
+        "marketplace missing owner.name"
+    )
+    # `claude plugin validate` warns when the marketplace has no description.
+    description = marketplace.get("description")
+    assert isinstance(description, str) and description.strip(), (
+        "marketplace missing description (claude plugin validate warns)"
+    )
+    plugins = marketplace.get("plugins")
+    assert isinstance(plugins, list), "marketplace missing plugins array"
+    assert len(plugins) == 1, (
+        f"marketplace must list exactly one plugin, got {len(plugins)}"
+    )
+    entry = plugins[0]
+    assert isinstance(entry, dict), "the plugin entry must be an object"
+    assert entry.get("name") == CLAUDE_PLUGIN_ENTRY, (
+        f"plugin entry name must be {CLAUDE_PLUGIN_ENTRY!r}: "
+        f"{entry.get('name')!r}"
+    )
+    source = entry.get("source")
+    assert isinstance(source, str) and source.startswith("./"), (
+        "a plugin inside the marketplace repository needs a relative source "
+        f"that starts with './': {source!r}"
+    )
+    assert ".." not in source, f"source must not contain '..': {source!r}"
+    expected = (repo_root / CURSOR_PLUGIN_REL).resolve()
+    assert (repo_root / source).resolve() == expected, (
+        f"source must resolve to {CURSOR_PLUGIN_REL.as_posix()!r}: {source!r}"
+    )
+    assert (repo_root / source / MANIFEST_REL).is_file(), (
+        f"source has no plugin manifest {MANIFEST_REL}: {source}"
+    )
+    # plugin.json is the one version source: when the entry also set
+    # `version`, plugin.json would win and `claude plugin validate` would warn.
+    assert "version" not in entry, (
+        "the marketplace entry must not carry a version; the version Claude "
+        "Code shows is the one in the plugin's "
+        f"{MANIFEST_REL.as_posix()}"
+    )
+
+
+def test_claude_marketplace_exists_and_parses():
+    assert isinstance(load_claude_marketplace(), dict)
+
+
+def test_claude_marketplace_points_at_the_plugin_folder():
+    check_claude_marketplace()
+
+
+def test_readmes_show_the_two_claude_code_install_commands():
+    """The user installs the plugin with two shell commands (Issue #2449), so
+    each README a user lands on shows both of them verbatim."""
+    for path in (
+        REPO_ROOT / "README.md",
+        REPO_ROOT / "README.zh-CN.md",
+        PLUGIN_DIR / "README.md",
+    ):
+        text = path.read_text(encoding="utf-8")
+        for command in CLAUDE_INSTALL_COMMANDS:
+            assert command in text, (
+                f"{path.relative_to(REPO_ROOT)} is missing the install "
+                f"command {command!r}"
+            )
+
+
+def write_claude_marketplace_repo(tmp_path: Path) -> Path:
+    """Minimal fake repository root whose Claude Code marketplace manifest is
+    valid, so the counter-proofs can break exactly one field at a time."""
+    manifest_dir = tmp_path / CURSOR_PLUGIN_REL / ".claude-plugin"
+    manifest_dir.mkdir(parents=True)
+    (manifest_dir / "plugin.json").write_text(
+        json.dumps({"name": CLAUDE_PLUGIN_ENTRY, "version": "1.0.0"}),
+        encoding="utf-8",
+    )
+    path = tmp_path / CLAUDE_MARKETPLACE_REL
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(
+            {
+                "name": CLAUDE_MARKETPLACE_NAME,
+                "description": "Plugins for Claude Code.",
+                "owner": {"name": "Orbi"},
+                "plugins": [
+                    {
+                        "name": CLAUDE_PLUGIN_ENTRY,
+                        "source": "./" + CURSOR_PLUGIN_REL.as_posix(),
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    return tmp_path
+
+
+def test_claude_marketplace_fixture_passes(tmp_path):
+    check_claude_marketplace(write_claude_marketplace_repo(tmp_path))
+
+
+def test_fixture_claude_marketplace_without_owner_fails(tmp_path):
+    repo_root = write_claude_marketplace_repo(tmp_path)
+    path = repo_root / CLAUDE_MARKETPLACE_REL
+    data = json.loads(path.read_text(encoding="utf-8"))
+    del data["owner"]
+    path.write_text(json.dumps(data), encoding="utf-8")
+    with pytest.raises(AssertionError):
+        check_claude_marketplace(repo_root)
+
+
+def test_fixture_claude_marketplace_with_another_name_fails(tmp_path):
+    repo_root = write_claude_marketplace_repo(tmp_path)
+    path = repo_root / CLAUDE_MARKETPLACE_REL
+    data = json.loads(path.read_text(encoding="utf-8"))
+    data["name"] = "orbi-plugins"
+    path.write_text(json.dumps(data), encoding="utf-8")
+    with pytest.raises(AssertionError):
+        check_claude_marketplace(repo_root)
+
+
+def test_fixture_claude_marketplace_source_without_dot_slash_fails(tmp_path):
+    """The Cursor manifest's bare `integrations/claude-plugin` is not a valid
+    Claude Code relative source, so the check must reject it."""
+    repo_root = write_claude_marketplace_repo(tmp_path)
+    path = repo_root / CLAUDE_MARKETPLACE_REL
+    data = json.loads(path.read_text(encoding="utf-8"))
+    data["plugins"][0]["source"] = CURSOR_PLUGIN_REL.as_posix()
+    path.write_text(json.dumps(data), encoding="utf-8")
+    with pytest.raises(AssertionError):
+        check_claude_marketplace(repo_root)
+
+
+def test_fixture_claude_marketplace_source_without_plugin_manifest_fails(
+    tmp_path,
+):
+    repo_root = write_claude_marketplace_repo(tmp_path)
+    (repo_root / CURSOR_PLUGIN_REL / MANIFEST_REL).unlink()
+    with pytest.raises(AssertionError):
+        check_claude_marketplace(repo_root)
+
+
+def test_fixture_claude_marketplace_with_entry_version_fails(tmp_path):
+    """A second version in the entry would be overridden by plugin.json and
+    warned about by `claude plugin validate`, so the check must reject it."""
+    repo_root = write_claude_marketplace_repo(tmp_path)
+    path = repo_root / CLAUDE_MARKETPLACE_REL
+    data = json.loads(path.read_text(encoding="utf-8"))
+    data["plugins"][0]["version"] = "9.9.9"
+    path.write_text(json.dumps(data), encoding="utf-8")
+    with pytest.raises(AssertionError):
+        check_claude_marketplace(repo_root)
 
 
 # --- README and license -------------------------------------------------------

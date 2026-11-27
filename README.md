@@ -96,6 +96,20 @@ GitHub Issue (ai-ready)
 - Failures are classified clearly: recoverable failures return to the same PR for continued fixes, while unrecoverable failures mark the Issue `ai-blocked` for a human;
 - Supports `orbi add` for dispatching work, `status` for viewing the queue, `session` for following the Pi session, `install-units` for idempotently installing the scheduler units (systemd on Linux, launchd on macOS), and `doctor` for read-only diagnostics.
 
+## Plugins
+
+Install the Orbi plugin in Claude Code with two commands:
+
+```bash
+claude plugin marketplace add orbi-build/orbi
+claude plugin install orbi@orbi
+```
+
+It adds the `write-ai-ready-issue` and `suggest-ai-ready-issues` skills and the
+`/orbi:ship` and `/orbi:status` commands. The same folder,
+[`integrations/claude-plugin`](integrations/claude-plugin), also loads in
+Cursor and GitHub Copilot — see [Plugins and integrations](docs/ecosystem.mdx).
+
 ## Documentation
 
 | Topic | Entry point |

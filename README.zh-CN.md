@@ -117,6 +117,20 @@ GitHub Issue（ai-ready）
 - 支持 `orbi add` 派活、`status` 查看队列、`session` 跟随 Pi 会话，
   `install-units` 幂等安装调度器 units（Linux 为 systemd，macOS 为 launchd），`doctor` 只读诊断。
 
+## 插件
+
+在 Claude Code 里用两条命令安装 Orbi 插件：
+
+```bash
+claude plugin marketplace add orbi-build/orbi
+claude plugin install orbi@orbi
+```
+
+装好后有 `write-ai-ready-issue`、`suggest-ai-ready-issues` 两个 skill，以及
+`/orbi:ship`、`/orbi:status` 两个命令。同一个目录
+[`integrations/claude-plugin`](integrations/claude-plugin) 也能在 Cursor 和
+GitHub Copilot 里加载，详见[插件与集成](docs/zh/ecosystem.mdx)。
+
 ## 文档入口
 
 | 主题 | 入口 |
