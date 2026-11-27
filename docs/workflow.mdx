@@ -817,7 +817,7 @@ at all — readers ignore it (`parse` returns `None`).
 | `review_budget_exhausted` | the bounded review/fix budget is spent | `decide` | false |
 | `human_decision_required` | an external precondition only a human can decide | `decide` | false |
 | `base_branch_missing` | the configured base branch does not exist in the repository | `fix_ticket` | false |
-| `base_branch_changed` | the repository's base branch changed after the PR was opened, so the PR is frozen on a base Orbi is no longer configured with (Issue #2458); the comment names both branches and the PR and offers the two ways out — set the base back to continue this PR, or close the PR so the Issue is redone from the new base | `decide` | false |
+| `base_branch_changed` | legacy, kept only so comments written by Issue #2458 still parse; Orbi no longer produces it — a PR whose repository moved to another base now follows it (the PR is retargeted and the new base brought into its branch) and review/merge continue (Issue #2465) | `decide` | false |
 | `base_ci_red` | the check the PR fails is also failing on the configured base branch | `fix_ticket` | false |
 | `checks_permission_missing` | the App installation has not approved `statuses: read`, so the PR's check read is refused (HTTP 403 `Resource not accessible by integration`) | `check_credentials` | false |
 | `credential_missing` | the GitHub/provider credential is missing or rejected | `check_credentials` | false |

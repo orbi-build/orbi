@@ -719,6 +719,22 @@ class FakeGh:
                 "body": flags["--body"][0],
             })
             return ""
+        if sub == "edit":
+            # `gh pr edit <n> --base <branch>` (Issue #2465: a delivery PR
+            # follows the repository to its new base branch). The base
+            # commit moves to the branch head GitHub reports, which is what
+            # the real API returns on the next read.
+            flags = self._flags(args[2:])
+            self._known_flags(
+                flags, ("--repo", "--base"), ["gh", "pr", "edit"],
+            )
+            self._repo_or_fail((flags.get("--repo") or [self.repo])[0])
+            base = flags["--base"][0]
+            pr["baseRefName"] = base
+            pr["baseRefOid"] = (
+                (self.branches.get(base) or {}).get("head") or "0" * 40
+            )
+            return ""
         if sub == "close":
             # `gh pr close <number> --repo <repo>` (Issue #2221: the stop
             # answer's close_external_pr / close_all). A PR that is already

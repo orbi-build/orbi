@@ -1100,17 +1100,6 @@ def _run_review_round(
                 "must restore the trusted 'Orbi opened PR' "
                 "scene comment"
             ) from scene_exc
-        # The scene freezes the base the PR was opened against. The config
-        # may have moved on (or the comment is stale): reviewing or merging
-        # a PR frozen on another base against the configured one would run
-        # the freeze/merge gate on the wrong base, so fail fast before any
-        # git/Pi mutation instead of silently switching bases. A base change
-        # is a human decision: the runner never auto-retries a PR frozen on
-        # another base. The check, its own `base_branch_changed` reason and
-        # its wording are ONE implementation shared with the resume
-        # verification (Issue #2458).
-        base_branch_change.require_scene_base(
-            scene.parsed.base_branch, config.base_branch)
         worktree = worktree_path(
             config.repo_dir, source_repo, number,
             scene.parsed.run_id,
@@ -1142,6 +1131,15 @@ def _run_review_round(
         branch = run_command(
             ["git", "branch", "--show-current"], cwd=worktree,
         ) or task_branch(source_repo, number, scene.parsed.run_id)
+        # A base branch the repository moved on from is followed, not
+        # decided (Issue #2465): the PR moves to the configured base and
+        # that base is brought into its branch BEFORE the round freezes the
+        # PR, whose base validation then sees the configured base.
+        base_branch_change.adopt_configured_base(
+            worktree, branch=branch, source_repo=source_repo,
+            frozen=scene.parsed, configured_base_branch=config.base_branch,
+            repo_dir=config.repo_dir,
+        )
         review_config = replace(
             config,
             base_sha=scene.parsed.base_sha,
@@ -1200,11 +1198,6 @@ def _run_review_round(
             if exc.action:
                 fix = exc.action.strip().rstrip(".。;")
                 action = text("review.blocked_human_action", fix=fix)
-        elif isinstance(exc, base_branch_change.SceneBaseBranchChanged):
-            # Issue #2458: both branches, the PR and the two ways out, in the
-            # run's language — the same pair the resume path reports.
-            action, reason = base_branch_change.wording(
-                exc, language_code, pr_url=pr_url)
         else:
             reason = text("review.blocked_failed_reason", detail=detail)
         if not action and failure_report.is_unrecoverable_failure(exc):

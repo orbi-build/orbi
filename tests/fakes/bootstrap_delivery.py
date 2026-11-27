@@ -524,6 +524,31 @@ def install_claim_time_config_seam(monkeypatch, fake, on_claim) -> dict:
     return state
 
 
+# --- Issue #2465: the real repository of a base-branch move ----------------
+
+
+def install_real_git_gh_seam(monkeypatch, fake) -> dict:
+    """Answer GitHub with `fake` (a `FakeGh`) and let git reach the real repo.
+
+    Issue #2465's base-branch move is git-heavy (fetch, replay, push), so the
+    scene keeps a REAL repository: only `gh` argv goes to the in-memory fake —
+    the same split `install_claim_time_config_seam` makes for one tick. The
+    returned dict's `commands` list is every argv the delivery ran, so a test
+    can assert e.g. that a base that merely advanced was merged (no rewrite).
+    """
+    real_run = runner.run_command
+    state = {"commands": []}
+
+    def fake_run(command, **kwargs):
+        state["commands"].append(list(command))
+        if command[:1] == ["git"]:
+            return real_run(command, **kwargs)
+        return fake(command, **kwargs)
+
+    monkeypatch.setattr(seam, "run_command", fake_run)
+    return state
+
+
 # --- Issue #186: deliver_pr — the Runner owns the deterministic closeout ----
 
 DELIVER_BRANCH = f"orbi/issue-4-{FAKE_RUN_ID}"

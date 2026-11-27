@@ -120,15 +120,6 @@ def verify_resumed_pr(resume: run_state.ResumeScene, issue: dict,
         config.repo_dir, source_repo, number, run_id,
     )
     try:
-        # A base-branch change is a human
-        # decision: the runner must not auto-retry a PR frozen on
-        # another base, so the handler below marks the Issue ai-blocked
-        # with the explicit reason and both base values named. The check
-        # and its own `base_branch_changed` reason live in ONE place,
-        # shared with the review round (Issue #2458).
-        base_branch_change.require_scene_base(
-            resume.parsed.base_branch, config.base_branch,
-        )
         if not worktree.is_dir():
             # The worktree is a local cache of the remote
             # delivery state (the branch and the PR live on GitHub), so
@@ -169,6 +160,15 @@ def verify_resumed_pr(resume: run_state.ResumeScene, issue: dict,
             branch = run_command(
                 ["git", "branch", "--show-current"], cwd=worktree,
             )
+        # A base branch the repository moved on from is followed, not
+        # decided (Issue #2465): the PR moves to the configured base and
+        # that base is brought into its branch before verification, which
+        # then validates the PR against the configured base.
+        base_branch_change.adopt_configured_base(
+            worktree, branch=branch, source_repo=source_repo,
+            frozen=resume.parsed, configured_base_branch=config.base_branch,
+            repo_dir=config.repo_dir,
+        )
         verified_url = pr_verification.verify_pr(
             RunContext(
                 run_id=run_id, issue=number, branch=branch,
@@ -248,25 +248,17 @@ def verify_resumed_pr(resume: run_state.ResumeScene, issue: dict,
             # marker and the progress publishing is skipped, whatever
             # the recovered scene says.
             lang = language.of(config)
-            if isinstance(exc, base_branch_change.SceneBaseBranchChanged):
-                # Issue #2458: the stop that knows its own reason reads it
-                # in the run's language — both branches, the PR and the two
-                # ways out — instead of the internal English mismatch line.
-                action, reason = base_branch_change.wording(
-                    exc, lang, pr_url=resume.parsed.pr_url,
-                )
-            else:
-                action = (
-                    language.text(lang, "delivery.resume_missing_fixes_action",
-                                  pr_url=resume.parsed.pr_url, number=number)
-                    if isinstance(exc, MissingFixesError)
-                    else language.text(lang, "delivery.resume_review_pr_action")
-                    if isinstance(exc, UnrecoverableDeliveryError) else ""
-                )
-                reason = language.text(
-                    lang, "delivery.resume_verify_reason",
-                    pr_url=resume.parsed.pr_url, detail=failure_detail(exc),
-                )
+            action = (
+                language.text(lang, "delivery.resume_missing_fixes_action",
+                              pr_url=resume.parsed.pr_url, number=number)
+                if isinstance(exc, MissingFixesError)
+                else language.text(lang, "delivery.resume_review_pr_action")
+                if isinstance(exc, UnrecoverableDeliveryError) else ""
+            )
+            reason = language.text(
+                lang, "delivery.resume_verify_reason",
+                pr_url=resume.parsed.pr_url, detail=failure_detail(exc),
+            )
             failure_report.report_delivery_failure(
                 exc, issue=issue, source_repo=source_repo,
                 run_id=current_run_id(), pr_url=resume.parsed.pr_url,

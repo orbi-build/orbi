@@ -69,9 +69,11 @@ REASON_CODES = frozenset({
     # The configured base branch does not exist in the repository
     # (Issue #1749): a repository/config precondition a human repairs.
     "base_branch_missing",
-    # The repository's base branch changed while the PR was in review
-    # (Issue #2458): the PR is frozen on the base it was opened against, so
-    # a human decides whether to put the base back or redo the Issue.
+    # Legacy only (Issue #2465): nothing raises it any more — a PR whose
+    # repository moved to another base follows it (retargeted, new base
+    # brought in) — so `classify` never produces it; it stays in the closed
+    # set so an already-written #2458 comment still parses (Orbi Cloud pins
+    # this set, so a removal needs both sides together).
     "base_branch_changed",
     # The delivery check that failed on the PR head is ALSO failing on the
     # base (Issue #1825): not `retry_safe` (a requeue hits the same red base),

@@ -4401,129 +4401,6 @@ def test_delivery_step_marks_blocked_when_review_fails_while_fix_needed(
     assert "- role: review" in blocked
 
 
-def test_delivery_step_blocks_when_scene_base_differs_from_config(
-        monkeypatch, caplog, tmp_path, bind_run_id,
-):
-    """Issue #91: the scene freezes the base the PR was opened against.
-    When the configured base differs (config changed, or the comment is
-    stale), the resume must fail fast BEFORE any git/Pi mutation: no
-    review is started, nothing is merged, and the Issue is marked
-    ai-blocked with BOTH base values named — never silently switch to
-    the configured base for a PR frozen on another one.
-    """
-    api_calls: list = []
-    existing = {
-        "id": 77,
-        "body": (
-            "<!-- orbi:run=a1b2c3d4 -->\n\n"
-            "**Orbi progress**\n\nawaiting review"
-        ),
-    }
-
-    states = ["OPEN", "MERGED"]
-    pr_calls = {"n": 0}
-
-    def fake_run(command, **kwargs):
-        if command[:2] == ["gh", "pr"]:
-            pr_calls["n"] += 1
-            return json.dumps({"state": states[pr_calls["n"] - 1]})
-        if command[:2] == ["gh", "api"]:
-            api_calls.append(command)
-            if "--method" not in command:
-                # The run's live progress comment exists.
-                return json.dumps([existing])
-            method = command[command.index("--method") + 1]
-            if method == "POST":
-                body = command[command.index("--field") + 1]
-                return json.dumps({"id": 78, "body": body[len("body="):],
-                                   "url": "https://x/78"})
-            return ""
-        if command[-1] == "comments":
-            # The trusted scene freezes base_branch=develop.
-            return json.dumps({"comments": [
-                {
-                    "body": (
-                        "<!-- orbi:run=a1b2c3d4 -->\n"
-                        + scene.render(scene.Scene(
-                            run_id="a1b2c3d4", base_branch="develop",
-                            base_sha="abc123def456", pr_url=PR_URL,
-                        ))
-                        + f"\nOrbi opened PR: {PR_URL}"
-                    ),
-                    "authorAssociation": "OWNER",
-                    "author": {"login": "maintainer"},
-                },
-            ]})
-        return json.dumps({"labels": [{"name": "ai-pr-opened"}]})
-
-    monkeypatch.setattr(seam, "run_command", fake_run)
-    monkeypatch.setattr(runner.time, "sleep", lambda s: None)
-    edits: list = []
-    comments: list = []
-    monkeypatch.setattr(
-        seam, "set_issue_labels",
-        lambda number, *, repo, labels: edits.append(list(labels)),
-    )
-    monkeypatch.setattr(seam, "comment_issue",
-        lambda *args, **kwargs: comments.append((args, kwargs)),
-    )
-    # The independent review must never run: the base mismatch is
-    # terminal before any git/Pi mutation.
-    reviews: list = []
-    monkeypatch.setattr(
-        review_merge, "review_and_merge_if_clean",
-        lambda *args, **kwargs: reviews.append((args, kwargs)) or False,
-    )
-    issue = {"number": 39, "title": "task", "body": ""}
-    bind_run_id("a1b2c3d4")
-    caplog.set_level("INFO")
-    # The configured base is main; the scene froze develop.
-    runner.delivery_step(
-        PR_URL, issue, config_domain.RunnerConfig(repo_dir=tmp_path, base_branch="main"),
-        "owner/repo",
-    )
-    # No review was started and nothing was merged.
-    assert reviews == []
-    # The mismatch is terminal on the FIRST poll: the wait returns
-    # instead of re-checking the PR state.
-    assert pr_calls["n"] == 1
-    # The Issue is marked ai-blocked (removing ai-pr-opened) ...
-    # Issue #2426: the terminal is ONE whole-set replacement that ends on
-    # ai-blocked alone.
-    assert edits[-1] == ["ai-blocked"]
-    # ... with a failure comment that names BOTH base values and carries
-    # the run marker.
-    body = comments[0][1]["body"]
-    assert "Orbi failed:" in body
-    assert f"<!-- orbi:run=a1b2c3d4 -->" in body
-    assert "base_branch=develop" in body
-    assert "base_branch=main" in body
-    assert "delivery_review_failed" in caplog.text
-    # The terminal failure also posts the blocked milestone (Issue #18)
-    # AND the tracked progress comment becomes the blocked scene.
-    posted_bodies = [
-        command[command.index("--field") + 1][len("body="):]
-        for command in api_calls
-        if "--method" in command and "POST" in command
-    ]
-    assert any(is_blocked_scene(body) for body in posted_bodies)
-    assert any("- result:" in body for body in posted_bodies)
-    # No second progress comment: the tracked one (id 77) is PATCHed
-    # into the blocked scene in place.
-    patches = [
-        command for command in api_calls
-        if command[:2] == ["gh", "api"]
-        and command[2] == "repos/owner/repo/issues/comments/77"
-        and "PATCH" in command
-    ]
-    assert patches, "the tracked progress comment was not updated"
-    blocked = patches[-1][patches[-1].index("--field") + 1][len("body="):]
-    assert is_blocked_scene(blocked)
-    assert "base_branch=develop" in blocked
-    assert "base_branch=main" in blocked
-    assert "What Orbi will do next:" in blocked
-
-
 def test_delivery_step_worktree_missing_stays_fix_needed(
         monkeypatch, caplog, tmp_path, bind_run_id,
 ):
@@ -5792,29 +5669,33 @@ def test_run_review_round_marks_awaiting_merge_as_merge_only(
     assert reviews[0][1]["merge_only"] is True
 
 
-def test_run_review_round_returns_none_when_scene_base_differs(
+def test_run_review_round_failure_comment_follows_the_config_language(
         monkeypatch, tmp_path,
 ):
-    """Issue #289: None = terminal state handled. An unrecoverable
-    precondition (the scene froze another base, Issue #91) marks the
-    Issue ai-blocked with the failure comment; the review never runs
-    and the caller releases the slot."""
+    """Issue #1687 acceptance 1: a delivery that fails in review posts its
+    blocked comment in the bound message language. The review path used to
+    call the failure reporter without a language, so a zh host still got an
+    English blocked comment on its most common failure."""
     edits, comments, reviews, _ = _review_round_env(
-        monkeypatch, tmp_path, scene_base="develop",
+        monkeypatch, tmp_path,
+        review_raises=failure_report.UnrecoverableDeliveryError(
+            "a human must decide"),
     )
     issue = {"number": 39, "title": "task", "body": ""}
     outcome = review_merge._run_review_round(
         PR_URL, issue,
-        config_domain.RunnerConfig(repo_dir=tmp_path, base_branch="main"), "owner/repo",
+        config_domain.RunnerConfig(
+            repo_dir=tmp_path, base_branch="main", message_language="zh",
+        ),
+        "owner/repo",
     )
     assert outcome is None
-    assert reviews == []
-    # Issue #2426: the terminal is ONE whole-set replacement that ends on
-    # ai-blocked alone.
+    assert len(reviews) == 1
     assert edits[-1] == ["ai-blocked"]
-    assert "Orbi failed:" in comments[0][1]["body"]
-    assert "base_branch=develop" in comments[0][1]["body"]
-    assert "base_branch=main" in comments[0][1]["body"]
+    body = comments[0][1]["body"]
+    assert "Orbi：已阻塞 —— 等待人工决定" in body
+    assert "**原因：**" in body
+    assert "Orbi failed:" not in body
 
 
 def test_run_review_round_returns_none_when_worktree_missing(
@@ -5838,33 +5719,6 @@ def test_run_review_round_returns_none_when_worktree_missing(
     body = comments[0][1]["body"]
     assert "Orbi needs a fix:" in body
     assert "branch: `orbi/owner-repo-issue-39`" in body
-
-
-def test_run_review_round_failure_comment_follows_the_config_language(
-        monkeypatch, tmp_path,
-):
-    """Issue #1687 acceptance 1: a delivery that fails in review posts its
-    blocked comment in the bound message language. The review path used to
-    call the failure reporter without a language, so a zh host still got an
-    English blocked comment on its most common failure."""
-    edits, comments, reviews, _ = _review_round_env(
-        monkeypatch, tmp_path, scene_base="develop",
-    )
-    issue = {"number": 39, "title": "task", "body": ""}
-    outcome = review_merge._run_review_round(
-        PR_URL, issue,
-        config_domain.RunnerConfig(
-            repo_dir=tmp_path, base_branch="main", message_language="zh",
-        ),
-        "owner/repo",
-    )
-    assert outcome is None
-    assert reviews == []
-    assert edits[-1] == ["ai-blocked"]
-    body = comments[0][1]["body"]
-    assert "Orbi：已阻塞 —— 等待人工决定" in body
-    assert "**原因：**" in body
-    assert "Orbi failed:" not in body
 
 
 @pytest.mark.parametrize("code", ["en", "zh"])
@@ -5938,39 +5792,6 @@ def test_run_review_round_human_decision_without_fix_uses_generic_action(
     assert text["close"] in action
     assert "Decide how this PR should proceed." not in body
 
-
-@pytest.mark.parametrize("code", ["en", "zh"])
-def test_run_review_round_base_mismatch_names_both_bases_and_the_ways_out(
-        monkeypatch, tmp_path, code,
-):
-    """Issue #2458 (replacing the #1701 generic remedy): a base mismatch has
-    its own reason code and its own remedy — the reason names both branches
-    and the PR, the action gives the two ways out (put the base back to
-    continue this PR, or close the PR so the Issue is redone from the new
-    base), all in the run's language."""
-    text = BLOCKED_REVIEW_TEXT[code]
-    body = _blocked_review_body(
-        monkeypatch, tmp_path, code, scene_base="develop",
-    )
-    action = _blocked_line(body, text["action"])
-    reason = _blocked_line(body, text["reason"])
-    assert PR_URL in reason
-    assert "develop" in reason and "main" in reason
-    assert PR_URL in action
-    assert "develop" in action and "main" in action
-    assert text["step"] in action
-    assert "`ai-ready`" in action
-    # The generic remedy is gone: this stop knows exactly what to do.
-    assert text["generic_action"] not in action
-    # The machine-readable record names the specific reason, never the
-    # generic human decision.
-    assert failure.parse(body).reason_code == "base_branch_changed"
-    # Issue #2351: the headline shows the disposition the record's action
-    # asks for — a base change is a human decision, never a ticket edit.
-    assert language.text(
-        code, "failure.headline_blocked",
-        disposition=language.text(code, "failure.disposition_decide"),
-    ) in body
 
 
 @pytest.mark.parametrize("code", ["en", "zh"])
