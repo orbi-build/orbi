@@ -2178,8 +2178,8 @@ def main(argv: list[str] | None = None) -> int:
         # inputs are re-read, so every process-scoped field (paths, slot
         # dir, concurrency, Milestone) stays this tick's. An Issue claimed
         # after the change is delivered on the new base; a delivery whose
-        # PR is already open is unchanged — it still stops with
-        # `base_branch_changed` (#2458).
+        # PR is already open follows it — the PR is moved to the new base
+        # and the new base brought into its branch (#2465).
         fresh = _load_valid_config(config.config_path)
         if fresh is None:
             return 1

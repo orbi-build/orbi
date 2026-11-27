@@ -19,7 +19,6 @@ from pathlib import Path
 import pytest
 
 import orbi.gitops as gitops
-import orbi.base_branch_change as base_branch_change
 import orbi.claim as claim
 import orbi.failure as failure
 import orbi.failure_report as failure_report
@@ -3856,130 +3855,6 @@ def test_verify_resumed_pr_recoverable_failure_keeps_fix_needed_label(
     # The current label set already carries ai-fix-needed, so the change
     # is a no-op: no label write at all (Issue #2426).
     assert captured["edits"] == []
-
-
-def test_verify_resumed_pr_fails_fast_when_scene_base_differs(
-    monkeypatch, tmp_path, caplog, bind_run_id,
-):
-    """Issue #91 + #50 (pre-verify): the scene freezes the base the PR
-    was opened against; when the configured base differs, the resume
-    fails fast BEFORE any git/gh command (no verify_pr, no fetch) and
-    the Issue is marked ai-blocked with both base values named — a
-    base-branch change is a human decision (an explicit
-    UnrecoverableDeliveryError), never ai-fix-needed (auto-retrying
-    would keep failing on the same mismatch)."""
-    commands: list = []
-    captured, fake_run = make_resume_failure_fake(monkeypatch)
-
-    def counting(command, **kwargs):
-        commands.append(command)
-        return fake_run(command, **kwargs)
-
-    def fake_verify_pr(*args, **kwargs):
-        # Must never run: the base mismatch is terminal before it.
-        raise AssertionError("verify_pr must not run on a base mismatch")
-
-    monkeypatch.setattr(pr_verification, "verify_pr", fake_verify_pr)
-    monkeypatch.setattr(seam, "run_command", counting)
-    bind_run_id(FAKE_RUN_ID)
-    caplog.set_level("INFO")
-    scene = make_resume_scene(base_branch="develop")
-    with pytest.raises(
-        runner.UnrecoverableDeliveryError, match="differs from configured",
-    ):
-        resume_verification.verify_resumed_pr(
-            scene, make_resume_issue(),
-            make_resume_config(tmp_path), "owner/repo",
-        )
-    # No git command ran before the terminal transition (the only gh
-    # traffic is the blocked-scene reporting: the progress API, the
-    # label read, the comment-history read of the review rounds and
-    # the PR failure comment of Issue #50).
-    assert all(command[0] != "git" for command in commands)
-    assert all(
-        command[:2] == ["gh", "api"]
-        or command[:3] == ["gh", "pr", "comment"]
-        or command[-1] in ("comments", "labels")
-        for command in commands
-    )
-    assert captured["edits"] == [["ai-blocked"]]
-    body = captured["comments"][0][1]["body"]
-    assert "Orbi failed:" in body
-    assert run_marker_body() in body
-    assert "base_branch=develop" in body
-    assert "base_branch=main" in body
-    # Issue #50: the blocked comment states why automatic recovery is
-    # impossible.
-    assert "cannot be recovered automatically" in body
-    assert "resume_pr_verification_failed" in caplog.text
-    # The fake proves the contract when called directly: verify_pr
-    # must never run on a base mismatch.
-    with pytest.raises(
-        AssertionError, match="must not run on a base mismatch",
-    ):
-        fake_verify_pr()
-
-
-def _labelled_line(body: str, label: str) -> str:
-    """The comment line the reader sees under one rendered field label."""
-    return next(line for line in body.splitlines() if line.startswith(label))
-
-
-@pytest.mark.parametrize(
-    ("language_code", "cause_fragments", "action_fragments"),
-    [
-        (
-            "en",
-            ("base branch changed", "develop", "main"),
-            ("set the base branch back", "close PR", "ai-fix-needed",
-             "ai-ready"),
-        ),
-        (
-            "zh",
-            ("基础分支", "develop", "main"),
-            ("把基础分支改回", "关闭 PR", "ai-fix-needed", "ai-ready"),
-        ),
-    ],
-)
-def test_verify_resumed_pr_base_mismatch_reports_its_own_reason_and_repair(
-    monkeypatch, tmp_path, bind_run_id, language_code, cause_fragments,
-    action_fragments,
-):
-    """Issue #2458: a scene frozen on another base stops with the SPECIFIC
-    reason code `base_branch_changed` (not `human_decision_required`), and
-    the comment names both branches and the PR and gives the two ways out,
-    in the run's message language."""
-    captured, _ = make_resume_failure_fake(monkeypatch)
-    bind_run_id(FAKE_RUN_ID)
-    with pytest.raises(base_branch_change.SceneBaseBranchChanged):
-        resume_verification.verify_resumed_pr(
-            make_resume_scene(base_branch="develop"), make_resume_issue(),
-            make_resume_config(tmp_path, message_language=language_code),
-            "owner/repo",
-        )
-    body = captured["comments"][0][1]["body"]
-    # Acceptance 1: the machine-readable record names the real reason.
-    record = failure.parse(body)
-    assert record is not None
-    assert record.reason_code == "base_branch_changed"
-    assert record.reason_code != "human_decision_required"
-    assert record.outcome == "blocked"
-    assert record.retry_safe is False
-    # Acceptance 2: the visible Reason names both branches and the PR, and
-    # the Action gives the two ways out — in the run's language.
-    reason_line = _labelled_line(
-        body, language.text(language_code, "failure.reason_label"))
-    action_line = _labelled_line(
-        body, language.text(language_code, "failure.action_label"))
-    assert FAKE_PR_URL in reason_line
-    for fragment in cause_fragments:
-        assert fragment in reason_line
-    for fragment in action_fragments:
-        assert fragment in action_line
-    # The internal English detail stays evidence, never the visible reason.
-    if language_code == "zh":
-        assert "differs from configured" not in reason_line
-        assert "differs from configured" in body
 
 
 def test_verify_resumed_pr_reraises_when_failure_reporting_fails(
