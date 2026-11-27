@@ -76,8 +76,10 @@ def verify_resumed_pr(resume: run_state.ResumeScene, issue: dict,
     different PRs (a comment must never steer the runner into the wrong
     PR). Restored: branch and worktree are DERIVED from the
     configured repo_dir, source repo, Issue number and run id (never
-    read from the comment), the scene base must still equal the
-    configured base — checked BEFORE any command runs — and
+    read from the comment), a scene base the repository moved on from is
+    followed instead of decided — the PR is moved to the configured base
+    and that base brought into its branch before verification (Issue
+    #2465) — and
     a missing worktree is RECREATED from the remote delivery branch
     (the worktree is a local cache of the remote state —
     branch + PR live on GitHub — so a sandbox rebuild or a deleted

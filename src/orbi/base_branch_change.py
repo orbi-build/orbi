@@ -33,7 +33,11 @@ What stays exactly as it was:
   raises `base_absorb.BaseMergeConflict`, the SAME failure the behind-base
   path raises, so the delivery follows the existing fix loop;
 - a configured base branch that does not exist keeps its own
-  `base_branch_missing` failure (`gitops.fetch_base_ref` decides it).
+  `base_branch_missing` failure (`gitops.fetch_base_ref` decides it);
+- a PR that is no longer OPEN is never retargeted and never merged into: an
+  already-decided PR (merged or closed) cannot follow a base, and the
+  caller's own closed-PR routing — the merged closeout, the withdrawn
+  takeover — owns that state.
 
 It lives in its own module because a module recorded by the size ratchet may
 only shrink and `failure`, `failure_report` and `review_merge` are at their
@@ -60,13 +64,23 @@ def adopt_configured_base(
     `frozen` is the recovered scene (`orbi.scene.Scene`): its `base_branch` is
     the base the PR was opened against. Returns True when this call moved the
     PR, False when there was nothing to do (the scene already names the
-    configured base, or the PR is already on it — the idempotent case of a
-    delivery's second and later rounds, which then keeps going).
+    configured base, the PR is already on it — the idempotent case of a
+    delivery's second and later rounds, which then keeps going — or the PR is
+    no longer OPEN).
     """
     if frozen.base_branch == configured_base_branch:
         return False
     number = pr_number(frozen.pr_url)
-    current = pr_view(number, "baseRefName", repo=source_repo, cwd=worktree)
+    current = pr_view(
+        number, "state,baseRefName", repo=source_repo, cwd=worktree,
+    )
+    if current.get("state") != "OPEN":
+        # A decided PR is not a PR still in review: a merged one refuses a
+        # base change outright (the resume then looped on that refusal
+        # instead of recording the merge), and retargeting a withdrawn PR
+        # would merge a base into a branch nothing delivers any more. The
+        # caller's closed routing owns it.
+        return False
     if current.get("baseRefName") == configured_base_branch:
         return False
     # The base branch the repository does not have keeps its own failure:

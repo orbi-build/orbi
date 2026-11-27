@@ -205,7 +205,31 @@ def test_a_second_round_does_not_move_the_pr_again(
     # One read decided it: no fetch, no edit, no merge or push.
     assert state["commands"] == [[
         "gh", "pr", "view", str(PR_NUMBER), "--repo", REPO,
-        "--json", "baseRefName",
+        "--json", "state,baseRefName",
+    ]]
+
+
+def test_a_decided_pr_is_never_retargeted(
+    allow_external_commands, repo, monkeypatch,
+):
+    """A PR that is no longer OPEN is not a PR still in review. A merged one
+    refuses a base change at GitHub, so retargeting it turned the merged
+    closeout into a repeating failure; a withdrawn one delivers nothing any
+    more. Either way the move is skipped and the caller's closed routing
+    keeps owning the PR."""
+    fake = _fake_gh(repo, base="old")
+    fake.prs[PR_NUMBER]["state"] = "MERGED"
+    state = install_real_git_gh_seam(monkeypatch, fake)
+
+    assert _adopt(repo["worktree"], repo["clone"], base_branch="old",
+                  base_sha=repo["old"], configured="main") is False
+
+    assert fake.prs[PR_NUMBER]["baseRefName"] == "old"
+    assert git(repo["worktree"], "rev-parse", "HEAD") == repo["delivery"]
+    # One read decided it: no fetch, no edit, no merge, no push.
+    assert state["commands"] == [[
+        "gh", "pr", "view", str(PR_NUMBER), "--repo", REPO,
+        "--json", "state,baseRefName",
     ]]
 
 
@@ -377,3 +401,36 @@ def test_the_review_round_follows_the_base_and_reviews_on_it(
     assert fake.issues[ISSUE_NUMBER]["labels"] == ["ai-pr-opened"]
     assert "Orbi failed" not in json.dumps(
         fake.issues[ISSUE_NUMBER]["comments"])
+
+
+def test_a_merged_scene_pr_keeps_its_merge_closeout(
+    allow_external_commands, repo, monkeypatch,
+):
+    """The user-visible regression the state check prevents: the PR was
+    merged while the configured base moved on. The resume leaves that decided
+    PR alone and records the merged closeout (`ai-merged`, Issue closed),
+    instead of retrying a base move GitHub refuses on a merged PR — a retry
+    that `ai-fix-needed` would repeat on every tick and never end."""
+    fake = _fake_gh(repo, base="old")
+    fake.prs[PR_NUMBER]["state"] = "MERGED"
+    fake.prs[PR_NUMBER]["mergeCommit"] = {"oid": "f" * 40}
+    install_real_git_gh_seam(monkeypatch, fake)
+
+    # The REAL verification raises: the scene PR is merged, so it is not
+    # among the open PRs of the delivery branch.
+    with pytest.raises(pr_verification.ResumePrClosedError):
+        resume_verification.verify_resumed_pr(
+            run_state.ResumeScene(
+                parsed=_scene("old", repo["old"]), scene_at=None,
+            ),
+            {"number": ISSUE_NUMBER, "title": "ship", "body": ""},
+            config_domain.RunnerConfig(repo_dir=repo["clone"],
+                                       base_branch="main"),
+            REPO,
+        )
+
+    # The decided PR was not touched, and the merge is recorded.
+    assert fake.prs[PR_NUMBER]["baseRefName"] == "old"
+    assert git(repo["worktree"], "rev-parse", "HEAD") == repo["delivery"]
+    assert fake.issues[ISSUE_NUMBER]["labels"] == ["ai-merged"]
+    assert fake.issues[ISSUE_NUMBER]["state"] == "closed"

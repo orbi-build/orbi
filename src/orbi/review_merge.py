@@ -1066,8 +1066,8 @@ def _run_review_round(
     # resumes the same run, branch, worktree and PR. Only an
     # explicit `UnrecoverableDeliveryError` (an external
     # precondition the AI cannot safely judge or fix: an
-    # unrecoverable scene, a base-branch config change,
-    # exhausted rounds) is terminal: the Issue is marked
+    # unrecoverable scene, exhausted rounds) is terminal: the Issue is
+    # marked
     # `ai-blocked` ALONE (the opened-PR state label,
     # `ai-pr-opened` or `ai-fix-needed`, is removed) with the reason.
     worktree = branch = scene = None
