@@ -1062,6 +1062,7 @@ def deliver_pr(ctx: RunContext, base_branch: str, base_sha: str, *,
                issue_title: str, repo_dir: Path, language_code: str,
                attribution_footer: bool = True,
                attribution_link: str = "https://github.com/orbi-build/orbi",
+               issue_closed: bool = False,
                ) -> str | None:
     """The Runner completes the deterministic delivery closeout.
 
@@ -1113,69 +1114,56 @@ def deliver_pr(ctx: RunContext, base_branch: str, base_sha: str, *,
     # Commit boundary: the Agent's delivery is the
     # committed worktree state.
     local_head, dirty = _agent_delivery_boundary(worktree)
-    if dirty:
-        event(
-            "delivery_uncommitted_changes", level=logging.ERROR,
-            branch=branch, status=" ".join(dirty.splitlines()),
+    if not issue_closed:
+        if dirty:
+            event(
+                "delivery_uncommitted_changes", level=logging.ERROR,
+                branch=branch, status=" ".join(dirty.splitlines()),
+            )
+            raise RecoverablePiFailure(
+                f"the agent left uncommitted changes in the worktree "
+                f"({dirty.strip()}); the runner never commits uncommitted "
+                "changes or expands the agent's commit boundary"
+            )
+        # Commit boundary: an empty commit advances HEAD past the frozen
+        # base without changing a file, and a HEAD still on the base is no
+        # delivery either — both stop here (Issue #1581).
+        run_state.delivery_commit_guard(
+            worktree, local_head=local_head, base_sha=base_sha, branch=branch,
         )
-        raise RecoverablePiFailure(
-            f"the agent left uncommitted changes in the worktree "
-            f"({dirty.strip()}); the runner never commits uncommitted "
-            "changes or expands the agent's commit boundary"
-        )
-    # Commit boundary: an empty commit advances HEAD past the frozen
-    # base without changing a file, and a HEAD still on the base is no
-    # delivery either — both stop here (Issue #1581).
-    run_state.delivery_commit_guard(
-        worktree, local_head=local_head, base_sha=base_sha, branch=branch,
-    )
-    # The delivery branch may already carry pushed commits this worktree
-    # does not hold — a restarted (steered) session, a branch advanced on
-    # GitHub, an earlier run of the Issue. Absorb them BEFORE the push, so
-    # the plain push below is a fast-forward instead of a rejection that
-    # left the Issue ai-blocked (Issue #2273).
-    delivery_push.absorb_pushed_commits(
-        worktree, branch, repo_dir=repo_dir,
-    )
-    delivery_push.absorb_advanced_base(
-        worktree, base_branch, branch, repo_dir=repo_dir,
-    )
-    # Plain push of the task branch (never a force push), then verify
-    # the remote head: the PR must be created from exactly this head.
-    # The head is re-read after the absorb step: a successful base
-    # merge advanced it to the merge commit. The head is resolved from
-    # the remote itself (ls-remote, refspec independent): the pushed
-    # branch has no local remote-tracking ref in a checkout whose fetch
-    # refspec does not cover it, e.g. a `--single-branch` clone
-    # (Issue #898).
-    local_head = run_command(["git", "rev-parse", "HEAD"], cwd=worktree)
-    # A rejection here means the branch moved outside this run; the leaf's
-    # typed failure names that in plain words (Issue #2273).
-    delivery_push.push_delivery_branch(worktree, branch)
-    remote_head = gitops.remote_branch_head(branch, cwd=worktree)
-    if remote_head != local_head:
-        event(
-            "remote_head_mismatch", level=logging.ERROR,
-            expected=local_head, actual=remote_head, branch=branch,
-        )
-        raise RuntimeError(
-            f"remote head {remote_head} does not match the local head "
-            f"{local_head} after push origin {branch}"
-        )
-    # This delivery's first engine-pushed head (Issue #833): the merge
-    # record's external_commits subtracts exactly the heads the Runner
-    # pushed, and this is the first of them.
-    run_state.record_pushed_head(worktree, local_head)
-    # The closed-Issue guard runs AFTER the push (the work
-    # stays on the branch for the human) and BEFORE the PR creation.
-    # `gh issue view` is a direct, strongly consistent read — the same
-    # property `has_in_progress_label` relies on.
-    details = issue_view(issue, "state", repo=source_repo,
-                         cwd=worktree, timeout=30)
-    state = details.get("state") if isinstance(details, dict) else None
-    if state not in ("OPEN", "CLOSED"):
-        raise ValueError("issue view state must be OPEN or CLOSED")
-    if state == "CLOSED":
+    if not issue_closed or local_head != base_sha:
+        if not dirty:
+            delivery_push.absorb_pushed_commits(
+                worktree, branch, repo_dir=repo_dir,
+            )
+            delivery_push.absorb_advanced_base(
+                worktree, base_branch, branch, repo_dir=repo_dir,
+            )
+            local_head = run_command(
+                ["git", "rev-parse", "HEAD"], cwd=worktree,
+            )
+        delivery_push.push_delivery_branch(worktree, branch)
+        remote_head = gitops.remote_branch_head(branch, cwd=worktree)
+        if remote_head != local_head:
+            event(
+                "remote_head_mismatch", level=logging.ERROR,
+                expected=local_head, actual=remote_head, branch=branch,
+            )
+            raise RuntimeError(
+                f"remote head {remote_head} does not match the local head "
+                f"{local_head} after push origin {branch}"
+            )
+        run_state.record_pushed_head(worktree, local_head)
+    if not issue_closed:
+        # The closed-Issue guard runs AFTER the push (the work
+        # stays on the branch for the human) and BEFORE the PR creation.
+        details = issue_view(issue, "state", repo=source_repo,
+                             cwd=worktree, timeout=30)
+        state = details.get("state") if isinstance(details, dict) else None
+        if state not in ("OPEN", "CLOSED"):
+            raise ValueError("issue view state must be OPEN or CLOSED")
+        issue_closed = state == "CLOSED"
+    if issue_closed:
         comment_issue(
             issue, repo=source_repo,
             body=(f"{run_marker(run_id)}\n"

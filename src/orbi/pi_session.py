@@ -43,6 +43,7 @@ from orbi.pi_command import (
 )
 from orbi.pi_process import (
     ROLE_IMPLEMENT,
+    IssueClosedDuringSession,
     PiWatchOptions,
     SteeringRequest,
     stream_pi,
@@ -542,12 +543,16 @@ def run_pi(issue: dict, ctx: RunContext, config: config_domain.RunnerConfig, *,
         try:
             # Read the editor only when the snapshot shows a body edit.
             snapshot = issue_view(
-                int(issue["number"]), "comments,body",
+                int(issue["number"]), "comments,body,state",
                 repo=source_repo, timeout=30,
             )
+            if snapshot.get("state") == "CLOSED":
+                raise IssueClosedDuringSession()
             comments = snapshot.get("comments")
             if not isinstance(comments, list):
                 raise ValueError("issue comments must be a JSON array")
+        except IssueClosedDuringSession:
+            raise
         except Exception as exc:
             event(
                 "steering_poll_failed", level=logging.WARNING,

@@ -664,3 +664,144 @@ def test_load_config_rejects_invalid_steering_values(tmp_path):
     path.write_text('source_repos = ["owner/repo"]\nsteering_max_rounds = true\n', encoding="utf-8")
     with pytest.raises(ValueError, match="steering_max_rounds"):
         config_domain.load_config(path)
+
+
+def test_run_pi_steering_reads_state_and_raises_on_closed(body_steering_check, monkeypatch, caplog):
+    """Issue #2468: check_steering requests state and raises IssueClosedDuringSession
+    when the Issue becomes CLOSED, without swallowing it as steering_poll_failed."""
+    from orbi.pi_process import IssueClosedDuringSession
+
+    check = body_steering_check(
+        {"comments": [], "body": "original body", "state": "OPEN"},
+        {"comments": [], "body": "original body", "state": "CLOSED"},
+    )
+    caplog.set_level(logging.WARNING)
+    assert check() is None
+    with pytest.raises(IssueClosedDuringSession):
+        check()
+    assert "steering_poll_failed" not in caplog.text
+
+
+def test_stream_pi_terminates_process_when_issue_closed_during_session(tmp_path):
+    """Issue #2468: IssueClosedDuringSession terminates the Pi child promptly
+    and propagates out of stream_pi without restarting."""
+    from orbi.pi_process import IssueClosedDuringSession
+
+    polls = 0
+
+    def check():
+        nonlocal polls
+        polls += 1
+        if polls >= 2:
+            raise IssueClosedDuringSession()
+        return None
+
+    started = time.monotonic()
+    with pytest.raises(IssueClosedDuringSession):
+        pi_session.stream_pi(
+            make_fake_pi(tmp_path, session_records=[], sleep=5.0),
+            ctx=RunContext("abc12345", 2, "branch", tmp_path, "o/r"),
+            cwd=tmp_path, timeout=10,
+            watch=PiWatchOptions(
+                poll_interval=0.01, steering_poll_seconds=0.01,
+                steering_check=check,
+            ),
+        )
+    assert time.monotonic() - started < 2.0
+    assert polls == 2
+
+
+def test_process_issue_stops_early_and_pushes_committed_work_when_closed_mid_delivery(
+    monkeypatch, tmp_path, caplog,
+):
+    """Issue #2468: an Issue that is OPEN at claim and CLOSED on a steering poll
+    terminates Pi promptly, pushes committed work to the delivery branch, posts
+    runner.issue_closed once, creates no PR, and ends with result=issue_closed."""
+    import subprocess
+    from orbi import language
+    from tests.fakes.steering_closed import patch_closed_mid_delivery_deps
+
+    origin = tmp_path / "origin.git"
+    subprocess.run(["git", "init", "--bare", str(origin)], check=True, capture_output=True)
+    seed = tmp_path / "seed"
+    subprocess.run(["git", "clone", str(origin), str(seed)], check=True, capture_output=True)
+    subprocess.run(["git", "config", "user.email", "t@e.com"], cwd=seed, check=True)
+    subprocess.run(["git", "config", "user.name", "Test"], cwd=seed, check=True)
+    subprocess.run(["git", "checkout", "-b", "main"], cwd=seed, check=True, capture_output=True)
+    (seed / "README.md").write_text("init\n", encoding="utf-8")
+    subprocess.run(["git", "add", "README.md"], cwd=seed, check=True)
+    subprocess.run(["git", "commit", "-m", "init"], cwd=seed, check=True, capture_output=True)
+    subprocess.run(["git", "push", "-u", "origin", "main"], cwd=seed, check=True, capture_output=True)
+
+    repo_dir = tmp_path / "repo"
+    subprocess.run(["git", "clone", str(origin), str(repo_dir)], check=True, capture_output=True)
+    subprocess.run(["git", "config", "user.email", "t@e.com"], cwd=repo_dir, check=True)
+    subprocess.run(["git", "config", "user.name", "Test"], cwd=repo_dir, check=True)
+
+    worktrees_root = tmp_path / "worktrees"
+    worktrees_root.mkdir()
+    prompt = tmp_path / "prompt.md"
+    prompt.write_text("system", encoding="utf-8")
+
+    comments, gh_calls = patch_closed_mid_delivery_deps(
+        monkeypatch, tmp_path, iter(["OPEN", "CLOSED"]),
+    )
+
+    config = config_domain.RunnerConfig(
+        repo_dir=repo_dir,
+        prompt=prompt,
+        base_branch="main",
+        workspace_root=worktrees_root,
+        source_repos=("owner/repo",),
+        steering_enabled=True,
+        steering_poll_seconds=0.05,
+    )
+    caplog.set_level(logging.INFO)
+    started = time.monotonic()
+    result = runner.process_issue(
+        {"number": 7, "title": "Fix bug", "body": "Body", "state": "OPEN"},
+        config,
+        "owner/repo",
+    )
+    assert time.monotonic() - started < 5.0
+    assert result == ("issue-closed", None)
+
+    expected_branch = "orbi/owner-repo-issue-7"
+    remote_ls = subprocess.run(
+        ["git", "ls-remote", str(origin), f"refs/heads/{expected_branch}"],
+        capture_output=True, text=True, check=True,
+    ).stdout.strip()
+    assert remote_ls, "committed work must be pushed to the delivery branch"
+
+    closed_text = language.text("en", "runner.issue_closed", branch=expected_branch, run_id="a1b2c3d4")
+    matching_comments = [body for _, _, body in comments if closed_text in body]
+    assert len(matching_comments) == 1
+    assert not any("pr" in cmd and "create" in cmd for cmd in gh_calls)
+    assert "delivery_issue_closed" in caplog.text
+    ends = [line for line in caplog.text.splitlines() if " run_end " in line]
+    assert len(ends) == 1
+    assert "result=issue_closed" in ends[0]
+    assert "pr=-" in ends[0]
+
+
+def test_deliver_pr_issue_closed_mid_session_without_commit(monkeypatch, tmp_path, caplog):
+    """Issue #2468: when stopped mid-session before any commit, deliver_pr(issue_closed=True)
+    posts runner.issue_closed and returns None without failing NoCommitDelivered."""
+    from tests.fakes.steering_closed import patch_closed_no_commit_deps
+    from tests.test_bootstrap_delivery import DELIVER_BRANCH, FAKE_RUN_ID
+
+    caplog.set_level(logging.INFO)
+    base_sha = "9" * 40
+    comments = patch_closed_no_commit_deps(monkeypatch, tmp_path, base_sha)
+    result = runner.deliver_pr(
+        RunContext(
+            run_id=FAKE_RUN_ID, issue=4, branch=DELIVER_BRANCH,
+            worktree=tmp_path, source_repo="o/r",
+        ),
+        "main", base_sha, issue_title="t", repo_dir=tmp_path,
+        language_code="en", issue_closed=True,
+    )
+    assert result is None
+    assert len(comments) == 1
+    assert DELIVER_BRANCH in comments[0][2]
+    assert "delivery_issue_closed branch=" in caplog.text

@@ -77,6 +77,7 @@ from orbi.pi_activity import activity_snapshot, sanitize
 from orbi.pi_command import ROLE_TICKET
 from orbi.pi_process import (
     ROLE_IMPLEMENT,
+    IssueClosedDuringSession,
     ModelWaitDeadError,
     RecoverablePiFailure,
 )
@@ -149,6 +150,7 @@ class _Attempt:
     publish: Callable[..., None] | None = None
     resume_ctx: str | None = None
     pr_opened: bool = False
+    issue_closed_mid_session: bool = False
 
 
 def dispatch_implementation(issue: dict, source_repo: str,
@@ -545,15 +547,19 @@ def _run_session(attempt: _Attempt, *,
         )),
     )
     if facts.takeover_pr is None:
-        pi_session.run_pi(
-            attempt.issue, ctx, config,
-            resume_context=attempt.resume_ctx,
-            progress=LiveProgressThrottle(
-                ctx, publisher, title=title, role=ROLE_IMPLEMENT,
-                started=attempt.started, pr_url=None, review_round=0,
-                priority=attempt.priority,
-            ),
-        )
+        try:
+            pi_session.run_pi(
+                attempt.issue, ctx, config,
+                resume_context=attempt.resume_ctx,
+                progress=LiveProgressThrottle(
+                    ctx, publisher, title=title, role=ROLE_IMPLEMENT,
+                    started=attempt.started, pr_url=None, review_round=0,
+                    priority=attempt.priority,
+                ),
+            )
+        except IssueClosedDuringSession:
+            attempt.issue_closed_mid_session = True
+            return None
     publish(
         action=lambda: plan_milestone.publish(
             publisher, attempt.worktree),
@@ -583,14 +589,20 @@ def _closeout_implementation(attempt: _Attempt) -> IssueResult:
     # freshness + absorb, plain push, PR creation, PR verification)
     # is the Runner's job — the agent stopped at the committed
     # delivery.
+    deliver_kwargs: dict[str, Any] = {
+        "issue_title": title,
+        "repo_dir": config.repo_dir,
+        "language_code": language.of(config),
+        "attribution_footer": config.attribution_footer,
+        "attribution_link": config.attribution_link,
+    }
+    if attempt.issue_closed_mid_session:
+        deliver_kwargs["issue_closed"] = True
     pr_url = (
         facts.takeover_pr["url"] if facts.takeover_pr is not None
         else attempt.hooks.deliver_pr(
             attempt.ctx, facts.base_branch, attempt.base_sha,
-            issue_title=title, repo_dir=config.repo_dir,
-            language_code=language.of(config),
-            attribution_footer=config.attribution_footer,
-            attribution_link=config.attribution_link,
+            **deliver_kwargs,
         )
     )
     attempt.ctx = replace(attempt.ctx, pr=pr_url)

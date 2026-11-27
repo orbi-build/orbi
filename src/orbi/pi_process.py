@@ -25,7 +25,7 @@ from pathlib import Path
 from typing import NoReturn
 
 from orbi import provider_balance
-from orbi.delivery_scene import RunContext
+from orbi.delivery_scene import IssueClosedDuringSession, RunContext
 from orbi.journal import (
     RunIdFilter,
     event,
@@ -766,7 +766,7 @@ def _stream_pi_once(
                     request = steering_check()
                 except Exception as exc:
                     # An unreadable correction is the attachment stop (#2390).
-                    if getattr(exc, "failure_record", None) is not None:
+                    if isinstance(exc, IssueClosedDuringSession) or getattr(exc, "failure_record", None) is not None:
                         raise
                     event(
                         "steering_poll_failed", level=logging.WARNING,

@@ -33,6 +33,10 @@ if TYPE_CHECKING:
     from orbi.config import RunnerConfig
 
 
+class IssueClosedDuringSession(RuntimeError):
+    """Internal control flow when the steering poll sees the Issue closed."""
+
+
 class DeliveryScene(Enum):
     """Every state a delivery can be classified into.
 
