@@ -413,7 +413,7 @@ def _advance_main(origin: Path, clone: Path, file_name: str = "base.txt") -> Non
 
 
 def test_a_stopped_session_pushes_its_commit_over_an_advanced_base(
-    monkeypatch, tmp_path, delivery_repo,
+    monkeypatch, delivery_repo,
 ):
     """The interrupted worktree is expected to be dirty (Issue #2468).
 
