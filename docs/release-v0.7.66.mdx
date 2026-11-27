@@ -1,0 +1,63 @@
+---
+title: "v0.7.66 release (latest)"
+description: "Orbi v0.7.66 release notes: orbi draft：起草时按输入自动匹配 Issue 的 bug / p0 标签 and 14 more changes."
+---
+
+`v0.7.66` was published 2026-11-27T00:47:23Z as the GitHub Release [v0.7.66](https://github.com/orbi-build/orbi/releases/tag/v0.7.66).
+
+## Tag state (verified against origin)
+
+| Ref | Object | Points at |
+|---|---|---|
+| `v0.7.66` | annotated tag `c9a013b5eaa7b7ba2b855707fde731fe7745aa0d` | commit `e50f9d50ffcec552a6ef897fe8493af6a68106b4` |
+
+## Release notes
+
+## Changelog
+
+### Features
+
+- orbi draft：起草时按输入自动匹配 Issue 的 bug / p0 标签 ([Issue #2445](https://github.com/orbi-build/orbi/issues/2445); [PR #2459](https://github.com/orbi-build/orbi/pull/2459))
+
+### Reliability and recovery
+
+- A delivery stopped by a base-branch change gets its own reason code and a localized, actionable message ([Issue #2458](https://github.com/orbi-build/orbi/issues/2458); [PR #2460](https://github.com/orbi-build/orbi/pull/2460))
+
+### Deployment and operations
+
+- Install the Orbi plugin in Claude Code from this repository with two commands ([Issue #2449](https://github.com/orbi-build/orbi/issues/2449); [PR #2461](https://github.com/orbi-build/orbi/pull/2461))
+
+### Documentation
+
+- README shows a live Orbi deliveries badge linking to this repository's proof page ([Issue #2435](https://github.com/orbi-build/orbi/issues/2435); [PR #2439](https://github.com/orbi-build/orbi/pull/2439))
+- docs(readme): the founding discount is applied automatically, with no code to enter ([PR #2437](https://github.com/orbi-build/orbi/pull/2437))
+- docs(readme): list the fixes merged by other projects' maintainers ([PR #2450](https://github.com/orbi-build/orbi/pull/2450))
+- docs: plugins and integrations page (Claude Code, Cursor, paseo-orbi) ([PR #2452](https://github.com/orbi-build/orbi/pull/2452))
+- docs: crop the paseo-orbi screenshots to the plugin area ([PR #2453](https://github.com/orbi-build/orbi/pull/2453))
+
+### Bug fixes
+
+- The test suite resolves gh from the contributor’s PATH instead of isolating GitHub calls ([Issue #2253](https://github.com/orbi-build/orbi/issues/2253); [PR #2448](https://github.com/orbi-build/orbi/pull/2448))
+- A Chinese draft no longer mixes English section headings (Not included / Assumptions) into the Issue body ([Issue #2433](https://github.com/orbi-build/orbi/issues/2433); [PR #2438](https://github.com/orbi-build/orbi/pull/2438))
+- A delivery no longer polls forever when GitHub never refreshes the PR after a push ([Issue #2440](https://github.com/orbi-build/orbi/issues/2440); [PR #2444](https://github.com/orbi-build/orbi/pull/2444))
+- Re-queuing an Issue whose last run left its worktree behind no longer fails with 'already used by worktree' ([Issue #2441](https://github.com/orbi-build/orbi/issues/2441); [PR #2454](https://github.com/orbi-build/orbi/pull/2454))
+- A PR that is red because its base is red is paused as base_ci_red before review, instead of ending in human_decision_required ([Issue #2442](https://github.com/orbi-build/orbi/issues/2442); [PR #2451](https://github.com/orbi-build/orbi/pull/2451))
+- A transient GitHub or network failure is recognised the same way by the retry, the classification and the failure streak ([Issue #2443](https://github.com/orbi-build/orbi/issues/2443); [PR #2456](https://github.com/orbi-build/orbi/pull/2456))
+- Reclaim a task worktree 7 days after its Issue closes, whatever its labels ([Issue #2447](https://github.com/orbi-build/orbi/issues/2447); [PR #2457](https://github.com/orbi-build/orbi/pull/2457))
+
+## Contributors
+
+<a href="https://github.com/orbi-build"><img src="https://avatars.githubusercontent.com/in/4897724?v=4&s=48" width="32" height="32" alt="orbi-build" /></a>
+
+- tag: `v0.7.66`
+- release commit: `e50f9d50ffcec552a6ef897fe8493af6a68106b4`
+- release task: Issue #2436
+
+## Tests
+
+- release tests gated by GitHub Actions CI on the release commit e50f9d50ffcec552a6ef897fe8493af6a68106b4 (the #268 CI-wait gate; no local test execution)
+
+
+Released by [Orbi](https://orbi.build/?ref=prfoot-orbi-build)
+
+[![Download Orbi](https://a.fsdn.com/con/app/sf-download-button)](https://sourceforge.net/projects/orbi/files/v0.7.66/v0.7.66%20source%20code.zip/download)
