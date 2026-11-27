@@ -37,6 +37,7 @@ import os
 import re
 from typing import Mapping
 
+from orbi.closed_issue_stop import CLOSED_ISSUE_MESSAGES
 from orbi.language_failure import FAILURE_MESSAGES
 from orbi.language_terms import EXTRA_MESSAGES
 
@@ -606,13 +607,6 @@ MESSAGES: dict[str, tuple[str, str]] = {
     "runner.pr_closed_comment": ("Orbi failed: PR {pr_url} was closed without a merge; the delivery is terminally failed", "Orbi 失败：PR {pr_url} 未合并就被关闭；本次交付最终失败"),
     "runner.pr_closed_reason": ("PR {pr_url} was closed without a merge; the delivery is terminally failed", "PR {pr_url} 未合并就被关闭；本次交付最终失败"),
     "runner.pr_closed_next_step": ("investigate why the PR was closed and re-open the delivery or start a fresh run on the Issue", "请查明该 PR 被关闭的原因，然后重新开启交付或在 Issue 上开始一次新的运行"),
-    "runner.issue_closed": (
-        "Orbi delivery stopped: the Issue was closed while the delivery "
-        "was in flight; the completed work stays on branch \u0060{branch}\u0060 "
-        "and no PR was opened.\nrun_id={run_id}",
-        "Orbi 交付已停止：交付进行中该 Issue 被关闭；已完成的工作保留在分支 "
-        "\u0060{branch}\u0060 上，没有创建 PR。\nrun_id={run_id}",
-    ),
 
     # The run's started-Pi / opened-PR headlines (the run scenes).
     "delivery.started_headline": ("Orbi started Pi:", "Orbi 已启动 Pi："),
@@ -922,9 +916,11 @@ MESSAGES: dict[str, tuple[str, str]] = {
 }
 
 # The display vocabulary (Issue #1729), the base-branch-red messages
-# (Issue #1825) and the missing-permission scene (#1918): one reading point.
+# (Issue #1825), the missing-permission scene (#1918) and the closed-Issue
+# stop notice (#2475): one reading point.
 MESSAGES.update(EXTRA_MESSAGES)
 MESSAGES.update(FAILURE_MESSAGES)
+MESSAGES.update(CLOSED_ISSUE_MESSAGES)
 
 
 UNBLOCK_STEP_FIELD = "unblock_step"

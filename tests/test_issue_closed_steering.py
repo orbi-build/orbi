@@ -185,11 +185,28 @@ def delivery_repo(tmp_path):
     return origin, clone
 
 
-def _closed_comments(comments: list[str]) -> list[str]:
-    return [
-        body for body in comments
-        if "the Issue was closed while the delivery" in body
-    ]
+# The stop comment's opening sentence and the two facts it must state
+# (Issue #2475): the delivery stopped because the Issue was closed, no work
+# was kept and no PR was opened when nothing was committed.
+STOP_PHRASES = {
+    "en": "Orbi delivery stopped: the Issue was closed while the delivery",
+    "zh": "Orbi 交付已停止：交付进行中该 Issue 被关闭",
+}
+NO_WORK_PHRASES = {
+    "en": "nothing was kept",
+    "zh": "没有保留任何工作",
+}
+NO_PR_PHRASES = {
+    "en": "no PR was opened",
+    "zh": "没有创建 PR",
+}
+
+
+def _closed_comments(
+    comments: list[str], language_code: str = "en",
+) -> list[str]:
+    phrase = STOP_PHRASES[language_code]
+    return [body for body in comments if phrase in body]
 
 
 def _pull_request_calls(gh: FakeGitHub) -> list[list[str]]:
@@ -280,8 +297,9 @@ def _branch_exists(origin: Path, branch: str) -> bool:
     return result.returncode == 0
 
 
+@pytest.mark.parametrize("language_code", ["en", "zh"])
 def test_a_stop_before_the_delivery_commit_pushes_nothing(
-    monkeypatch, tmp_path, caplog, delivery_repo,
+    monkeypatch, tmp_path, caplog, delivery_repo, language_code,
 ):
     """The interrupted worktree is not a delivery to verify.
 
@@ -289,7 +307,8 @@ def test_a_stop_before_the_delivery_commit_pushes_nothing(
     committed by the Runner, nothing is pushed, and the run still ends with
     the closed-mid-delivery comment and `result=issue_closed` — the slot is
     free for the next ticket instead of a recoverable resume of a closed
-    Issue.
+    Issue. Nothing was pushed, so the comment names no branch: it says no
+    work was kept and no PR was opened (Issue #2475).
     """
     caplog.set_level("INFO")
     origin, clone = delivery_repo
@@ -305,6 +324,7 @@ def test_a_stop_before_the_delivery_commit_pushes_nothing(
         {"number": ISSUE, "title": "Deliver", "body": "Body"},
         _config(
             clone, pi_executable=str(fake_pi), steering_poll_seconds=0.15,
+            message_language=language_code,
         ),
         SOURCE_REPO,
     )
@@ -315,7 +335,15 @@ def test_a_stop_before_the_delivery_commit_pushes_nothing(
     # Nothing was committed, so nothing is pushed.
     assert not _branch_exists(origin, BRANCH)
     assert _pull_request_calls(gh) == []
-    assert len(_closed_comments(gh.comments)) == 1
+    closed = _closed_comments(gh.comments, language_code)
+    assert len(closed) == 1
+    # The branch was never pushed, so the comment never names it ...
+    assert BRANCH not in closed[0]
+    assert "orbi/" not in closed[0]
+    # ... and states what actually happened instead: nothing kept, no PR.
+    assert NO_WORK_PHRASES[language_code] in closed[0]
+    assert NO_PR_PHRASES[language_code] in closed[0]
+    assert f"run_id={RUN_ID}" in closed[0]
     assert "delivery_uncommitted_changes" not in caplog.text
     ends = [line for line in caplog.text.splitlines() if " run_end " in line]
     assert len(ends) == 1
