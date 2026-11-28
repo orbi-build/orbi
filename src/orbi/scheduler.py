@@ -27,7 +27,10 @@ The platform-independent unit facts every member shares (the naming
 rules, the template placeholders, the instance cap) live in the
 :mod:`orbi.scheduler_units` leaf, imported (and re-exported) here for
 the historic call sites; the implementations take them from the leaf
-directly, so this module stays a one-way dispatcher.
+directly, so this module stays a one-way dispatcher. The installed unit
+files' on-disk contract (the explicit mode the install writes, the mode
+part of the drift decision) lives in the :mod:`orbi.installed_units`
+leaf beside it.
 
 No database, queue, daemon or second state store: the installed files
 and the platform scheduler itself are the only state.
@@ -38,6 +41,7 @@ import logging
 from pathlib import Path
 from typing import Protocol, runtime_checkable
 
+from orbi import installed_units
 from orbi.journal import event, quote_value
 from orbi.scheduler_units import (
     MAX_RUNNER_INSTANCES,
@@ -312,11 +316,8 @@ def unit_status(repo_dir: Path, installed_dir: Path,
             "repo_sha256": repo_sha,
             "installed_sha256": installed_sha,
             "missing": installed_sha is None,
-            "drifted": (
-                repo_sha is None
-                or installed_sha is None
-                or repo_sha != installed_sha
-            ),
+            "drifted": installed_units.unit_drifted(
+                repo_sha, installed_sha, installed_path),
         })
     return entries
 
@@ -325,8 +326,9 @@ def drift_lines(status: list[dict]) -> list[str]:
     """One ``unit_drift`` report line per drifted unit.
 
     Builds the lines carried by the ``UnitDriftError`` message: the
-    repo path, the installed path, both hashes and the idempotent fix
-    command. Values containing spaces are quoted (the
+    field set from ``installed_units.drift_fields`` (the repo and
+    installed paths, both content identities, the installed mode and the
+    idempotent fix command). Values containing spaces are quoted (the
     journal.quote_value convention) so the line stays parseable.
     This helper never logs — the journal emission goes through
     ``event()`` (:func:`_log_drifted_units`).
@@ -336,31 +338,25 @@ def drift_lines(status: list[dict]) -> list[str]:
         if not entry["drifted"]:
             continue
         lines.append(
-            "unit_drift "
-            f"unit={entry['unit']} "
-            f"repo={quote_value(str(entry['repo_path']))} "
-            f"installed={quote_value(str(entry['installed_path']))} "
-            f"repo_sha256={entry['repo_sha256'] or '-'} "
-            f"installed_sha256={entry['installed_sha256'] or '-'} "
-            f"fix={FIX_COMMAND}"
+            "unit_drift " + " ".join(
+                f"{field}={quote_value(value)}" for field, value in
+                installed_units.drift_fields(entry).items()
+            ) + f" fix={FIX_COMMAND}"
         )
     return lines
 
 
 def _log_drifted_units(status: list[dict]) -> None:
     """Emit one structured ``unit_drift`` failure line per drifted unit
-    through the single journal emission point: same fields
-    as ``drift_lines``, minus the report-only message role."""
+    through the single journal emission point: the same field set as
+    ``drift_lines`` (``installed_units.drift_fields``), minus the
+    report-only message role."""
     for entry in status:
-        if not entry["drifted"]:
-            continue
-        event(
-            "unit_drift", level=logging.ERROR, unit=entry["unit"],
-            repo=entry["repo_path"], installed=entry["installed_path"],
-            repo_sha256=entry["repo_sha256"] or "-",
-            installed_sha256=entry["installed_sha256"] or "-",
-            fix=FIX_COMMAND,
-        )
+        if entry["drifted"]:
+            event(
+                "unit_drift", level=logging.ERROR,
+                **installed_units.drift_fields(entry), fix=FIX_COMMAND,
+            )
 
 
 def check_unit_drift(repo_dir: Path,
@@ -407,7 +403,9 @@ def install_units(repo_dir: Path, installed_dir: Path | None = None,
     instances deactivate, a live Runner is never restarted).
     ``enable=False`` is the pre-start self-heal: it re-reads the
     rewritten files but never re-enables an operator-disabled instance
-    (Issue #1364). Returns the deployed commit (the deployment
+    (Issue #1364). Every written unit gets the explicit installed mode
+    (``installed_units.INSTALLED_UNIT_MODE``), never the caller's umask
+    (Issue #2455). Returns the deployed commit (the deployment
     checkout's HEAD) and the installed units' content identities.
     """
     sched = sched or detect()
@@ -444,7 +442,7 @@ def install_units(repo_dir: Path, installed_dir: Path | None = None,
         rendered = sched.render_unit(
             template_text, repo_dir, unit_name, instance=index,
         )
-        (installed_dir / name).write_bytes(rendered.encode("utf-8"))
+        installed_units.write_unit(installed_dir / name, rendered)
     sched.activate_instances(
         run_command, installed_dir, unit_name,
         max_concurrency=max_concurrency, enable=enable,

@@ -13,12 +13,13 @@ check compares the installed units against the templates and fails
 fast with a structured ``unit_drift`` line when they drift.
 """
 import hashlib
+import os
 import subprocess
 from pathlib import Path
 
 import pytest
 
-from orbi import scheduler, systemd_deploy
+from orbi import installed_units, scheduler, systemd_deploy
 
 # The systemd deployment contract, pinned to the systemd impl on every
 # host (the conftest fixture documents the seam).
@@ -49,17 +50,26 @@ def make_repo(tmp_path: Path) -> Path:
 def make_installed(
     tmp_path: Path, repo: Path, mutate: str | None = None,
 ) -> Path:
-    """An installed unit dir holding copies of the repo templates."""
+    """An installed unit dir holding copies of the repo templates.
+
+    The copies go through the install's own writer
+    (``installed_units.write_unit``), so a "clean" deployment carries
+    the explicit installed mode a real install writes — never the
+    ambient umask (Issue #2455): under ``umask 002`` a bare ``write``
+    would make a fresh copy group-writable, and the drift check would
+    rightly call it drift.
+    """
     installed = tmp_path / "home" / ".config" / "systemd" / "user"
     installed.mkdir(parents=True)
     for name in systemd_deploy.UNIT_NAMES:
-        (installed / name).write_bytes(
-            (repo / "systemd" / name).read_bytes(),
+        installed_units.write_unit(
+            installed / name,
+            (repo / "systemd" / name).read_text(encoding="utf-8"),
         )
     if mutate is not None:
-        (installed / mutate).write_text(
+        installed_units.write_unit(
+            installed / mutate,
             (installed / mutate).read_text(encoding="utf-8") + "# drift\n",
-            encoding="utf-8",
         )
     return installed
 
@@ -175,6 +185,57 @@ def test_install_units_without_enable_only_reloads(tmp_path):
     # enable=False contract is that no enable/disable is ever issued.
     assert [call for call in calls if call[2] in ("enable", "disable")] == []
     assert ["systemctl", "--user", "daemon-reload"] in calls
+
+
+def test_install_units_writes_the_managed_units_0644_under_umask_002(
+    tmp_path,
+):
+    """Issue #2455: the installed templates carry an explicit safe mode.
+    Kit's fleet refresh runs the engine with `umask 002` and refuses
+    group- or other-writable units, so the write must not inherit the
+    caller's umask."""
+    repo = make_repo(tmp_path)
+    installed = tmp_path / "install"
+    previous = os.umask(0o002)
+    try:
+        scheduler.install_units(
+            repo, installed, max_concurrency=1,
+            run_command=lambda command, **kwargs: "",
+        )
+    finally:
+        os.umask(previous)
+    for name in systemd_deploy.UNIT_NAMES:
+        assert (installed / name).stat().st_mode & 0o777 == 0o644
+
+
+def test_install_units_normalizes_a_legacy_mode_on_managed_units_only(
+    tmp_path,
+):
+    """Issue #2455: a legacy 0664 managed unit is normalized by the same
+    install, while a file the engine does not manage keeps its mode
+    (a user's own `orbi.service` is not Orbi's state, Issue #2067)."""
+    repo = make_repo(tmp_path)
+    installed = tmp_path / "install"
+
+    def run(command, **kwargs):
+        return ""
+
+    scheduler.install_units(
+        repo, installed, max_concurrency=1, run_command=run,
+    )
+    unrelated = installed / "orbi.service"
+    unrelated.write_text("[Service]\n", encoding="utf-8")
+    for path in (
+        installed / "orbi@.service", installed / "orbi@.timer", unrelated,
+    ):
+        path.chmod(0o664)
+    scheduler.install_units(
+        repo, installed, max_concurrency=1, run_command=run,
+    )
+    for name in systemd_deploy.UNIT_NAMES:
+        assert (installed / name).stat().st_mode & 0o777 == 0o644
+    assert unrelated.stat().st_mode & 0o777 == 0o664
+
 
 def test_install_units_rejects_capacity_beyond_max_runner_instances(tmp_path):
     """Issue #827: beyond the declaration cap the install fails fast with
@@ -325,6 +386,55 @@ def test_drift_lines_quote_values_with_spaces(tmp_path):
 def test_drift_lines_is_empty_when_clean(tmp_path):
     repo = make_repo(tmp_path)
     installed = make_installed(tmp_path, repo)
+    status = scheduler.unit_status(repo, installed)
+    assert scheduler.drift_lines(status) == []
+
+
+def test_unit_status_reports_a_group_writable_managed_unit_as_drift(
+    tmp_path,
+):
+    """Issue #2455: identical content with a group-writable mode is
+    still drift — the unit is not a trusted scheduler input, and the
+    existing self-heal install repairs it."""
+    repo = make_repo(tmp_path)
+    installed = make_installed(tmp_path, repo)
+    (installed / "orbi@.timer").chmod(0o664)
+    status = scheduler.unit_status(repo, installed)
+    by_unit = {entry["unit"]: entry for entry in status}
+    assert by_unit["orbi@.timer"]["drifted"] is True
+    assert by_unit["orbi@.service"]["drifted"] is False
+    assert installed_units.mode_field(installed / "orbi@.timer") == "0664"
+    assert installed_units.mode_field(installed / "orbi@.service") == "0644"
+    lines = scheduler.drift_lines(status)
+    assert len(lines) == 1
+    assert lines[0].startswith("unit_drift unit=orbi@.timer ")
+    assert "mode=0664" in lines[0]
+    assert "fix=orbi install-units" in lines[0]
+
+
+def test_unit_status_reports_no_mode_for_a_missing_unit(tmp_path):
+    """Issue #2455: a missing unit has no mode, so the line says mode=-."""
+    repo = make_repo(tmp_path)
+    installed = make_installed(tmp_path, repo)
+    (installed / "orbi@.service").unlink()
+    status = scheduler.unit_status(repo, installed)
+    assert "mode=-" in scheduler.drift_lines(status)[0]
+
+
+def test_sync_drifted_units_normalizes_a_legacy_group_writable_unit(
+    tmp_path,
+):
+    """Issue #2455: the pre-start self-heal is enough — a legacy 0664
+    managed unit is repaired to 0644 without a manual install."""
+    repo = make_repo(tmp_path)
+    installed = make_installed(tmp_path, repo)
+    (installed / "orbi@.timer").chmod(0o664)
+    report = scheduler.sync_drifted_units(
+        repo, installed, max_concurrency=1,
+        run_command=lambda command, **kwargs: "",
+    )
+    assert "orbi@.timer" in [entry["unit"] for entry in report]
+    assert (installed / "orbi@.timer").stat().st_mode & 0o777 == 0o644
     status = scheduler.unit_status(repo, installed)
     assert scheduler.drift_lines(status) == []
 

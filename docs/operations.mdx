@@ -365,6 +365,14 @@ happens to be named `orbi.service` or `orbi.timer` belongs to whoever
 wrote it and is never deleted, disabled or stopped by an install or the
 self-heal (Issue #2067).
 
+The install writes every managed unit with the explicit mode `0644`
+(Issue #2455): the calling shell's `umask` never decides a unit's mode, so
+`umask 002` — Kit's fleet refresh — cannot leave a group-writable unit
+behind for a fleet check to refuse. A legacy managed unit that is group- or
+other-writable counts as drift, so the next install or self-heal normalizes
+it to `0644` and its `unit_drift` line carries the observed `mode=`;
+permissions of any other file are never read as drift nor changed.
+
 `orbi install-units --config orbi.toml` stays the manual
 entry (first setup, or an immediate sync). A drift the self-heal cannot
 resolve — a failing install step, a missing template, a unit that
@@ -622,7 +630,7 @@ registry — in both directions (a name only in code or only in docs fails
 | `base_sync_lock_timeout` | the shared base-sync lock timed out |
 | `check_failed` | `orbi check` stopped at the first missing prerequisite |
 | `cli_source_drift` | the installed CLI imports from an unexpected source |
-| `unit_drift` | installed units vs repo templates: clean, self-healed, or drifting |
+| `unit_drift` | installed units vs repo templates: clean, self-healed, or drifting (a group-/other-writable managed unit counts as drift) |
 | `unit_conflict` | an installed unit file conflicts with the deployment |
 | `units_installed` | the systemd user units were installed or refreshed |
 | `health_check_skipped` | the periodic health check skipped this tick |

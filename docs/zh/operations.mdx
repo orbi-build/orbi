@@ -304,6 +304,13 @@ commit）。不再出现“每 5 分钟重复同一个 `unit_drift` 错误直到
 `orbi.service` 或 `orbi.timer` 的非模板 unit 属于写入它的人，安装与
 自愈都不会删除、disable 或停止它（Issue #2067）。
 
+安装用显式模式 `0644` 写入每个受管 unit（Issue #2455）：调用方 shell 的
+`umask` 决定不了 unit 的模式，所以 `umask 002`（Kit 的 fleet refresh）
+不会再留下组可写的 unit 被 fleet 检查拒绝。历史遗留的组可写或其他可写
+受管 unit 视为漂移，下一次安装或自愈会把它规范为 `0644`，其
+`unit_drift` 行携带观察到的 `mode=`；任何其他文件的权限既不算漂移也
+不会被修改。
+
 `orbi install-units --config orbi.toml` 保留为手工入口
 （首次 setup、需要立即同步时）。自愈后仍漂移（安装步骤失败、模板
 缺失、复核前 unit 再次漂移）时，启动仍然 fail fast（结构化
@@ -528,7 +535,7 @@ journalctl --user -u orbi@1.service -u orbi@2.service | grep e07383c2
 | `base_sync_lock_timeout` | 共享 base-sync 锁超时 |
 | `check_failed` | `orbi check` 在首个缺失前置条件处停止 |
 | `cli_source_drift` | 已安装 CLI 的导入源非预期 |
-| `unit_drift` | 已安装单元 vs 仓库模板：clean、已自愈或漂移 |
+| `unit_drift` | 已安装单元 vs 仓库模板：clean、已自愈或漂移（组可写/其他可写的受管单元视为漂移） |
 | `unit_conflict` | 已安装单元文件与本次部署冲突 |
 | `units_installed` | systemd user 单元已安装或刷新 |
 | `health_check_skipped` | 本 tick 跳过周期健康检查 |
