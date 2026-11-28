@@ -50,17 +50,26 @@ def make_repo(tmp_path: Path) -> Path:
 def make_installed(
     tmp_path: Path, repo: Path, mutate: str | None = None,
 ) -> Path:
-    """An installed unit dir holding copies of the repo templates."""
+    """An installed unit dir holding copies of the repo templates.
+
+    The copies go through the install's own writer
+    (``installed_units.write_unit``), so a "clean" deployment carries
+    the explicit installed mode a real install writes — never the
+    ambient umask (Issue #2455): under ``umask 002`` a bare ``write``
+    would make a fresh copy group-writable, and the drift check would
+    rightly call it drift.
+    """
     installed = tmp_path / "home" / ".config" / "systemd" / "user"
     installed.mkdir(parents=True)
     for name in systemd_deploy.UNIT_NAMES:
-        (installed / name).write_bytes(
-            (repo / "systemd" / name).read_bytes(),
+        installed_units.write_unit(
+            installed / name,
+            (repo / "systemd" / name).read_text(encoding="utf-8"),
         )
     if mutate is not None:
-        (installed / mutate).write_text(
+        installed_units.write_unit(
+            installed / mutate,
             (installed / mutate).read_text(encoding="utf-8") + "# drift\n",
-            encoding="utf-8",
         )
     return installed
 

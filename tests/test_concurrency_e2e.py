@@ -59,7 +59,7 @@ _runner_e2e_linux_only = pytest.mark.skipif(
     ),
 )
 
-from orbi import systemd_deploy
+from orbi import installed_units, systemd_deploy
 from orbi.delivery_scene import RunContext
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -643,12 +643,15 @@ def install_deployed_units(unit_dir: Path, repo_dir: Path) -> None:
     templates are rendered exactly as `orbi install-units` does — the
     {{ORBI_REPO_DIR}} placeholder replaced with the checkout path — so
     the pre-start drift check (which compares against the rendered
-    template) sees a clean deployment."""
+    template) sees a clean deployment. The write goes through the
+    install's own writer (`installed_units.write_unit`), so the fixture
+    carries the installed mode a real install writes instead of the
+    ambient umask (Issue #2455)."""
     unit_dir.mkdir(parents=True, exist_ok=True)
     for name in ("orbi@.service", "orbi@.timer"):
         template = (REPO_ROOT / "systemd" / name).read_text(encoding="utf-8")
         rendered = systemd_deploy.render_unit_template(template, repo_dir)
-        (unit_dir / name).write_bytes(rendered.encode("utf-8"))
+        installed_units.write_unit(unit_dir / name, rendered)
 
 
 def _drain(pipe, sink) -> None:

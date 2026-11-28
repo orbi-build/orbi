@@ -13,6 +13,7 @@ import json
 from pathlib import Path
 
 from orbi import config as config_domain
+from orbi import installed_units
 from seam import seam
 
 
@@ -20,10 +21,11 @@ def _drift_world(tmp_path, drift: bool) -> tuple[Path, Path]:
     """A deployment checkout plus an installed unit dir.
 
     With `drift` the installed timer carries one extra line; without
-    it both units match the repo templates.
+    it both units match the repo templates. The installed copies go
+    through the install's own writer (`installed_units.write_unit`), so
+    "clean" means the mode a real install writes, never the ambient
+    umask (Issue #2455).
     """
-    import shutil
-
     repo = tmp_path / "repo"
     (repo / "systemd").mkdir(parents=True)
     for name, body in (
@@ -34,11 +36,10 @@ def _drift_world(tmp_path, drift: bool) -> tuple[Path, Path]:
     installed = tmp_path / "units"
     installed.mkdir()
     for name in ("orbi@.service", "orbi@.timer"):
-        target = installed / name
-        shutil.copyfile(repo / "systemd" / name, target)
+        text = (repo / "systemd" / name).read_text(encoding="utf-8")
         if drift and name == "orbi@.timer":
-            with target.open("a", encoding="utf-8") as handle:
-                handle.write("# drift\n")
+            text += "# drift\n"
+        installed_units.write_unit(installed / name, text)
     return repo, installed
 
 

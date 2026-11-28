@@ -19,6 +19,7 @@ import orbi.cli_commands as cli_commands
 import orbi.cli_doctor as cli_doctor
 import orbi.github as github
 import orbi.cli_status as cli_status
+import orbi.installed_units as installed_units
 import orbi.scheduler as scheduler
 import orbi.session_command as session_command
 import orbi.source_pool as source_pool
@@ -1704,9 +1705,13 @@ def test_slot_lines_reports_held_unknown_pid(monkeypatch, tmp_path):
 def _deploy_world(
         tmp_path, drift: bool = False,
 ) -> tuple[config_domain.RunnerConfig, Path]:
-    """A deployment checkout with templates plus an installed unit dir."""
-    import shutil
+    """A deployment checkout with templates plus an installed unit dir.
 
+    The installed copies go through the install's own writer
+    (``installed_units.write_unit``), so a "clean" deployment carries
+    the explicit installed mode a real install writes instead of the
+    ambient umask (Issue #2455).
+    """
     repo = tmp_path / "repo"
     (repo / "systemd").mkdir(parents=True)
     for name, body in (
@@ -1717,10 +1722,13 @@ def _deploy_world(
     installed = tmp_path / "units"
     installed.mkdir()
     for name in ("orbi@.service", "orbi@.timer"):
-        shutil.copyfile(repo / "systemd" / name, installed / name)
+        installed_units.write_unit(
+            installed / name,
+            (repo / "systemd" / name).read_text(encoding="utf-8"),
+        )
     if drift:
-        (installed / "orbi@.service").write_text(
-            "[Service]\n# drift\n", encoding="utf-8",
+        installed_units.write_unit(
+            installed / "orbi@.service", "[Service]\n# drift\n",
         )
     config = config_domain.RunnerConfig(
         source_repos=("owner.invalid/repo",),
